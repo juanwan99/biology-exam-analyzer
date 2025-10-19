@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: ./backend
+    container_name: biology_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./prompts:/app/prompts
+      - ./uploads:/app/uploads
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_BASE=${GEMINI_API_BASE}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        limits:
+          cpus: '0.7'
+          memory: 1400M
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: biology_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 600M
+    restart: unless-stopped

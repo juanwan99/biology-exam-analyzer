@@ -1,0 +1,25 @@
+【超级严格限制】仅返回JSON，总长度不超过800字符！
+
+{
+    "knowledge_points": ["知识点1", "知识点2"],
+    "detailed_analysis": "核心概念(10字)+关键步骤(30字)+注意点(10字)",
+    "difficulty": "简单|中等|困难",
+    "common_mistakes": ["易错点1"],
+    "answer": "答案"
+}
+
+【死规则】：
+1. detailed_analysis总长度≤50个汉字（严禁超过！）
+2. knowledge_points只列2个
+3. common_mistakes只列1个
+4. 整个JSON长度≤800字符
+5. 禁止任何解释、推导、验证选项
+
+【示例】：
+{
+    "knowledge_points": ["伴性遗传", "概率计算"],
+    "detailed_analysis": "X染色体遗传。推断基因型→计算配子→求纯合概率。注意雄性无纯合。",
+    "difficulty": "困难",
+    "common_mistakes": ["混淆常染色体遗传"],
+    "answer": "D"
+}

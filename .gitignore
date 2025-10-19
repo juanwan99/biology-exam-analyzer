@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# 日志文件
+*.log
+logs/
+backend/logs/
+
+# 上传文件
+uploads/
+backend/uploads/
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/package-lock.json
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# 临时文件
+*.tmp
+tmp/
+temp/
+
+# 操作系统
+.DS_Store
+Thumbs.db
