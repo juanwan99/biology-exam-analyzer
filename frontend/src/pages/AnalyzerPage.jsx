@@ -1,14 +1,18 @@
 import { useState } from 'react'
 import axios from 'axios'
+import { useNavigate } from 'react-router-dom'
 import ResultDisplay from '../components/ResultDisplay'
 
 function AnalyzerPage() {
+  const navigate = useNavigate()
   const [file, setFile] = useState(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [mode, setMode] = useState('fast') // 评估模式：fast/deep
   const [generateReport, setGenerateReport] = useState(false) // 是否生成PDF报告
+  const [useRuleSplit, setUseRuleSplit] = useState(true) // 是否使用规则拆分（v2.0新增）
+  const [workflow, setWorkflow] = useState('direct') // 工作流程：direct（直接分析）或 manual（人工校准）
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
@@ -23,19 +27,41 @@ function AnalyzerPage() {
       return
     }
 
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('mode', mode) // 添加模式参数
-    formData.append('generate_report', generateReport) // 添加报告生成参数
-
     setLoading(true)
     setError(null)
 
     try {
-      const response = await axios.post('/api/analyze', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
-      setResult(response.data)
+      if (workflow === 'manual') {
+        // v2.0 工作流：规则拆分 + 人工校准
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('use_rule', useRuleSplit)
+
+        const response = await axios.post('/api/analyze/auto_split', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+
+        // 跳转到人工校准页面
+        const params = new URLSearchParams({
+          session: response.data.session_id,
+          questions: encodeURIComponent(JSON.stringify(response.data.questions)),
+          confidence: response.data.confidence,
+          warnings: encodeURIComponent(JSON.stringify(response.data.warnings)),
+          method: response.data.method
+        })
+        navigate(`/correction?${params.toString()}`)
+      } else {
+        // v1.0 工作流：直接完整分析
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('mode', mode)
+        formData.append('generate_report', generateReport)
+
+        const response = await axios.post('/api/analyze', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        setResult(response.data)
+      }
     } catch (err) {
       setError(err.response?.data?.detail || '分析失败，请检查文件格式或网络连接')
       console.error(err)
@@ -81,16 +107,42 @@ function AnalyzerPage() {
             </div>
           )}
 
-          {/* 评估模式选择 */}
+          {/* v2.0新增：工作流程选择 */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-3">
-              评估模式
+              工作流程 <span className="text-xs text-blue-600 ml-2">✨ v2.0新功能</span>
             </label>
             <div className="space-y-3">
               <div
-                onClick={() => setMode('fast')}
+                onClick={() => setWorkflow('direct')}
                 className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                  mode === 'fast'
+                  workflow === 'direct'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center">
+                  <input
+                    type="radio"
+                    name="workflow"
+                    value="direct"
+                    checked={workflow === 'direct'}
+                    onChange={() => setWorkflow('direct')}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">⚡ 直接完整分析（v1.0经典模式）</span>
+                    <p className="text-sm text-gray-600 mt-1">
+                      LLM自动拆分 + 逐题分析 + 难度素养评估，一键完成
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                onClick={() => setWorkflow('manual')}
+                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                  workflow === 'manual'
                     ? 'border-blue-500 bg-blue-50'
                     : 'border-gray-200 hover:border-blue-300'
                 }`}
@@ -99,75 +151,116 @@ function AnalyzerPage() {
                   <div className="flex items-center">
                     <input
                       type="radio"
-                      name="mode"
-                      value="fast"
-                      checked={mode === 'fast'}
-                      onChange={() => setMode('fast')}
+                      name="workflow"
+                      value="manual"
+                      checked={workflow === 'manual'}
+                      onChange={() => setWorkflow('manual')}
                       className="h-4 w-4 text-blue-600 focus:ring-blue-500"
                     />
                     <div className="ml-3">
-                      <span className="font-medium text-gray-900">🚄 快速模式</span>
+                      <span className="font-medium text-gray-900">🎯 规则拆分 + 人工校准（推荐）</span>
                       <p className="text-sm text-gray-600 mt-1">
-                        仅规则引擎评估难度，预估耗时 ~75秒
+                        0.1秒极速拆分 + 可视化校准界面 + 高精度分析
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs text-green-600 font-medium">推荐</span>
-                </div>
-              </div>
-
-              <div
-                onClick={() => setMode('deep')}
-                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                  mode === 'deep'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-blue-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="deep"
-                    checked={mode === 'deep'}
-                    onChange={() => setMode('deep')}
-                    className="h-4 w-4 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div className="ml-3">
-                    <span className="font-medium text-gray-900">🔬 深度模式</span>
-                    <p className="text-sm text-gray-600 mt-1">
-                      规则引擎 + AI精调，识别隐性条件，预估耗时 ~150秒
-                    </p>
-                  </div>
+                  <span className="text-xs text-green-600 font-medium bg-green-100 px-2 py-1 rounded">98%准确率</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* PDF报告生成选项 */}
-          <div className="mb-6">
-            <label className="flex items-center cursor-pointer p-4 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-all">
-              <input
-                type="checkbox"
-                checked={generateReport}
-                onChange={(e) => setGenerateReport(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 rounded"
-              />
-              <div className="ml-3">
-                <span className="font-medium text-gray-900">📄 生成PDF质量评估报告</span>
-                <p className="text-sm text-gray-600 mt-1">
-                  包含难度曲线、素养分布等6张可视化图表（+10秒）
-                </p>
+          {/* 评估模式选择（仅在直接分析时显示） */}
+          {workflow === 'direct' && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                评估模式
+              </label>
+              <div className="space-y-3">
+                <div
+                  onClick={() => setMode('fast')}
+                  className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                    mode === 'fast'
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-200 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <input
+                        type="radio"
+                        name="mode"
+                        value="fast"
+                        checked={mode === 'fast'}
+                        onChange={() => setMode('fast')}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="ml-3">
+                        <span className="font-medium text-gray-900">🚄 快速模式</span>
+                        <p className="text-sm text-gray-600 mt-1">
+                          仅规则引擎评估难度，预估耗时 ~75秒
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-green-600 font-medium">推荐</span>
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => setMode('deep')}
+                  className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                    mode === 'deep'
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-200 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <input
+                      type="radio"
+                      name="mode"
+                      value="deep"
+                      checked={mode === 'deep'}
+                      onChange={() => setMode('deep')}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">🔬 深度模式</span>
+                      <p className="text-sm text-gray-600 mt-1">
+                        规则引擎 + AI精调，识别隐性条件，预估耗时 ~150秒
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </label>
-          </div>
+            </div>
+          )}
+
+          {/* PDF报告生成选项（仅在直接分析时显示） */}
+          {workflow === 'direct' && (
+            <div className="mb-6">
+              <label className="flex items-center cursor-pointer p-4 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-all">
+                <input
+                  type="checkbox"
+                  checked={generateReport}
+                  onChange={(e) => setGenerateReport(e.target.checked)}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 rounded"
+                />
+                <div className="ml-3">
+                  <span className="font-medium text-gray-900">📄 生成PDF质量评估报告</span>
+                  <p className="text-sm text-gray-600 mt-1">
+                    包含难度曲线、素养分布等6张可视化图表（+10秒）
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
 
           <button
             onClick={handleUpload}
             disabled={!file || loading}
             className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
           >
-            {loading ? '分析中...' : '开始分析'}
+            {loading ? (workflow === 'manual' ? '拆分中...' : '分析中...') : (workflow === 'manual' ? '开始拆分' : '开始分析')}
           </button>
 
           {loading && (

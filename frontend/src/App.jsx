@@ -1,6 +1,7 @@
 import { Routes, Route, Link } from 'react-router-dom'
 import AnalyzerPage from './pages/AnalyzerPage'
 import AdminPage from './pages/AdminPage'
+import CorrectionPage from './pages/CorrectionPage'
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
       {/* 路由 */}
       <Routes>
         <Route path="/" element={<AnalyzerPage />} />
+        <Route path="/correction" element={<CorrectionPage />} />
         <Route path="/admin" element={<AdminPage />} />
       </Routes>
     </div>

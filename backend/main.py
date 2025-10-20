@@ -15,6 +15,7 @@ from gemini_analyzer import GeminiAnalyzer
 from difficulty_engine import DifficultyEngine
 from competency_analyzer import CompetencyAnalyzer
 from report_generator import ReportGenerator
+from rule_splitter import RuleSplitter
 
 # 初始化
 logger = get_logger()
@@ -53,6 +54,14 @@ doc_processor = DocumentProcessor()
 difficulty_engine = DifficultyEngine(gemini_analyzer=gemini_analyzer)
 competency_analyzer = CompetencyAnalyzer(gemini_analyzer=gemini_analyzer)
 report_generator = ReportGenerator()
+rule_splitter = RuleSplitter()
+
+# Session存储（临时存储auto_split结果，30分钟过期）
+from collections import OrderedDict
+from datetime import timedelta
+
+SESSION_STORAGE = OrderedDict()  # {session_id: {"data": ..., "expire_time": ...}}
+SESSION_EXPIRE_TIME = timedelta(minutes=30)
 
 
 # ============ Pydantic Models ============
@@ -68,6 +77,44 @@ class PromptUpdate(BaseModel):
     """Prompt更新请求"""
     type: str  # "split" or "analysis"
     content: str
+
+
+class QuestionCorrection(BaseModel):
+    """人工修正的题目数据"""
+    questions: List[Dict[str, Any]]
+
+
+# ============ 辅助函数 ============
+
+def clean_expired_sessions():
+    """清理过期的session"""
+    current_time = datetime.now()
+    expired_keys = [
+        k for k, v in SESSION_STORAGE.items()
+        if v["expire_time"] < current_time
+    ]
+    for key in expired_keys:
+        del SESSION_STORAGE[key]
+        logger.debug(f"清理过期session: {key}")
+
+
+def save_session(session_id: str, data: Dict[str, Any]) -> None:
+    """保存session数据"""
+    clean_expired_sessions()
+    SESSION_STORAGE[session_id] = {
+        "data": data,
+        "expire_time": datetime.now() + SESSION_EXPIRE_TIME
+    }
+    logger.info(f"保存session: {session_id}")
+
+
+def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """获取session数据"""
+    clean_expired_sessions()
+    session = SESSION_STORAGE.get(session_id)
+    if session:
+        return session["data"]
+    return None
 
 
 # ============ 认证中间件 ============
@@ -269,6 +316,266 @@ async def analyze_document(
 
     except Exception as e:
         logger.error(f"分析流程失败: {str(e)}", exc_info=True)
+        raise HTTPException(500, detail=str(e))
+
+
+# ============ 规则拆分 + 人工校准 API（v2.0新增）============
+
+@app.post("/api/analyze/auto_split")
+async def auto_split_questions(
+    file: UploadFile = File(...),
+    use_rule: bool = Form(True)  # 是否使用规则拆分（False则使用LLM）
+):
+    """
+    第一阶段：自动拆分题目（规则引擎或LLM）
+
+    Args:
+        file: 上传的PDF文件
+        use_rule: 是否使用规则拆分
+
+    Returns:
+        {
+            "session_id": "xxx",
+            "questions": [...],
+            "confidence": 0.95,
+            "warnings": [...],
+            "method": "rule" | "llm"
+        }
+    """
+    start_time = datetime.now()
+    logger.info(f"[自动拆分] 收到文件: {file.filename}, 拆分方式: {'规则' if use_rule else 'LLM'}")
+
+    try:
+        # 1. 保存文件
+        file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        async with aiofiles.open(file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+
+        # 2. 选择拆分方式
+        if use_rule and file.filename.lower().endswith('.pdf'):
+            # 规则拆分
+            logger.info("[自动拆分] 使用规则引擎拆分")
+            result = rule_splitter.split_questions(str(file_path), use_llm_fallback=True)
+
+            if not result["success"]:
+                if result.get("method") == "llm_fallback_required":
+                    logger.warning("[自动拆分] 规则拆分失败，降级到LLM拆分")
+                    # 降级到LLM拆分
+                    images = doc_processor.process_pdf(str(file_path))
+                    image_bytes = doc_processor.images_to_bytes(images)
+                    questions = gemini_analyzer.split_questions(image_bytes)
+                    result = {
+                        "success": True,
+                        "questions": [{"id": q.get("id"), "content": q.get("content"), "confidence": 0.8} for q in questions],
+                        "confidence": 0.8,
+                        "warnings": ["规则拆分失败，已降级到LLM拆分"],
+                        "method": "llm_fallback"
+                    }
+                else:
+                    raise HTTPException(500, result.get("error", "拆分失败"))
+        else:
+            # LLM拆分
+            logger.info("[自动拆分] 使用LLM拆分")
+            if file.filename.lower().endswith('.pdf'):
+                images = doc_processor.process_pdf(str(file_path))
+            elif file.filename.lower().endswith('.docx'):
+                images = doc_processor.process_docx(str(file_path))
+            else:
+                raise HTTPException(400, "不支持的文件格式")
+
+            image_bytes = doc_processor.images_to_bytes(images)
+            questions = gemini_analyzer.split_questions(image_bytes)
+
+            result = {
+                "success": True,
+                "questions": [{"id": q.get("id"), "content": q.get("content"), "confidence": 0.9} for q in questions],
+                "confidence": 0.9,
+                "warnings": [],
+                "method": "llm"
+            }
+
+        # 3. 生成session_id
+        session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}"
+
+        # 4. 保存session数据
+        save_session(session_id, {
+            "file_path": str(file_path),
+            "filename": file.filename,
+            "auto_split_result": result,
+            "upload_time": datetime.now().isoformat()
+        })
+
+        # 5. 计算耗时
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[自动拆分] 完成，耗时{elapsed:.2f}秒，session_id={session_id}")
+
+        return {
+            "session_id": session_id,
+            "questions": result["questions"],
+            "confidence": result["confidence"],
+            "warnings": result["warnings"],
+            "method": result["method"],
+            "processing_time": elapsed
+        }
+
+    except Exception as e:
+        logger.error(f"[自动拆分] 失败: {str(e)}", exc_info=True)
+        # 清理临时文件
+        if file_path and file_path.exists():
+            file_path.unlink()
+        raise HTTPException(500, detail=str(e))
+
+
+@app.post("/api/analyze/confirm_split")
+async def confirm_split(
+    session_id: str = Form(...),
+    corrected_questions: str = Form(...),  # JSON字符串
+    mode: str = Form("fast"),
+    generate_report: bool = Form(False)
+):
+    """
+    第二阶段：确认拆分结果（人工修正后）并继续分析
+
+    Args:
+        session_id: 第一阶段返回的session_id
+        corrected_questions: 人工修正后的题目列表（JSON字符串）
+        mode: 评估模式
+        generate_report: 是否生成报告
+
+    Returns:
+        完整分析结果（同/api/analyze）
+    """
+    start_time = datetime.now()
+    logger.info(f"[确认拆分] session_id={session_id}, mode={mode}")
+
+    try:
+        # 1. 获取session数据
+        session_data = get_session(session_id)
+        if not session_data:
+            raise HTTPException(404, "Session已过期或不存在")
+
+        # 2. 解析修正后的题目
+        import json
+        questions = json.loads(corrected_questions)
+        logger.info(f"[确认拆分] 收到{len(questions)}道修正后的题目")
+
+        # 3. 逐题分析（复用原有逻辑）
+        file_path = Path(session_data["file_path"])
+
+        # 加载文档图片（用于分析）
+        if session_data["filename"].lower().endswith('.pdf'):
+            images = doc_processor.process_pdf(str(file_path))
+        else:
+            images = doc_processor.process_docx(str(file_path))
+
+        image_bytes = doc_processor.images_to_bytes(images)
+
+        # 4. 逐题深度分析
+        for idx, question in enumerate(questions):
+            logger.info(f"[确认拆分] 分析第{idx+1}/{len(questions)}题")
+
+            # 获取该题的图片（如果有）
+            q_image_indices = question.get("image_indices", [])
+            q_images = [image_bytes[i] for i in q_image_indices if i < len(image_bytes)]
+
+            # 调用Gemini分析
+            analysis = gemini_analyzer.analyze_question(
+                question_text=question.get("content", ""),
+                question_images=q_images,
+                question_id=question.get("id", idx+1)
+            )
+
+            question["analysis"] = analysis
+
+        # 5. 难度评估
+        logger.info(f"[确认拆分] 开始难度评估，模式: {mode}")
+        for idx, question in enumerate(questions):
+            try:
+                difficulty_result = difficulty_engine.evaluate_with_refinement(
+                    question={
+                        "id": question.get("id"),
+                        "content": question.get("content", ""),
+                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
+                    },
+                    mode=mode
+                )
+                question["difficulty"] = difficulty_result
+            except Exception as e:
+                logger.error(f"题目{question.get('id')}难度评估失败: {str(e)}")
+                question["difficulty"] = {"error": str(e)}
+
+        # 6. 素养分析
+        logger.info("[确认拆分] 开始核心素养分析")
+        for idx, question in enumerate(questions):
+            try:
+                competency_result = competency_analyzer.analyze_competency(
+                    question={
+                        "id": question.get("id"),
+                        "content": question.get("content", ""),
+                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
+                    }
+                )
+                question["competency"] = competency_result
+            except Exception as e:
+                logger.error(f"题目{question.get('id')}素养分析失败: {str(e)}")
+                question["competency"] = {"error": str(e)}
+
+        # 7. 聚合素养统计
+        try:
+            competency_list = [q.get("competency", {}) for q in questions if "error" not in q.get("competency", {})]
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+        except Exception as e:
+            logger.error(f"素养聚合失败: {str(e)}")
+            competency_summary = {"error": str(e)}
+
+        # 8. 生成PDF报告（可选）
+        report_url = None
+        if generate_report:
+            try:
+                logger.info("[确认拆分] 开始生成PDF报告")
+                exam_id = session_id
+                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
+
+                report_generator.generate_pdf_report(
+                    questions_analysis=questions,
+                    competency_summary=competency_summary,
+                    exam_info={
+                        "name": session_data["filename"],
+                        "total": len(questions),
+                        "mode": mode,
+                        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    },
+                    output_path=str(pdf_path)
+                )
+
+                report_url = f"/api/reports/{exam_id}.pdf"
+                logger.info(f"报告生成成功: {report_url}")
+            except Exception as e:
+                logger.error(f"报告生成失败: {str(e)}", exc_info=True)
+                report_url = f"error: {str(e)}"
+
+        # 9. 清理临时文件
+        if file_path.exists():
+            file_path.unlink()
+            logger.debug(f"已删除临时文件: {file_path}")
+
+        # 10. 计算耗时
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[确认拆分] 完整流程完成，总耗时: {elapsed:.2f}秒")
+
+        # 返回完整结果
+        return {
+            "questions": questions,
+            "total_count": len(questions),
+            "processing_time": elapsed,
+            "competency_summary": competency_summary,
+            "report_url": report_url,
+            "mode": mode
+        }
+
+    except Exception as e:
+        logger.error(f"[确认拆分] 失败: {str(e)}", exc_info=True)
         raise HTTPException(500, detail=str(e))
 
 
