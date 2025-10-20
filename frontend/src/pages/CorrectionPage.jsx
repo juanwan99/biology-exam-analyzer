@@ -21,24 +21,41 @@ function CorrectionPage() {
   const [editContent, setEditContent] = useState('')
 
   useEffect(() => {
-    // 从URL参数获取auto_split结果
-    const questionsParam = searchParams.get('questions')
-    const confidenceParam = searchParams.get('confidence')
-    const warningsParam = searchParams.get('warnings')
-    const methodParam = searchParams.get('method')
-
-    if (questionsParam) {
+    // 从session获取auto_split结果
+    const fetchSplitResults = async () => {
       try {
-        const parsedQuestions = JSON.parse(decodeURIComponent(questionsParam))
-        setQuestions(parsedQuestions)
-        setConfidence(parseFloat(confidenceParam || 0))
-        setWarnings(warningsParam ? JSON.parse(decodeURIComponent(warningsParam)) : [])
-        setMethod(methodParam || 'unknown')
+        // 尝试从URL参数直接获取（兼容旧版）
+        const questionsParam = searchParams.get('questions')
+        if (questionsParam) {
+          const parsedQuestions = JSON.parse(decodeURIComponent(questionsParam))
+          setQuestions(parsedQuestions)
+          setConfidence(parseFloat(searchParams.get('confidence') || 0))
+          setWarnings(searchParams.get('warnings') ? JSON.parse(decodeURIComponent(searchParams.get('warnings'))) : [])
+          setMethod(searchParams.get('method') || 'unknown')
+          return
+        }
+
+        // 否则通过session_id从后端获取
+        if (!sessionId) {
+          alert('缺少session ID')
+          return
+        }
+
+        const response = await axios.get(`/api/analyze/session/${sessionId}`)
+        const data = response.data
+
+        setQuestions(data.questions || [])
+        setConfidence(data.confidence || 0)
+        setWarnings(data.warnings || [])
+        setMethod(data.method || 'unknown')
       } catch (e) {
-        console.error('Failed to parse URL parameters:', e)
+        console.error('Failed to fetch split results:', e)
+        alert('加载拆分结果失败: ' + e.message)
       }
     }
-  }, [searchParams])
+
+    fetchSplitResults()
+  }, [searchParams, sessionId])
 
   const handleEdit = (question) => {
     setEditingId(question.id)

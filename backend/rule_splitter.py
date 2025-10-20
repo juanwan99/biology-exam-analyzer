@@ -546,26 +546,50 @@ class RuleSplitter:
         questions: List[Question],
         structured_data: Dict[str, Any]
     ) -> None:
-        """匹配图片和表格到题目（基于坐标IoU）"""
+        """匹配图片和表格到题目（基于坐标IoU + 位置关系）"""
         logger.info("[媒体匹配] 开始匹配图片和表格")
 
         for page_data in structured_data["pages"]:
             # 匹配图片
             for img in page_data["images"]:
                 best_match = None
-                best_iou = 0.0
+                best_score = 0.0
+                match_method = ""
 
                 for question in questions:
+                    # 方法1：IoU匹配（图片在题目范围内）
                     iou = question.bbox.iou(img["bbox"])
-                    if iou > best_iou:
-                        best_iou = iou
+
+                    # 方法2：垂直距离匹配（图片在题目下方）
+                    # 检查图片是否在题目下方且水平对齐
+                    if question.bbox.page == img["bbox"].page:
+                        # 图片在题目下方
+                        if img["bbox"].y0 >= question.bbox.y0:
+                            vertical_distance = img["bbox"].y0 - question.bbox.y1
+                            # 水平重叠度
+                            x_overlap = min(question.bbox.x1, img["bbox"].x1) - max(question.bbox.x0, img["bbox"].x0)
+                            x_overlap_ratio = x_overlap / (img["bbox"].x1 - img["bbox"].x0) if x_overlap > 0 else 0
+
+                            # 如果题目包含"如图所示"等关键词，且图片在附近
+                            if any(kw in question.content for kw in ["如图所示", "如图", "下图", "见图"]):
+                                if vertical_distance < 200 and x_overlap_ratio > 0.3:  # 图片在下方200pt内且有30%水平重叠
+                                    proximity_score = 1.0 - (vertical_distance / 200) * (1.0 - x_overlap_ratio)
+                                    if proximity_score > best_score:
+                                        best_score = proximity_score
+                                        best_match = question
+                                        match_method = "proximity"
+
+                    # 如果IoU更高，优先使用IoU
+                    if iou > best_score:
+                        best_score = iou
                         best_match = question
+                        match_method = "iou"
 
-                if best_match and best_iou > 0.1:  # IoU阈值
+                if best_match and best_score > 0.1:  # 阈值
                     best_match.images.append(img)
-                    logger.debug(f"[媒体匹配] 图片匹配到题目{best_match.id}，IoU={best_iou:.2f}")
+                    logger.debug(f"[媒体匹配] 图片匹配到题目{best_match.id}，方法={match_method}，得分={best_score:.2f}")
 
-            # 匹配表格
+            # 匹配表格（保持原有IoU逻辑）
             for table in page_data["tables"]:
                 best_match = None
                 best_iou = 0.0

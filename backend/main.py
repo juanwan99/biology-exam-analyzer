@@ -353,28 +353,75 @@ async def auto_split_questions(
             await f.write(content)
 
         # 2. 选择拆分方式
-        if use_rule and file.filename.lower().endswith('.pdf'):
+        if use_rule and (file.filename.lower().endswith('.pdf') or file.filename.lower().endswith('.docx')):
             # 规则拆分
             logger.info("[自动拆分] 使用规则引擎拆分")
-            result = rule_splitter.split_questions(str(file_path), use_llm_fallback=True)
 
-            if not result["success"]:
-                if result.get("method") == "llm_fallback_required":
-                    logger.warning("[自动拆分] 规则拆分失败，降级到LLM拆分")
-                    # 降级到LLM拆分
-                    images = doc_processor.process_pdf(str(file_path))
-                    image_bytes = doc_processor.images_to_bytes(images)
-                    questions = gemini_analyzer.split_questions(image_bytes)
-                    result = {
-                        "success": True,
-                        "questions": [{"id": q.get("id"), "content": q.get("content"), "confidence": 0.8} for q in questions],
-                        "confidence": 0.8,
-                        "warnings": ["规则拆分失败，已降级到LLM拆分"],
-                        "method": "llm_fallback"
-                    }
-                else:
-                    raise HTTPException(500, result.get("error", "拆分失败"))
-        else:
+            # 如果是DOCX，先转换为PDF
+            pdf_path = file_path
+            if file.filename.lower().endswith('.docx'):
+                logger.info("[自动拆分] DOCX文件，检测实际格式")
+                # 先检查是否是伪装的PDF文件
+                import subprocess
+                try:
+                    # 读取文件头部判断实际格式
+                    with open(file_path, 'rb') as f:
+                        file_header = f.read(4)
+
+                    # PDF文件头是 %PDF (0x25504446)
+                    if file_header.startswith(b'%PDF'):
+                        logger.info("[自动拆分] 检测到DOCX实际是PDF文件，直接使用")
+                        # 重命名为PDF
+                        pdf_path = UPLOAD_DIR / f"{file_path.stem}_real.pdf"
+                        import shutil
+                        shutil.copy(str(file_path), str(pdf_path))
+                    else:
+                        # 真正的DOCX文件，需要转换
+                        logger.info("[自动拆分] 真实DOCX文件，开始转换为PDF")
+
+                        # LibreOffice转换参数：
+                        # --convert-to pdf:writer_pdf_Export 显式指定PDF导出器
+                        # -env:UserInstallation 使用临时用户配置（避免权限问题）
+                        subprocess.run([
+                            'libreoffice', '--headless',
+                            '--convert-to', 'pdf:writer_pdf_Export',
+                            '--outdir', str(UPLOAD_DIR),
+                            '-env:UserInstallation=file:///tmp/libreoffice_tmp',
+                            str(file_path)
+                        ], check=True, timeout=30, env={'LC_ALL': 'zh_CN.UTF-8'})
+
+                        # 找到转换后的PDF
+                        converted_pdf = UPLOAD_DIR / f"{file_path.stem}.pdf"
+                        if converted_pdf.exists():
+                            pdf_path = converted_pdf
+                            logger.info(f"[自动拆分] DOCX转PDF成功: {pdf_path}")
+                        else:
+                            raise Exception("PDF转换文件未生成")
+                except Exception as e:
+                    logger.warning(f"[自动拆分] DOCX处理失败，降级到LLM拆分: {e}")
+                    use_rule = False  # 降级到LLM
+
+            if use_rule:
+                result = rule_splitter.split_questions(str(pdf_path), use_llm_fallback=True)
+
+                if not result["success"]:
+                    if result.get("method") == "llm_fallback_required":
+                        logger.warning("[自动拆分] 规则拆分失败，降级到LLM拆分")
+                        # 降级到LLM拆分
+                        images = doc_processor.process_pdf(str(file_path))
+                        image_bytes = doc_processor.images_to_bytes(images)
+                        questions = gemini_analyzer.split_questions(image_bytes)
+                        result = {
+                            "success": True,
+                            "questions": [{"id": q.get("id"), "content": q.get("content"), "confidence": 0.8} for q in questions],
+                            "confidence": 0.8,
+                            "warnings": ["规则拆分失败，已降级到LLM拆分"],
+                            "method": "llm_fallback"
+                        }
+                    else:
+                        raise HTTPException(500, result.get("error", "拆分失败"))
+
+        if not use_rule:
             # LLM拆分
             logger.info("[自动拆分] 使用LLM拆分")
             if file.filename.lower().endswith('.pdf'):
@@ -425,6 +472,24 @@ async def auto_split_questions(
         if file_path and file_path.exists():
             file_path.unlink()
         raise HTTPException(500, detail=str(e))
+
+
+@app.get("/api/analyze/session/{session_id}")
+async def get_session_data(session_id: str):
+    """获取session中的拆分结果"""
+    session_data = get_session(session_id)
+    if not session_data:
+        raise HTTPException(404, detail="Session not found or expired")
+
+    auto_split_result = session_data.get("auto_split_result", {})
+
+    return {
+        "questions": auto_split_result.get("questions", []),
+        "confidence": auto_split_result.get("confidence", 0),
+        "warnings": auto_split_result.get("warnings", []),
+        "method": auto_split_result.get("method", "unknown"),
+        "filename": session_data.get("filename", "")
+    }
 
 
 @app.post("/api/analyze/confirm_split")

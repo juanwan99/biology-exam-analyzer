@@ -41,15 +41,8 @@ function AnalyzerPage() {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
 
-        // 跳转到人工校准页面
-        const params = new URLSearchParams({
-          session: response.data.session_id,
-          questions: encodeURIComponent(JSON.stringify(response.data.questions)),
-          confidence: response.data.confidence,
-          warnings: encodeURIComponent(JSON.stringify(response.data.warnings)),
-          method: response.data.method
-        })
-        navigate(`/correction?${params.toString()}`)
+        // 跳转到人工校准页面（只传session_id，避免URL编码问题）
+        navigate(`/correction?session=${response.data.session_id}`)
       } else {
         // v1.0 工作流：直接完整分析
         const formData = new FormData()

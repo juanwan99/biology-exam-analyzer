@@ -5,13 +5,23 @@ RUN apt-get update && apt-get install -y \
     poppler-utils \
     libreoffice-writer \
     libreoffice-core \
+    fonts-wqy-zenhei \
+    fonts-wqy-microhei \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libgdk-pixbuf-2.0-0 \
     libffi-dev \
     shared-mime-info \
+    locales \
     --no-install-recommends \
+    && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
+    && locale-gen \
     && rm -rf /var/lib/apt/lists/*
+
+# 设置中文locale环境变量
+ENV LANG=zh_CN.UTF-8 \
+    LANGUAGE=zh_CN:zh \
+    LC_ALL=zh_CN.UTF-8
 
 WORKDIR /app
 
