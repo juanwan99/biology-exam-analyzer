@@ -26,6 +26,48 @@ docker-compose up -d
 
 ---
 
+## ⚡ 修改Prompt的正确方法（重要！）
+
+### ✅ 推荐方法：只需重启（5秒完成）
+
+```bash
+# 1. 编辑本地文件
+notepad backend\prompts\analysis_prompt.txt
+# 或
+notepad backend\prompts\split_prompt.txt
+
+# 2. 重启后端容器（新prompt立即生效）
+docker-compose restart backend
+
+# 完成！无需重新构建
+```
+
+**原理**：项目已配置卷挂载 `./backend/prompts:/app/prompts`，本地文件直接映射到容器内，修改后重启即可。
+
+### ❌ 错误方法：重新构建（耗时3-5分钟）
+
+```bash
+# 不要这样做！太慢了
+docker-compose build --no-cache backend
+docker-compose up -d backend
+```
+
+### 📋 什么时候需要重建容器？
+
+**不需要重建**（只需重启）：
+- ✅ 修改 `backend/prompts/*.txt`
+- ✅ 修改 `.env` 环境变量
+- ✅ 修改 `uploads/` 文件
+- ✅ 修改 `logs/` 日志配置
+
+**需要重建**：
+- ❌ 修改 `backend/*.py` Python代码
+- ❌ 修改 `requirements.txt` 依赖
+- ❌ 修改 `Dockerfile`
+- ❌ 修改 `frontend/` 代码
+
+---
+
 ## 📊 核心功能状态
 
 ### ✅ 已完成（50%）

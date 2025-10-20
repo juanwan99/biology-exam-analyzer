@@ -1,0 +1,182 @@
+{
+  "core_competencies": {
+    "生命观念": {
+      "code": "life_concepts",
+      "description": "能够用生物学观点认识生命现象及其规律",
+      "sub_dimensions": {
+        "结构与功能观": {
+          "description": "认识生物的结构与功能相适应",
+          "keywords": ["结构", "功能", "适应", "细胞膜", "细胞器", "器官", "系统"],
+          "examples": ["细胞膜的结构决定其选择透过性功能", "叶绿体结构与光合作用功能适应"]
+        },
+        "进化与适应观": {
+          "description": "认识生物进化及其与环境的适应",
+          "keywords": ["进化", "适应", "自然选择", "变异", "遗传", "物种形成"],
+          "examples": ["长颈鹿脖子变长的进化过程", "抗生素抗性的产生"]
+        },
+        "稳态与平衡观": {
+          "description": "认识生命系统维持相对稳定的机制",
+          "keywords": ["稳态", "平衡", "调节", "反馈", "内环境", "血糖调节", "体温调节"],
+          "examples": ["血糖平衡的调节", "生态系统的自我调节"]
+        },
+        "物质与能量观": {
+          "description": "认识生命活动中的物质和能量变化",
+          "keywords": ["物质", "能量", "代谢", "ATP", "光合作用", "呼吸作用", "食物链", "能量流动"],
+          "examples": ["光合作用的能量转换", "生态系统的能量流动"]
+        }
+      }
+    },
+
+    "科学思维": {
+      "code": "scientific_thinking",
+      "description": "能够运用科学的思维方法认识生物学规律",
+      "sub_dimensions": {
+        "归纳与概括": {
+          "description": "从具体事例归纳出一般规律",
+          "keywords": ["归纳", "总结", "规律", "共性", "特征"],
+          "examples": ["从多个实验总结出酶的特性", "归纳总结细胞分裂的规律"]
+        },
+        "演绎与推理": {
+          "description": "运用已知规律推导未知结论",
+          "keywords": ["推理", "推导", "演绎", "因此", "所以", "可知", "系谱图分析", "基因型推导"],
+          "examples": ["根据遗传定律推导子代基因型", "系谱图推导遗传方式"]
+        },
+        "模型与建模": {
+          "description": "构建和运用模型解释生命现象",
+          "keywords": ["模型", "建模", "示意图", "概念图", "数学模型"],
+          "examples": ["DNA双螺旋结构模型", "种群增长的数学模型"]
+        },
+        "批判性思维": {
+          "description": "质疑、分析和评价生物学观点",
+          "keywords": ["批判", "质疑", "评价", "合理性", "局限性", "辩证"],
+          "examples": ["评价实验设计的合理性", "分析理论的适用范围"]
+        },
+        "创新性思维": {
+          "description": "提出新颖的观点或解决方案",
+          "keywords": ["创新", "创造", "新方法", "改进"],
+          "examples": ["设计新的实验方法", "提出改进方案"]
+        }
+      }
+    },
+
+    "科学探究": {
+      "code": "scientific_inquiry",
+      "description": "能够发现问题并通过科学探究解决问题",
+      "sub_dimensions": {
+        "提出问题": {
+          "description": "发现并提出有价值的生物学问题",
+          "keywords": ["问题", "疑问", "为什么", "如何"],
+          "examples": ["为什么酶具有专一性", "如何验证光合作用产物"]
+        },
+        "作出假设": {
+          "description": "基于已有知识提出可检验的假设",
+          "keywords": ["假设", "猜想", "推测", "可能"],
+          "examples": ["假设温度影响酶活性", "推测该遗传病为伴性遗传"]
+        },
+        "制订计划": {
+          "description": "设计科学的实验方案",
+          "keywords": ["实验设计", "方案", "步骤", "材料", "变量", "对照"],
+          "examples": ["设计探究酶最适温度的实验", "制定杂交实验方案"]
+        },
+        "实施探究": {
+          "description": "按照计划进行实验操作",
+          "keywords": ["操作", "实施", "过程", "记录"],
+          "examples": ["进行显微镜观察", "完成发酵实验"]
+        },
+        "得出结论": {
+          "description": "分析数据并得出结论",
+          "keywords": ["结论", "分析", "数据处理", "结果", "验证假设"],
+          "examples": ["根据实验数据得出酶的最适温度", "分析遗传比例验证遗传定律"]
+        },
+        "表达交流": {
+          "description": "清晰表达探究过程和结果",
+          "keywords": ["表达", "交流", "论述", "阐述"],
+          "examples": ["撰写实验报告", "阐述实验结论"]
+        }
+      }
+    },
+
+    "社会责任": {
+      "code": "social_responsibility",
+      "description": "能够运用生物学知识参与社会事务决策",
+      "sub_dimensions": {
+        "关注健康": {
+          "description": "关注人类健康问题",
+          "keywords": ["健康", "疾病", "免疫", "传染病", "营养", "AIDS", "癌症"],
+          "examples": ["艾滋病的预防", "健康生活方式的选择"]
+        },
+        "关注环境": {
+          "description": "关注环境保护和生态问题",
+          "keywords": ["环境", "生态", "污染", "保护", "可持续发展", "生物多样性"],
+          "examples": ["温室效应的影响", "生物多样性保护"]
+        },
+        "理性决策": {
+          "description": "基于生物学知识做出理性决策",
+          "keywords": ["决策", "选择", "权衡", "利弊"],
+          "examples": ["转基因食品的风险评估", "是否接种疫苗的决策"]
+        },
+        "科学伦理": {
+          "description": "认识生物技术的伦理问题",
+          "keywords": ["伦理", "道德", "安全性", "克隆", "基因编辑"],
+          "examples": ["克隆人的伦理问题", "基因编辑的安全性"]
+        }
+      }
+    }
+  },
+
+  "competency_question_types": {
+    "概念理解型": {
+      "primary_competency": "生命观念",
+      "description": "考查对基本概念和原理的理解",
+      "keywords": ["概念", "原理", "本质"]
+    },
+    "推理分析型": {
+      "primary_competency": "科学思维",
+      "description": "考查逻辑推理和分析能力",
+      "keywords": ["推理", "分析", "推导", "系谱图"]
+    },
+    "实验探究型": {
+      "primary_competency": "科学探究",
+      "description": "考查实验设计和探究能力",
+      "keywords": ["实验", "探究", "设计", "方案"]
+    },
+    "应用实践型": {
+      "primary_competency": "社会责任",
+      "description": "考查知识应用和社会责任",
+      "keywords": ["应用", "实际", "健康", "环境"]
+    }
+  },
+
+  "weight_calculation_rules": {
+    "single_competency": {
+      "description": "题目仅涉及一个核心素养",
+      "weight_distribution": {
+        "primary": 1.0
+      }
+    },
+    "two_competencies": {
+      "description": "题目涉及两个核心素养",
+      "weight_distribution": {
+        "primary": 0.7,
+        "secondary": 0.3
+      }
+    },
+    "three_competencies": {
+      "description": "题目涉及三个核心素养",
+      "weight_distribution": {
+        "primary": 0.5,
+        "secondary": 0.3,
+        "tertiary": 0.2
+      }
+    },
+    "four_competencies": {
+      "description": "题目涉及全部四个核心素养（综合性强）",
+      "weight_distribution": {
+        "primary": 0.4,
+        "secondary": 0.3,
+        "tertiary": 0.2,
+        "quaternary": 0.1
+      }
+    }
+  }
+}

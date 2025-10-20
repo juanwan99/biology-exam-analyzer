@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -12,6 +12,9 @@ import glob
 from logger import get_logger
 from document_processor import DocumentProcessor
 from gemini_analyzer import GeminiAnalyzer
+from difficulty_engine import DifficultyEngine
+from competency_analyzer import CompetencyAnalyzer
+from report_generator import ReportGenerator
 
 # 初始化
 logger = get_logger()
@@ -33,9 +36,11 @@ GEMINI_API_BASE = os.getenv("GEMINI_API_BASE")  # 自定义API端点（可选）
 UPLOAD_DIR = Path("/app/uploads")
 LOG_DIR = Path("/app/logs")
 PROMPT_DIR = Path("/app/prompts")
+RULES_DIR = Path("/app/rules")
+REPORTS_DIR = Path("/app/reports")
 
 # 确保目录存在
-for directory in [UPLOAD_DIR, LOG_DIR, PROMPT_DIR]:
+for directory in [UPLOAD_DIR, LOG_DIR, PROMPT_DIR, RULES_DIR, REPORTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # 初始化Gemini
@@ -45,6 +50,9 @@ if not GEMINI_API_KEY:
 
 gemini_analyzer = GeminiAnalyzer(GEMINI_API_KEY, api_base=GEMINI_API_BASE)
 doc_processor = DocumentProcessor()
+difficulty_engine = DifficultyEngine(gemini_analyzer=gemini_analyzer)
+competency_analyzer = CompetencyAnalyzer(gemini_analyzer=gemini_analyzer)
+report_generator = ReportGenerator()
 
 
 # ============ Pydantic Models ============
@@ -74,17 +82,29 @@ def verify_admin(password: Optional[str] = Header(None, alias="X-Admin-Password"
 
 # ============ 核心API ============
 
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze_document(file: UploadFile = File(...)):
+@app.post("/api/analyze")
+async def analyze_document(
+    file: UploadFile = File(...),
+    mode: str = Form("fast"),
+    generate_report: bool = Form(False)
+):
     """
     主接口：上传文档并完成完整分析流程
+
+    Args:
+        file: 上传的PDF或DOCX文件
+        mode: 评估模式 "fast"(快速) 或 "deep"(深度)
+        generate_report: 是否生成PDF报告
 
     流程：
     1. 保存上传文件
     2. 转换为图片
     3. Gemini拆分题目
     4. 逐题深度分析
-    5. 返回完整结果
+    5. 难度评估（新增）
+    6. 素养分析（新增）
+    7. 生成PDF报告（可选）
+    8. 返回完整结果
     """
     start_time = datetime.now()
     logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
@@ -156,27 +176,96 @@ async def analyze_document(file: UploadFile = File(...)):
             # 合并结果
             question["analysis"] = analysis
 
+        # 5. 难度评估（新增）
+        logger.info(f"开始难度评估，模式: {mode}")
+        for idx, question in enumerate(questions):
+            logger.info(f"评估第{idx+1}/{len(questions)}题难度")
+            try:
+                difficulty_result = difficulty_engine.evaluate_with_refinement(
+                    question={
+                        "id": question.get("id"),
+                        "content": question.get("content", ""),
+                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
+                    },
+                    mode=mode  # "fast" 或 "deep"
+                )
+                question["difficulty"] = difficulty_result
+                logger.debug(f"题目{question.get('id')}难度: {difficulty_result.get('final_difficulty', 'N/A')}/10")
+            except Exception as e:
+                logger.error(f"题目{question.get('id')}难度评估失败: {str(e)}")
+                question["difficulty"] = {"error": str(e)}
+
+        # 6. 素养分析（新增）
+        logger.info("开始核心素养分析")
+        for idx, question in enumerate(questions):
+            logger.info(f"分析第{idx+1}/{len(questions)}题素养")
+            try:
+                competency_result = competency_analyzer.analyze_competency(
+                    question={
+                        "id": question.get("id"),
+                        "content": question.get("content", ""),
+                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
+                    }
+                )
+                question["competency"] = competency_result
+                primary = competency_result.get("primary_competency", "未知")
+                logger.debug(f"题目{question.get('id')}主要素养: {primary}")
+            except Exception as e:
+                logger.error(f"题目{question.get('id')}素养分析失败: {str(e)}")
+                question["competency"] = {"error": str(e)}
+
+        # 7. 聚合素养统计
+        try:
+            competency_list = [q.get("competency", {}) for q in questions if "error" not in q.get("competency", {})]
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+            logger.info(f"素养聚合完成，主要素养: {competency_summary.get('primary_competency', 'N/A')}")
+        except Exception as e:
+            logger.error(f"素养聚合失败: {str(e)}")
+            competency_summary = {"error": str(e)}
+
+        # 8. 生成PDF报告（可选）
+        report_url = None
+        if generate_report:
+            try:
+                logger.info("开始生成PDF报告")
+                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
+
+                report_generator.generate_pdf_report(
+                    questions_analysis=questions,
+                    competency_summary=competency_summary,
+                    exam_info={
+                        "name": file.filename,
+                        "total": len(questions),
+                        "mode": mode,
+                        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    },
+                    output_path=str(pdf_path)
+                )
+
+                report_url = f"/api/reports/{exam_id}.pdf"
+                logger.info(f"报告生成成功: {report_url}")
+            except Exception as e:
+                logger.error(f"报告生成失败: {str(e)}", exc_info=True)
+                report_url = f"error: {str(e)}"
+
         # 清理上传文件（节省空间）
         file_path.unlink()
         logger.debug(f"已删除临时文件: {file_path}")
 
         # 计算耗时
         elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info(f"分析完成，总耗时: {elapsed:.2f}秒")
+        logger.info(f"完整流程完成，总耗时: {elapsed:.2f}秒")
 
-        # 【调试】检查structured_content是否存在
-        for q in questions:
-            has_sc = 'structured_content' in q
-            sc_count = len(q.get('structured_content', [])) if has_sc else 0
-            logger.info(f"[DEBUG] 题目{q.get('id')} structured_content存在: {has_sc}, 元素数: {sc_count}")
-            if has_sc and sc_count > 0:
-                logger.info(f"[DEBUG] 题目{q.get('id')} 元素类型: {[e['type'] for e in q['structured_content']]}")
-
-        return AnalyzeResponse(
-            questions=questions,
-            total_count=len(questions),
-            processing_time=elapsed
-        )
+        # 返回完整结果
+        return {
+            "questions": questions,
+            "total_count": len(questions),
+            "processing_time": elapsed,
+            "competency_summary": competency_summary,
+            "report_url": report_url,
+            "mode": mode
+        }
 
     except Exception as e:
         logger.error(f"分析流程失败: {str(e)}", exc_info=True)
@@ -271,6 +360,39 @@ async def list_logs(_: bool = Header(verify_admin)):
             for f in log_files
         ]
     }
+
+
+# ============ 难度评估 + 核心素养分析 + 报告生成 API ============
+
+@app.get("/api/reports/{filename}")
+async def download_report(filename: str):
+    """
+    下载生成的PDF报告
+
+    Args:
+        filename: PDF文件名（如: 20251019_143022.pdf）
+
+    Returns:
+        PDF文件下载响应
+    """
+    logger.info(f"请求下载报告: {filename}")
+
+    # 安全检查：防止路径穿越攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        logger.warning(f"非法文件名请求: {filename}")
+        raise HTTPException(400, "非法文件名")
+
+    report_path = REPORTS_DIR / filename
+    if not report_path.exists():
+        logger.warning(f"报告文件不存在: {report_path}")
+        raise HTTPException(404, "报告文件不存在")
+
+    logger.info(f"返回报告文件: {report_path}")
+    return FileResponse(
+        report_path,
+        media_type='application/pdf',
+        filename=filename
+    )
 
 
 # ============ 健康检查 ============

@@ -286,13 +286,32 @@ class GeminiAnalyzer:
 
             # 提取并解析JSON
             json_text = self.extract_json(response_text)
-            logger.debug(f"[分析] 题目{question_id} 提取的JSON:\n{json_text}")
-            result = json.loads(json_text)
-            logger.info(f"[分析] 题目{question_id} 分析完成")
-            return result
+            logger.debug(f"[分析] 题目{question_id} 提取的JSON前500字符:\n{json_text[:500]}")
+
+            try:
+                result = json.loads(json_text)
+                logger.info(f"[分析] 题目{question_id} 分析完成")
+                return result
+            except json.JSONDecodeError as json_err:
+                logger.error(f"[分析] 题目{question_id} JSON解析失败: {str(json_err)}")
+                logger.error(f"[分析] 问题JSON末尾500字符:\n{json_text[-500:]}")
+
+                # 如果是因为截断导致的JSON格式错误，返回降级结果
+                if finish_reason == 'length':
+                    logger.warning(f"[分析] 题目{question_id} 检测到内容被截断（finish_reason=length），返回降级结果")
+                    return {
+                        "knowledge_points": ["解析失败-内容被截断"],
+                        "detailed_analysis": f"题目{question_id}分析内容超出长度限制被截断。建议：①优化Prompt降低输出长度 ②增加max_tokens限制。",
+                        "difficulty": "中等",
+                        "common_mistakes": ["内容被截断，无法提供易错点"],
+                        "answer": "解析失败"
+                    }
+                else:
+                    # 非截断导致的JSON错误，继续抛出
+                    raise
 
         except json.JSONDecodeError as e:
-            logger.error(f"[分析] 题目{question_id} JSON解析失败: {e}")
+            logger.error(f"[分析] 题目{question_id} JSON解析失败（外层捕获）: {e}")
             raise
         except Exception as e:
             logger.error(f"[分析] 题目{question_id} API调用失败: {str(e)}", exc_info=True)

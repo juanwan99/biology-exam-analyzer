@@ -1,10 +1,15 @@
 FROM python:3.11-slim
 
-# 安装系统依赖（pdf2image需要poppler，Word转换需要LibreOffice）
+# 安装系统依赖（pdf2image需要poppler，Word转换需要LibreOffice，weasyprint需要pango/cairo）
 RUN apt-get update && apt-get install -y \
     poppler-utils \
     libreoffice-writer \
     libreoffice-core \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

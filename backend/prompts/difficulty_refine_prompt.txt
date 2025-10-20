@@ -1,0 +1,51 @@
+请基于规则引擎的初步评估，精调以下题目的难度系数。
+
+**规则引擎初步评估**：
+- 知识点复杂度: {knowledge_complexity}/10
+- 认知层级: {cognitive_level}/10
+- 信息提取难度: {info_extraction}/10
+- 步骤复杂度: {reasoning_steps}/10
+- **基础难度**: {base_difficulty}/10
+
+**题目内容**：
+{question_text}
+
+**已识别知识点**：
+{knowledge_points}
+
+---
+
+**精调任务**：
+1. 检查规则引擎评分是否合理
+2. 识别规则引擎可能遗漏的难度因素：
+   - 隐性条件（题目中隐藏的约束）
+   - 干扰信息（无关信息增加难度）
+   - 陌生情境（新颖背景材料）
+   - 多重推理路径（需要尝试多种方法）
+3. 对四个维度进行微调（±0-2分）
+4. 给出最终综合难度系数
+
+**返回纯JSON格式**（不要markdown代码块）：
+
+{{
+    "knowledge_complexity_adjusted": 7.5,
+    "cognitive_level_adjusted": 8.5,
+    "info_extraction_adjusted": 8.5,
+    "reasoning_steps_adjusted": 7.0,
+    "final_difficulty": 8.1,
+    "adjustment_reasons": "发现3个隐性条件：①Ⅱ-1和Ⅱ-4基因型相同暗示Ⅰ代传递模式；②Ⅳ-1纯合需要X染色体配对；③需要逐代推导Ⅱ→Ⅲ→Ⅳ。步骤复杂度应上调至7分。",
+    "difficulty_factors": [
+        "系谱图多代推导",
+        "伴性遗传概率计算",
+        "隐性条件识别（3处）",
+        "多步骤推理（4步）"
+    ],
+    "estimated_solve_time": "5-8分钟",
+    "difficulty_label": "困难"
+}}
+
+**注意**：
+- 微调范围：每个维度±2分以内
+- final_difficulty = 加权平均（知识40% + 认知30% + 信息20% + 步骤10%）
+- difficulty_label: "简单"(0-4分) / "中等"(4-7分) / "困难"(7-10分)
+- estimated_solve_time: 根据难度估算答题时间

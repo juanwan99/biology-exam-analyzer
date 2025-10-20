@@ -49,7 +49,7 @@ function ResultDisplay({ data }) {
     <div className="mt-12 max-w-7xl mx-auto">
       <div className="bg-white shadow rounded-lg p-8">
         {/* 统计信息 */}
-        <div className="mb-8 grid grid-cols-3 gap-4">
+        <div className="mb-8 grid grid-cols-4 gap-4">
           <div className="bg-blue-50 p-4 rounded-lg">
             <div className="text-sm text-gray-600">题目总数</div>
             <div className="text-3xl font-bold text-blue-600">{data.total_count}</div>
@@ -61,12 +61,108 @@ function ResultDisplay({ data }) {
             </div>
           </div>
           <div className="bg-purple-50 p-4 rounded-lg">
+            <div className="text-sm text-gray-600">评估模式</div>
+            <div className="text-2xl font-bold text-purple-600">
+              {data.mode === 'fast' ? '🚄 快速' : '🔬 深度'}
+            </div>
+          </div>
+          <div className="bg-orange-50 p-4 rounded-lg">
             <div className="text-sm text-gray-600">平均耗时</div>
-            <div className="text-3xl font-bold text-purple-600">
+            <div className="text-3xl font-bold text-orange-600">
               {(data.processing_time / data.total_count).toFixed(1)}s
             </div>
           </div>
         </div>
+
+        {/* 报告下载按钮 */}
+        {data.report_url && (
+          <div className="mb-8 p-6 bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                  📊 质量评估报告已生成
+                </h3>
+                <p className="text-sm text-gray-600">
+                  包含难度曲线、素养分布等6张可视化图表
+                </p>
+              </div>
+              <a
+                href={data.report_url}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                下载PDF报告
+              </a>
+            </div>
+          </div>
+        )}
+
+        {/* 素养分布汇总 */}
+        {data.competency_summary && (
+          <div className="mb-8 p-6 bg-gradient-to-r from-green-50 to-teal-50 border border-green-200 rounded-lg">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              🎯 核心素养分布
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {data.competency_summary['生命观念'] && (
+                <div className="bg-white p-4 rounded-lg shadow-sm">
+                  <div className="text-sm text-gray-600">生命观念</div>
+                  <div className="text-2xl font-bold text-green-600">
+                    {data.competency_summary['生命观念'].count}题
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {data.competency_summary['生命观念'].percentage?.toFixed(1)}%
+                  </div>
+                </div>
+              )}
+              {data.competency_summary['科学思维'] && (
+                <div className="bg-white p-4 rounded-lg shadow-sm">
+                  <div className="text-sm text-gray-600">科学思维</div>
+                  <div className="text-2xl font-bold text-blue-600">
+                    {data.competency_summary['科学思维'].count}题
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {data.competency_summary['科学思维'].percentage?.toFixed(1)}%
+                  </div>
+                </div>
+              )}
+              {data.competency_summary['科学探究'] && (
+                <div className="bg-white p-4 rounded-lg shadow-sm">
+                  <div className="text-sm text-gray-600">科学探究</div>
+                  <div className="text-2xl font-bold text-purple-600">
+                    {data.competency_summary['科学探究'].count}题
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {data.competency_summary['科学探究'].percentage?.toFixed(1)}%
+                  </div>
+                </div>
+              )}
+              {data.competency_summary['社会责任'] && (
+                <div className="bg-white p-4 rounded-lg shadow-sm">
+                  <div className="text-sm text-gray-600">社会责任</div>
+                  <div className="text-2xl font-bold text-orange-600">
+                    {data.competency_summary['社会责任'].count}题
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {data.competency_summary['社会责任'].percentage?.toFixed(1)}%
+                  </div>
+                </div>
+              )}
+            </div>
+            {data.competency_summary.primary_competency && (
+              <div className="mt-4 text-sm text-gray-600">
+                主要素养: <span className="font-semibold text-gray-900">
+                  {data.competency_summary.primary_competency}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 题目列表 */}
         <div className="space-y-6">
@@ -79,19 +175,34 @@ function ResultDisplay({ data }) {
                 <h3 className="text-xl font-semibold text-gray-900">
                   题目 {question.id || index + 1}
                 </h3>
-                {question.analysis?.difficulty && (
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${
-                      question.analysis.difficulty === '简单'
-                        ? 'bg-green-100 text-green-800'
-                        : question.analysis.difficulty === '中等'
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}
-                  >
-                    {question.analysis.difficulty}
-                  </span>
-                )}
+                <div className="flex gap-2">
+                  {/* 难度评分 */}
+                  {question.difficulty?.final_difficulty && (
+                    <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
+                      难度: {question.difficulty.final_difficulty.toFixed(1)}/10
+                    </span>
+                  )}
+                  {/* 原有难度标签（兼容） */}
+                  {question.analysis?.difficulty && !question.difficulty?.final_difficulty && (
+                    <span
+                      className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        question.analysis.difficulty === '简单'
+                          ? 'bg-green-100 text-green-800'
+                          : question.analysis.difficulty === '中等'
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}
+                    >
+                      {question.analysis.difficulty}
+                    </span>
+                  )}
+                  {/* 主要素养 */}
+                  {question.competency?.primary_competency && (
+                    <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+                      {question.competency.primary_competency}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* 题目内容 */}
@@ -110,6 +221,102 @@ function ResultDisplay({ data }) {
               {/* 分析结果 */}
               {question.analysis && (
                 <div className="space-y-3">
+                  {/* 难度详情（新增） */}
+                  {question.difficulty && !question.difficulty.error && (
+                    <div>
+                      <h4 className="font-semibold text-gray-700 mb-2">难度评估</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+                        {question.difficulty.knowledge_complexity !== undefined && (
+                          <div className="bg-blue-50 p-2 rounded text-sm">
+                            <div className="text-gray-600">知识复杂度</div>
+                            <div className="font-semibold text-blue-700">
+                              {question.difficulty.knowledge_complexity.toFixed(1)}/10
+                            </div>
+                          </div>
+                        )}
+                        {question.difficulty.cognitive_level !== undefined && (
+                          <div className="bg-green-50 p-2 rounded text-sm">
+                            <div className="text-gray-600">认知层级</div>
+                            <div className="font-semibold text-green-700">
+                              {question.difficulty.cognitive_level.toFixed(1)}/10
+                            </div>
+                          </div>
+                        )}
+                        {question.difficulty.information_extraction !== undefined && (
+                          <div className="bg-purple-50 p-2 rounded text-sm">
+                            <div className="text-gray-600">信息提取</div>
+                            <div className="font-semibold text-purple-700">
+                              {question.difficulty.information_extraction.toFixed(1)}/10
+                            </div>
+                          </div>
+                        )}
+                        {question.difficulty.reasoning_steps !== undefined && (
+                          <div className="bg-orange-50 p-2 rounded text-sm">
+                            <div className="text-gray-600">推理步骤</div>
+                            <div className="font-semibold text-orange-700">
+                              {question.difficulty.reasoning_steps.toFixed(1)}/10
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {question.difficulty.difficulty_factors && question.difficulty.difficulty_factors.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {question.difficulty.difficulty_factors.map((factor, idx) => (
+                            <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs">
+                              {factor}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {question.difficulty.estimated_solve_time && (
+                        <p className="text-sm text-gray-600">
+                          预计解题时间: {question.difficulty.estimated_solve_time}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 素养详情（新增） */}
+                  {question.competency && !question.competency.error && (
+                    <div>
+                      <h4 className="font-semibold text-gray-700 mb-2">核心素养</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        {question.competency['生命观念']?.涉及 && (
+                          <div className="bg-green-50 p-2 rounded text-sm border border-green-200">
+                            <div className="text-gray-600">生命观念</div>
+                            <div className="font-semibold text-green-700">
+                              权重: {(question.competency['生命观念'].权重 * 100).toFixed(0)}%
+                            </div>
+                          </div>
+                        )}
+                        {question.competency['科学思维']?.涉及 && (
+                          <div className="bg-blue-50 p-2 rounded text-sm border border-blue-200">
+                            <div className="text-gray-600">科学思维</div>
+                            <div className="font-semibold text-blue-700">
+                              权重: {(question.competency['科学思维'].权重 * 100).toFixed(0)}%
+                            </div>
+                          </div>
+                        )}
+                        {question.competency['科学探究']?.涉及 && (
+                          <div className="bg-purple-50 p-2 rounded text-sm border border-purple-200">
+                            <div className="text-gray-600">科学探究</div>
+                            <div className="font-semibold text-purple-700">
+                              权重: {(question.competency['科学探究'].权重 * 100).toFixed(0)}%
+                            </div>
+                          </div>
+                        )}
+                        {question.competency['社会责任']?.涉及 && (
+                          <div className="bg-orange-50 p-2 rounded text-sm border border-orange-200">
+                            <div className="text-gray-600">社会责任</div>
+                            <div className="font-semibold text-orange-700">
+                              权重: {(question.competency['社会责任'].权重 * 100).toFixed(0)}%
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* 知识点 */}
                   {question.analysis.knowledge_points && (
                     <div>

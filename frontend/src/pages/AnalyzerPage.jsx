@@ -7,6 +7,8 @@ function AnalyzerPage() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [mode, setMode] = useState('fast') // 评估模式：fast/deep
+  const [generateReport, setGenerateReport] = useState(false) // 是否生成PDF报告
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
@@ -23,6 +25,8 @@ function AnalyzerPage() {
 
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('mode', mode) // 添加模式参数
+    formData.append('generate_report', generateReport) // 添加报告生成参数
 
     setLoading(true)
     setError(null)
@@ -77,6 +81,87 @@ function AnalyzerPage() {
             </div>
           )}
 
+          {/* 评估模式选择 */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              评估模式
+            </label>
+            <div className="space-y-3">
+              <div
+                onClick={() => setMode('fast')}
+                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                  mode === 'fast'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    <input
+                      type="radio"
+                      name="mode"
+                      value="fast"
+                      checked={mode === 'fast'}
+                      onChange={() => setMode('fast')}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">🚄 快速模式</span>
+                      <p className="text-sm text-gray-600 mt-1">
+                        仅规则引擎评估难度，预估耗时 ~75秒
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs text-green-600 font-medium">推荐</span>
+                </div>
+              </div>
+
+              <div
+                onClick={() => setMode('deep')}
+                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                  mode === 'deep'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center">
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="deep"
+                    checked={mode === 'deep'}
+                    onChange={() => setMode('deep')}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">🔬 深度模式</span>
+                    <p className="text-sm text-gray-600 mt-1">
+                      规则引擎 + AI精调，识别隐性条件，预估耗时 ~150秒
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* PDF报告生成选项 */}
+          <div className="mb-6">
+            <label className="flex items-center cursor-pointer p-4 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-all">
+              <input
+                type="checkbox"
+                checked={generateReport}
+                onChange={(e) => setGenerateReport(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 rounded"
+              />
+              <div className="ml-3">
+                <span className="font-medium text-gray-900">📄 生成PDF质量评估报告</span>
+                <p className="text-sm text-gray-600 mt-1">
+                  包含难度曲线、素养分布等6张可视化图表（+10秒）
+                </p>
+              </div>
+            </label>
+          </div>
+
           <button
             onClick={handleUpload}
             disabled={!file || loading}
@@ -88,7 +173,11 @@ function AnalyzerPage() {
           {loading && (
             <div className="mt-6 text-center">
               <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-              <p className="mt-4 text-gray-600">正在处理试卷，请稍候...</p>
+              <p className="mt-4 text-gray-600">
+                正在处理试卷，请稍候...
+                {mode === 'fast' && <span className="block text-sm mt-1">预计需要 75 秒</span>}
+                {mode === 'deep' && <span className="block text-sm mt-1">预计需要 150 秒</span>}
+              </p>
             </div>
           )}
 
