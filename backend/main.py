@@ -320,6 +320,11 @@ def analyze_question_full(
 
         # 步骤2：难度评估
         logger.info(f"[分析] 题目{q_id} 开始难度评估")
+        # q_images 已在上方提取（含 _media_for_ai 和 image_indices）
+        q_image_b64 = ""
+        if q_images:
+            import base64 as _b64
+            q_image_b64 = _b64.b64encode(q_images[0]).decode("utf-8")
         difficulty_result = difficulty_engine.evaluate_with_refinement_sync(
             question={
                 "id": q_id,
@@ -330,7 +335,8 @@ def analyze_question_full(
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
-                "sub_scores": question.get("sub_scores", [])
+                "sub_scores": question.get("sub_scores", []),
+                "image_base64": q_image_b64,
             },
             mode=mode,
             analysis_result=analysis
@@ -498,7 +504,7 @@ async def analyze_document(
         for idx, question in enumerate(questions):
             logger.info(f"评估第{idx+1}/{len(questions)}题难度")
             try:
-                difficulty_result = difficulty_engine.evaluate_with_refinement_sync(
+                difficulty_result = await difficulty_engine.evaluate_with_refinement(
                     question={
                         "id": question.get("id"),
                         "content": question.get("content", ""),
@@ -506,6 +512,7 @@ async def analyze_document(
                         "correct_answer": question.get("analysis", {}).get("answer", ""),
                         "question_type": question.get("question_type", ""),
                         "total_score": question.get("analysis", {}).get("total_score", question.get("total_score", 0)),
+                        "image_base64": question.get("_media_for_ai", [{}])[0].get("base64", "") if question.get("_media_for_ai") else "",
                     },
                     mode=mode,
                     analysis_result=question.get("analysis", {})

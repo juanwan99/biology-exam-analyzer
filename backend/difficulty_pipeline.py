@@ -106,30 +106,22 @@ class DifficultyPipeline:
         }
 
     def _score_distribution(self, difficulty_score: float, total_score: float) -> dict:
-        """从难度分数推导预期得分分布（兼容旧 score_allocator 输出格式）。
+        """从难度分数推导按难度等级的分值分布（兼容旧格式：中文 key）。
 
-        简化版：基于正态分布近似。
+        返回 {"简单": score, "中等": score, "困难": score}，
+        与 main.py 聚合和前端 ExamStatisticsEnhanced.jsx 期望的格式一致。
         """
-        import numpy as np
+        # 根据 difficulty_score 分配：简单题大部分分值在"简单"档，困难题在"困难"档
+        if difficulty_score <= 3:
+            weights = {"简单": 0.7, "中等": 0.2, "困难": 0.1}
+        elif difficulty_score <= 5:
+            weights = {"简单": 0.3, "中等": 0.5, "困难": 0.2}
+        elif difficulty_score <= 7:
+            weights = {"简单": 0.1, "中等": 0.4, "困难": 0.5}
+        else:
+            weights = {"简单": 0.05, "中等": 0.25, "困难": 0.7}
 
-        mean_rate = max(0, min(1, 1 - difficulty_score / 10))
-        # 标准差与难度适中程度相关（中等题方差最大）
-        std_rate = 0.15 + 0.1 * (1 - abs(difficulty_score - 5) / 5)
-
-        distribution = {}
-        for pct in [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]:
-            rate = pct / 100
-            # 预测该得分率的学生比例
-            if rate <= 0:
-                prob = max(0, 1 - mean_rate) * 0.3
-            elif rate >= 1:
-                prob = mean_rate * 0.3
-            else:
-                diff = abs(rate - mean_rate)
-                prob = max(0, np.exp(-diff ** 2 / (2 * std_rate ** 2)))
-            score_val = round(rate * total_score, 1)
-            distribution[str(score_val)] = round(prob, 3)
-        return distribution
+        return {k: round(v * total_score, 1) for k, v in weights.items()}
 
     async def evaluate_with_refinement(self, question: dict, **kwargs) -> dict:
         """兼容旧接口名。直接调用 _evaluate_single。
