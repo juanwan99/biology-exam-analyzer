@@ -37,6 +37,8 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - LOG_LEVEL=DEBUG
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - CLAUDE_API_BASE=${CLAUDE_API_BASE:-https://aiproxy.superaichao.xin/api/v1/anthropic}
     depends_on:
       postgres:
         condition: service_healthy
