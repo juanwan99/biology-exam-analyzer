@@ -517,9 +517,10 @@ async def analyze_document(
                             if question.get("_media_for_ai")
                             else (
                                 __import__("base64").b64encode(
-                                    image_bytes[question.get("image_indices", [0])[0]]
+                                    image_bytes[question["image_indices"][0]]
                                 ).decode("utf-8")
                                 if image_bytes and question.get("image_indices")
+                                and question["image_indices"][0] < len(image_bytes)
                                 else ""
                             )
                         ),
