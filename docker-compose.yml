@@ -1,0 +1,55 @@
+services:
+  # PostgreSQL + pgvector 数据库
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: biology_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=biology
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-biology123}
+      - POSTGRES_DB=biology_edu
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biology -d biology_edu"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: biology_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app  # Python代码实时同步，修改后只需重启容器
+      - ./logs:/app/logs
+      - ./prompts:/app/prompts
+      - ./uploads:/app/uploads
+      - ./backend/rules:/app/rules
+      - ./reports:/app/reports
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_BASE=${GEMINI_API_BASE}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - LOG_LEVEL=DEBUG
+      - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: biology_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
