@@ -512,7 +512,17 @@ async def analyze_document(
                         "correct_answer": question.get("analysis", {}).get("answer", ""),
                         "question_type": question.get("question_type", ""),
                         "total_score": question.get("analysis", {}).get("total_score", question.get("total_score", 0)),
-                        "image_base64": question.get("_media_for_ai", [{}])[0].get("base64", "") if question.get("_media_for_ai") else "",
+                        "image_base64": (
+                            question.get("_media_for_ai", [{}])[0].get("base64", "")
+                            if question.get("_media_for_ai")
+                            else (
+                                __import__("base64").b64encode(
+                                    image_bytes[question.get("image_indices", [0])[0]]
+                                ).decode("utf-8")
+                                if image_bytes and question.get("image_indices")
+                                else ""
+                            )
+                        ),
                     },
                     mode=mode,
                     analysis_result=question.get("analysis", {})
