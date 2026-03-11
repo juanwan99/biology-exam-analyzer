@@ -20,7 +20,7 @@ from logger import get_logger
 from config import UPLOAD_DIR, LOG_DIR, PROMPT_DIR, RULES_DIR, REPORTS_DIR
 from document_processor import DocumentProcessor
 from gemini_analyzer import GeminiAnalyzer
-from difficulty_engine import DifficultyEngine
+from difficulty_pipeline import DifficultyPipeline
 from competency_analyzer import CompetencyAnalyzer
 from knowledge_mapper import KnowledgeMapper
 from report_generator import ReportGenerator
@@ -131,7 +131,7 @@ if not GEMINI_API_KEY:
 
 gemini_analyzer = GeminiAnalyzer(GEMINI_API_KEY, api_base=GEMINI_API_BASE)
 doc_processor = DocumentProcessor()
-difficulty_engine = DifficultyEngine(gemini_analyzer=gemini_analyzer)
+difficulty_engine = DifficultyPipeline()
 competency_analyzer = CompetencyAnalyzer(gemini_analyzer=gemini_analyzer)
 knowledge_mapper = KnowledgeMapper()
 report_generator = ReportGenerator()
@@ -320,7 +320,7 @@ def analyze_question_full(
 
         # 步骤2：难度评估
         logger.info(f"[分析] 题目{q_id} 开始难度评估")
-        difficulty_result = difficulty_engine.evaluate_with_refinement(
+        difficulty_result = difficulty_engine.evaluate_with_refinement_sync(
             question={
                 "id": q_id,
                 "content": question.get("content", ""),
@@ -328,6 +328,7 @@ def analyze_question_full(
                 "total_score": analysis.get("total_score", question.get("total_score", 0)),
                 "num_options": analysis.get("num_options", 4),
                 "question_type": question_type,
+                "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
                 "sub_scores": question.get("sub_scores", [])
             },
@@ -497,14 +498,17 @@ async def analyze_document(
         for idx, question in enumerate(questions):
             logger.info(f"评估第{idx+1}/{len(questions)}题难度")
             try:
-                difficulty_result = difficulty_engine.evaluate_with_refinement(
+                difficulty_result = difficulty_engine.evaluate_with_refinement_sync(
                     question={
                         "id": question.get("id"),
                         "content": question.get("content", ""),
-                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
+                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", []),
+                        "correct_answer": question.get("analysis", {}).get("answer", ""),
+                        "question_type": question.get("question_type", ""),
+                        "total_score": question.get("analysis", {}).get("total_score", question.get("total_score", 0)),
                     },
-                    mode=mode,  # "fast" 或 "deep"
-                    analysis_result=question.get("analysis", {})  # 新增：传递分析结果
+                    mode=mode,
+                    analysis_result=question.get("analysis", {})
                 )
                 question["difficulty"] = difficulty_result
                 logger.debug(f"题目{question.get('id')}难度: {difficulty_result.get('final_difficulty', 'N/A')}/10")
