@@ -66,6 +66,10 @@ def parse_features(raw: str) -> dict:
     """
     data = None
 
+    if not isinstance(raw, str):
+        logger.warning(f"特征解析输入非字符串: {type(raw)}")
+        return dict(DEFAULT_FEATURES)
+
     # 策略 1: 直接解析
     try:
         data = json.loads(raw.strip())
