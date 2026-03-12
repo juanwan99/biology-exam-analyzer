@@ -12,11 +12,19 @@
 
 ### 当前项目 AI 配置
 
-本项目使用 Gemini API 进行 AI 分析任务：
+本项目使用两个 AI API：
+
+**Gemini API（题目分析）：**
 - API 端点: `GEMINI_API_BASE` (环境变量配置)
 - API 密钥: `GEMINI_API_KEY` (环境变量配置)
 - 分析模型: gemini-2.5-pro
 - 快速评估模型: gemini-2.5-flash
+
+**Claude API（难度评估特征提取）：**
+- API 端点: `CLAUDE_API_BASE` (环境变量配置，AIProxy)
+- API 密钥: `CLAUDE_API_KEY` (环境变量配置)
+- 模型: claude-sonnet-4-20250514
+- 用途: 6 维特征提取（feature_extractor.py）
 
 ---
 
@@ -30,7 +38,10 @@ biology-exam-analyzer/
 │   ├── database.py   # 数据库连接
 │   ├── models.py     # SQLAlchemy 模型
 │   ├── gemini_analyzer.py    # Gemini AI 分析
-│   ├── difficulty_engine.py  # 难度评估引擎
+│   ├── difficulty_pipeline.py # 难度评估主控（v2 特征分析+规则评分）
+│   ├── feature_extractor.py  # LLM 特征提取（6 维度）
+│   ├── rule_scorer.py        # 规则评分引擎（加权公式）
+│   ├── difficulty_engine.py  # 难度评估引擎（旧，pipeline 调用）
 │   ├── competency_analyzer.py # 素养分析
 │   ├── knowledge_mapper.py   # 知识点映射
 │   ├── document_processor.py # 文档处理（PDF/DOCX→图片）
@@ -43,6 +54,8 @@ biology-exam-analyzer/
 │   ├── auth_router.py        # 认证 API
 │   ├── logger.py             # 日志配置
 │   └── exceptions.py         # 自定义异常
+│   ├── archived/      # 归档代码（simulated_student, irt_estimator）
+│   ├── scripts/       # 一次性脚本（批量导入/处理）
 ├── frontend/          # React + Vite 前端
 │   ├── src/
 │   │   ├── pages/     # 页面组件
@@ -172,7 +185,8 @@ docker-compose up -d --build backend
 ### 5. 已知技术债（参见 TODO_OPTIMIZATION.md）
 
 开发新功能时如果涉及以下区域，顺手优化：
-- `main.py` 过于臃肿 → 新功能用独立 router 文件
-- Session 存内存 → 新功能如需持久化状态用数据库
+- `main.py` 过于臃肿（~1400 行）→ 新功能用独立 router 文件
+- Session 存内存（active_tokens，已加 24h TTL）→ 新功能如需持久化状态用数据库
 - ThreadPoolExecutor → 新的并发场景用 asyncio
 - 无输入校验 → 新接口必须用 Pydantic 模型
+- Word/PDF 处理器重复（word_parser_v2/word_splitter, pdf_parser/pdf_splitter/rule_splitter）→ 确认使用链路后统一

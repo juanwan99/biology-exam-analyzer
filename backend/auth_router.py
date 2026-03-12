@@ -26,6 +26,7 @@ active_tokens: Dict[str, dict] = {}
 _login_attempts: Dict[str, tuple] = {}
 LOGIN_MAX_ATTEMPTS = 5      # 最多 5 次
 LOGIN_WINDOW_SECONDS = 60   # 60 秒窗口
+TOKEN_TTL_SECONDS = 86400    # token 有效期 24h
 
 
 # ============ Pydantic Models ============
@@ -87,9 +88,14 @@ def hash_password(password: str) -> str:
 
 
 def get_current_user(token: str) -> Optional[dict]:
-    """根据token获取当前用户"""
+    """根据token获取当前用户，检查 token 是否过期"""
     if token and token in active_tokens:
-        return active_tokens[token]
+        user_data = active_tokens[token]
+        login_time = datetime.fromisoformat(user_data["login_time"])
+        if (datetime.now() - login_time).total_seconds() > TOKEN_TTL_SECONDS:
+            del active_tokens[token]
+            return None
+        return user_data
     return None
 
 
@@ -431,7 +437,7 @@ async def reset_user_password(
     )
 
     logger.info(f"[重置密码] {admin['username']} 重置了 {db_user.username} 的密码")
-    return {"success": True, "message": f"密码已重置为: {new_password}"}
+    return {"success": True, "message": "密码已重置，请通知用户使用新密码登录", "temp_password": new_password}
 
 
 @router.delete("/users/{user_id}")

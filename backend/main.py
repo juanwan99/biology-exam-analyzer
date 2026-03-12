@@ -1380,11 +1380,23 @@ async def serve_uploads(path: str):
 
 @app.get("/health")
 async def health_check():
-    """健康检查接口"""
+    """健康检查接口（含数据库连通性）"""
+    db_ok = False
+    try:
+        from sqlalchemy import text
+        from database import get_db_session
+        async with get_db_session() as session:
+            await session.execute(text("SELECT 1"))
+            db_ok = True
+    except Exception:
+        pass
+
+    status = "healthy" if db_ok else "degraded"
     return {
-        "status": "healthy",
+        "status": status,
         "timestamp": datetime.now().isoformat(),
-        "gemini_configured": bool(GEMINI_API_KEY)
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "database": "ok" if db_ok else "unreachable"
     }
 
 
