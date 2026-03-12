@@ -104,4 +104,8 @@
 
 > 优化完成后移到这里，记录日期和改动内容
 
-（暂无）
+### 2026-03-12: P0 安全修复（全部完成）
+- **路径穿越**: Path.resolve() + 基目录白名单校验（uploads + reports）
+- **认证机制**: Header(verify_admin) → Depends(verify_admin)，hmac.compare_digest timing-safe 比较
+- **登录限流**: 5次/分钟 IP 限流（auth_router.py）
+- **输入验证**: corrected_questions 添加 Pydantic QuestionCorrection schema
