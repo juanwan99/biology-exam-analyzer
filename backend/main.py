@@ -368,8 +368,12 @@ def analyze_question_full(
 # ============ 认证中间件 ============
 
 def verify_admin(password: Optional[str] = Header(None, alias="X-Admin-Password")):
-    """验证管理员密码"""
-    if password != ADMIN_PASSWORD:
+    """验证管理员密码（timing-safe 比较，防时序攻击）"""
+    import hmac
+    if not password or not ADMIN_PASSWORD:
+        logger.warning("管理员认证失败（密码为空）")
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    if not hmac.compare_digest(password.encode(), ADMIN_PASSWORD.encode()):
         logger.warning("管理员认证失败（密码错误）")
         raise HTTPException(status_code=401, detail="Invalid admin password")
     return True
@@ -925,6 +929,16 @@ async def confirm_split(
 
         # 2. 解析修正后的题目（前端发来的，不含media）
         corrected_questions_list = json.loads(corrected_questions)
+        # 输入校验：必须是列表，每项必须是 dict 且含 id 字段
+        if not isinstance(corrected_questions_list, list):
+            raise HTTPException(400, "corrected_questions 必须是 JSON 数组")
+        if len(corrected_questions_list) > 200:
+            raise HTTPException(400, "题目数量超出上限（最多200题）")
+        for i, q in enumerate(corrected_questions_list):
+            if not isinstance(q, dict):
+                raise HTTPException(400, f"第{i+1}项不是有效的题目对象")
+            if "id" not in q:
+                raise HTTPException(400, f"第{i+1}项缺少 id 字段")
         logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目")
 
         # 3. 获取原始题目数据（含_media_for_ai）
@@ -1203,7 +1217,7 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
 # ============ 管理后台API ============
 
 @app.get("/api/admin/prompts")
-async def get_prompts(_: bool = Header(verify_admin)):
+async def get_prompts(admin_ok=Depends(verify_admin)):
     """获取当前Prompt配置"""
     logger.info("管理员获取Prompt配置")
     prompts = {}
@@ -1222,7 +1236,7 @@ async def get_prompts(_: bool = Header(verify_admin)):
 @app.put("/api/admin/prompts")
 async def update_prompt(
     data: PromptUpdate,
-    _: bool = Header(verify_admin)
+    admin_ok=Depends(verify_admin)
 ):
     """更新Prompt（热生效）"""
     logger.info(f"管理员更新Prompt类型: {data.type}")
@@ -1241,7 +1255,7 @@ async def update_prompt(
 @app.get("/api/admin/logs")
 async def get_logs(
     date: Optional[str] = None,
-    _: bool = Header(verify_admin)
+    admin_ok=Depends(verify_admin)
 ):
     """获取日志内容"""
     if not date:
@@ -1260,7 +1274,7 @@ async def get_logs(
 @app.get("/api/admin/logs/download/{date}")
 async def download_log(
     date: str,
-    _: bool = Header(verify_admin)
+    admin_ok=Depends(verify_admin)
 ):
     """下载日志文件"""
     log_file = LOG_DIR / f"{date}.log"
@@ -1275,7 +1289,7 @@ async def download_log(
 
 
 @app.get("/api/admin/logs/list")
-async def list_logs(_: bool = Header(verify_admin)):
+async def list_logs(admin_ok=Depends(verify_admin)):
     """列出所有日志文件"""
     log_files = sorted(LOG_DIR.glob("*.log"), reverse=True)
     return {
@@ -1305,12 +1319,13 @@ async def download_report(filename: str):
     """
     logger.info(f"请求下载报告: {filename}")
 
-    # 安全检查：防止路径穿越攻击
-    if ".." in filename or "/" in filename or "\\" in filename:
-        logger.warning(f"非法文件名请求: {filename}")
+    # 安全检查：Path.resolve() + 基目录校验
+    report_base = REPORTS_DIR.resolve()
+    report_path = (report_base / filename).resolve()
+    if not str(report_path).startswith(str(report_base)):
+        logger.warning(f"路径穿越尝试: {filename} -> {report_path}")
         raise HTTPException(400, "非法文件名")
 
-    report_path = REPORTS_DIR / filename
     if not report_path.exists():
         logger.warning(f"报告文件不存在: {report_path}")
         raise HTTPException(404, "报告文件不存在")
@@ -1330,13 +1345,15 @@ async def serve_uploads(path: str):
     """
     提供上传文件的访问（图片、表格等）
 
-    安全检查：防止路径穿越攻击
+    安全检查：Path.resolve() + 基目录白名单校验
     """
-    # 安全检查
-    if ".." in path:
-        raise HTTPException(400, "非法路径")
+    UPLOADS_BASE = Path("/home/ubuntu/biology-exam-analyzer/uploads").resolve()
+    file_path = (UPLOADS_BASE / path).resolve()
 
-    file_path = Path("/home/ubuntu/biology-exam-analyzer/uploads") / path
+    # 安全检查：resolve 后必须仍在基目录下（防 URL 编码绕过）
+    if not str(file_path).startswith(str(UPLOADS_BASE)):
+        logger.warning(f"路径穿越尝试: {path} -> {file_path}")
+        raise HTTPException(400, "非法路径")
 
     if not file_path.exists():
         raise HTTPException(404, "文件不存在")

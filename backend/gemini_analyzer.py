@@ -150,7 +150,7 @@ class GeminiAnalyzer:
             self._wait_if_needed()
 
             # 调用OpenAI兼容接口（拆分阶段使用Flash模型）
-            logger.debug(f"[拆分] 准备调用API - Model: {self.flash_model}, API Key: {self.api_key[:10]}..., Base URL: {self.client.base_url}")
+            logger.debug(f"[拆分] 准备调用API - Model: {self.flash_model}, Base URL: {self.client.base_url}")
             logger.debug(f"[拆分] 请求参数 - max_tokens: 16384, temperature: 0")
 
             response = self.client.chat.completions.create(

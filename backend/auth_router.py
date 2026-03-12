@@ -22,6 +22,11 @@ router = APIRouter(prefix="/api/auth", tags=["认证管理"])
 # 简单的token存储（生产环境应使用Redis）
 active_tokens: Dict[str, dict] = {}
 
+# 登录限流：IP -> (失败次数, 首次失败时间)
+_login_attempts: Dict[str, tuple] = {}
+LOGIN_MAX_ATTEMPTS = 5      # 最多 5 次
+LOGIN_WINDOW_SECONDS = 60   # 60 秒窗口
+
 
 # ============ Pydantic Models ============
 
@@ -143,8 +148,21 @@ async def login(
     data: LoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """用户登录"""
-    logger.info(f"[登录] 尝试登录: {data.username}")
+    """用户登录（含 IP 限流：5次/分钟）"""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # 限流检查
+    now = datetime.now()
+    if client_ip in _login_attempts:
+        attempts, first_time = _login_attempts[client_ip]
+        elapsed = (now - first_time).total_seconds()
+        if elapsed > LOGIN_WINDOW_SECONDS:
+            _login_attempts.pop(client_ip, None)
+        elif attempts >= LOGIN_MAX_ATTEMPTS:
+            logger.warning(f"[登录] IP {client_ip} 触发限流（{attempts}次失败）")
+            return LoginResponse(success=False, message="登录尝试过于频繁，请1分钟后重试")
+
+    logger.info(f"[登录] 尝试登录: {data.username} from {client_ip}")
 
     result = await db.execute(
         select(AdminUser).where(AdminUser.username == data.username)
@@ -152,7 +170,12 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user:
-        logger.warning(f"[登录] 用户不存在: {data.username}")
+        logger.warning(f"[登录] 用户不存在: {data.username} from {client_ip}")
+        if client_ip in _login_attempts:
+            attempts, first_time = _login_attempts[client_ip]
+            _login_attempts[client_ip] = (attempts + 1, first_time)
+        else:
+            _login_attempts[client_ip] = (1, now)
         return LoginResponse(success=False, message="用户名或密码错误")
 
     if not user.is_active:
@@ -160,8 +183,17 @@ async def login(
         return LoginResponse(success=False, message="账户已被禁用")
 
     if not verify_password(data.password, user.password_hash):
-        logger.warning(f"[登录] 密码错误: {data.username}")
+        logger.warning(f"[登录] 密码错误: {data.username} from {client_ip}")
+        # 记录失败次数
+        if client_ip in _login_attempts:
+            attempts, first_time = _login_attempts[client_ip]
+            _login_attempts[client_ip] = (attempts + 1, first_time)
+        else:
+            _login_attempts[client_ip] = (1, now)
         return LoginResponse(success=False, message="用户名或密码错误")
+
+    # 登录成功，清除限流记录
+    _login_attempts.pop(client_ip, None)
 
     # 生成token
     token = secrets.token_urlsafe(32)
