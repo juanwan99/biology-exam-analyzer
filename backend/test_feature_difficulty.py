@@ -59,3 +59,49 @@ class TestScoreToLabel:
         assert score_to_label(4.0) == "中等偏易"
         assert score_to_label(6.0) == "中等偏难"
         assert score_to_label(8.0) == "困难"
+
+
+import json
+from feature_extractor import parse_features, build_feature_prompt, DEFAULT_FEATURES
+
+
+class TestParseFeatures:
+    """JSON 解析容错测试。"""
+
+    def test_valid_json(self):
+        raw = '{"bloom": 3, "reasoning_steps": 4, "knowledge_breadth": 2, "info_density": 2, "novelty": 1, "question_type_factor": 1}'
+        result = parse_features(raw)
+        assert result["bloom"] == 3
+        assert result["reasoning_steps"] == 4
+
+    def test_json_in_code_block(self):
+        raw = '```json\n{"bloom": 2, "reasoning_steps": 1, "knowledge_breadth": 1, "info_density": 1, "novelty": 1, "question_type_factor": 1}\n```'
+        result = parse_features(raw)
+        assert result["bloom"] == 2
+
+    def test_out_of_range_clipped(self):
+        raw = '{"bloom": 10, "reasoning_steps": -1, "knowledge_breadth": 5, "info_density": 0, "novelty": 3, "question_type_factor": 1}'
+        result = parse_features(raw)
+        assert result["bloom"] == 6  # clipped to max
+        assert result["reasoning_steps"] == 1  # clipped to min
+        assert result["knowledge_breadth"] == 3  # clipped to max
+        assert result["info_density"] == 1  # clipped to min
+
+    def test_unparseable_returns_default(self):
+        result = parse_features("这道题很难blahblah")
+        assert result == DEFAULT_FEATURES
+
+    def test_partial_json_extracts_what_it_can(self):
+        """部分字段缺失 → 用默认值补全。"""
+        raw = '{"bloom": 4, "reasoning_steps": 3}'
+        result = parse_features(raw)
+        assert result["bloom"] == 4
+        assert result["reasoning_steps"] == 3
+        assert result["knowledge_breadth"] == DEFAULT_FEATURES["knowledge_breadth"]
+
+
+class TestBuildPrompt:
+    def test_prompt_contains_question(self):
+        prompt = build_feature_prompt("下列关于DNA的说法...", "A.xx B.xx", "A")
+        assert "下列关于DNA的说法" in prompt
+        assert "A.xx B.xx" in prompt
