@@ -105,3 +105,47 @@ class TestBuildPrompt:
         prompt = build_feature_prompt("下列关于DNA的说法...", "A.xx B.xx", "A")
         assert "下列关于DNA的说法" in prompt
         assert "A.xx B.xx" in prompt
+
+
+import asyncio
+from unittest.mock import patch, AsyncMock
+from difficulty_pipeline import DifficultyPipeline
+
+
+class TestPipelineIntegration:
+    """Pipeline 集成测试（mock LLM 调用）。"""
+
+    def test_evaluate_returns_expected_fields(self):
+        """验证返回字段兼容旧接口。"""
+        mock_features = {
+            "bloom": 3, "reasoning_steps": 4, "knowledge_breadth": 2,
+            "info_density": 2, "novelty": 2, "question_type_factor": 1,
+        }
+        with patch("difficulty_pipeline.extract_features", new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "下列关于DNA的说法正确的是",
+                    "question_type": "选择题",
+                    "correct_answer": "A",
+                    "total_score": 2,
+                })
+            )
+
+        # 旧字段必须存在
+        assert "base_difficulty" in result
+        assert "final_difficulty" in result
+        assert "difficulty_label" in result
+        assert "score_distribution_by_difficulty" in result
+        # 新字段
+        assert "features" in result
+        assert result["features"]["bloom"] == 3
+        # 分数合理
+        assert 0 <= result["base_difficulty"] <= 10
+
+    def test_empty_content_returns_default(self):
+        pipeline = DifficultyPipeline()
+        result = asyncio.get_event_loop().run_until_complete(
+            pipeline.evaluate_with_refinement({"content": "", "question_type": "", "correct_answer": "", "total_score": 1})
+        )
+        assert result["difficulty_label"] == "未评估"
