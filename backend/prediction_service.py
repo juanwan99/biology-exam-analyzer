@@ -414,6 +414,14 @@ class PredictionService:
                 'within_confidence': None
             }
 
+        predictions = [p for p in predictions if p.prediction_error is not None]
+        if not predictions:
+            return {
+                'sample_count': 0,
+                'avg_error': None,
+                'avg_error_percentage': None,
+                'within_confidence': None
+            }
         errors = [float(p.prediction_error) for p in predictions]
         error_percentages = [
             abs(e) / float(p.predicted_average) * 100

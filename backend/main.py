@@ -124,12 +124,13 @@ async def validation_error_handler(request: Request, exc: ValidationError):
 
 # 目录已在 config 模块中创建
 
-# 初始化组件
+# 初始化组件（AI 分析可选，基础 CRUD 始终可用）
+gemini_analyzer = None
 if not GEMINI_API_KEY:
-    logger.error("未配置GEMINI_API_KEY环境变量！")
-    raise RuntimeError("Missing GEMINI_API_KEY")
+    logger.warning("未配置GEMINI_API_KEY，AI 分析功能不可用，基础 CRUD 正常运行")
+else:
+    gemini_analyzer = GeminiAnalyzer(GEMINI_API_KEY, api_base=GEMINI_API_BASE)
 
-gemini_analyzer = GeminiAnalyzer(GEMINI_API_KEY, api_base=GEMINI_API_BASE)
 doc_processor = DocumentProcessor()
 difficulty_engine = DifficultyPipeline()
 competency_analyzer = CompetencyAnalyzer(gemini_analyzer=gemini_analyzer)
@@ -308,6 +309,8 @@ def analyze_question_full(
                     logger.warning(f"[分析] 题目{q_id} 媒体解码失败: {str(e)}")
 
         # 步骤1：Gemini题目分析
+        if not gemini_analyzer:
+            raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
         logger.info(f"[分析] 题目{q_id} 开始Gemini分析")
         analysis = gemini_analyzer.analyze_question(
             question_text=question.get("content", ""),
@@ -442,6 +445,8 @@ async def analyze_document(
         logger.info(f"图片转换完成，共{len(image_bytes)}张")
 
         # 3. Gemini拆分题目（传递提取的文字）
+        if not gemini_analyzer:
+            raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
         questions = gemini_analyzer.split_questions(image_bytes, extracted_text=extracted_text)
         logger.info(f"题目拆分完成，共{len(questions)}道题")
 
@@ -492,6 +497,8 @@ async def analyze_document(
             question["question_type"] = question_type
 
             # 调用Gemini分析（传递题型和分节标题）
+            if not gemini_analyzer:
+                raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
             analysis = gemini_analyzer.analyze_question(
                 question_text=question.get("content", ""),
                 question_images=q_images,
