@@ -149,3 +149,24 @@ class TestPipelineIntegration:
             pipeline.evaluate_with_refinement({"content": "", "question_type": "", "correct_answer": "", "total_score": 1})
         )
         assert result["difficulty_label"] == "未评估"
+
+
+class TestNoAnswerEvaluation:
+    def test_no_answer_still_evaluates(self):
+        """无答案时仍能评估（不像旧 pipeline 直接返回默认）。"""
+        mock_features = {
+            "bloom": 2, "reasoning_steps": 2, "knowledge_breadth": 1,
+            "info_density": 1, "novelty": 1, "question_type_factor": 1,
+        }
+        with patch("difficulty_pipeline.extract_features", new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "描述光合作用的过程",
+                    "question_type": "简答题",
+                    "correct_answer": "",
+                    "total_score": 6,
+                })
+            )
+        assert result["difficulty_label"] != "未评估"
+        assert result["features"] is not None
