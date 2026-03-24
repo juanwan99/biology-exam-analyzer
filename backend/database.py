@@ -25,7 +25,7 @@ ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg:/
 engine = create_async_engine(
     ASYNC_DATABASE_URL,
     echo=False,  # 设为True可以看到SQL语句
-    pool_size=5,
+    pool_size=10,
     max_overflow=10,
     pool_pre_ping=True,
 )

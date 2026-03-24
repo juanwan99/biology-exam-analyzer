@@ -49,7 +49,7 @@ class CompetencyAnalyzer:
             logger.error(f"素养库JSON解析失败: {e}")
             raise
 
-    def analyze_competency(self, question: Dict[str, Any]) -> Dict[str, Any]:
+    async def analyze_competency(self, question: Dict[str, Any]) -> Dict[str, Any]:
         """
         分析题目的核心素养
 
@@ -100,7 +100,7 @@ class CompetencyAnalyzer:
 
             # 调用Gemini API（使用Flash模型，快速评估）
             logger.debug(f"[素养分析] 调用API分析题目 {question.get('id')}")
-            response = self.gemini_analyzer.client.chat.completions.create(
+            response = await self.gemini_analyzer._call_with_retry(
                 model=self.gemini_analyzer.flash_model,
                 messages=[
                     {

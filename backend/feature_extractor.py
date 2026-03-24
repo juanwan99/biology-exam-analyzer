@@ -44,11 +44,14 @@ def build_feature_prompt(question_text: str, options: str = "", correct_answer: 
 题目：
 {question_block}
 
-请输出以下 6 个维度的评分（严格 JSON，不要解释）：
+请输出以下 6 个维度的评分（严格 JSON，不要多余解释）：
 {{
   "bloom": 1-6（1识记 2理解 3应用 4分析 5评价 6创造），
+  "bloom_reason": "一句话理由(≤30字)",
   "reasoning_steps": 正整数（从题目信息到答案的推理步数），
+  "steps_detail": "简述推理链(≤50字)",
   "knowledge_breadth": 1-3（1单知识点 2跨考点 3跨模块），
+  "breadth_reason": "一句话(≤20字)",
   "info_density": 1-3（1低≤2条 2中3-5条 3高>5条或含图表），
   "novelty": 1-3（1教材原文 2变式 3全新情境），
   "question_type_factor": 1-4（1单选 2多选/填空 3简答 4实验设计）
@@ -108,6 +111,12 @@ def parse_features(raw: str) -> dict:
         except (ValueError, TypeError):
             val = DEFAULT_FEATURES[key]
         result[key] = max(lo, min(hi, val))
+
+    # 保留 reason 字段（不参与评分，供审查用）
+    for reason_key in ["bloom_reason", "steps_detail", "breadth_reason"]:
+        if reason_key in data:
+            val = str(data[reason_key])[:50]  # 限长
+            result[reason_key] = val
 
     return result
 

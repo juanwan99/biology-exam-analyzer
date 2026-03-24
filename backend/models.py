@@ -21,6 +21,9 @@ class TextbookVersion(Base):
     chapters = relationship("TextbookChapter", back_populates="version", cascade="all, delete-orphan")
 
 
+# DEPRECATED: 现网数据库无此表。教材管理 API 的 chapter CRUD 功能依赖此 ORM，
+# 但实际教材数据在 textbook_pages/textbook_chunks 表中（由上传流程直接写入）。
+# 后续 Batch 考虑统一或删除。
 class TextbookChapter(Base):
     """教材章节"""
     __tablename__ = "textbook_chapters"
@@ -50,6 +53,9 @@ class TextbookChapter(Base):
     )
 
 
+# DEPRECATED: 现网数据库无此表。教材管理 API 的 chapter CRUD 功能依赖此 ORM，
+# 但实际教材数据在 textbook_pages/textbook_chunks 表中（由上传流程直接写入）。
+# 后续 Batch 考虑统一或删除。
 class TextbookContent(Base):
     """教材内容"""
     __tablename__ = "textbook_contents"
@@ -202,6 +208,39 @@ class Resource(Base):
     tags = Column(ARRAY(Text))
     extra_data = Column(JSON, default={})  # 改名避免与SQLAlchemy保留字冲突
     created_at = Column(DateTime, default=datetime.now)
+
+
+class TextbookPage(Base):
+    """教材页面（现网实际表 — B0 新增 ORM 映射）"""
+    __tablename__ = "textbook_pages"
+
+    id = Column(Integer, primary_key=True)
+    book_id = Column(String(50), nullable=False, index=True)
+    book_name = Column(String(200), nullable=False)
+    page_num = Column(Integer, nullable=False)
+    markdown_content = Column(Text)
+    chapter_info = Column(JSON, default=dict)
+    image_path = Column(String(500))
+    created_at = Column(DateTime, default=datetime.now)
+
+    chunks = relationship("TextbookChunk", back_populates="page", cascade="all, delete-orphan")
+
+
+class TextbookChunk(Base):
+    """教材切片（现网实际表 — B0 新增 ORM 映射）"""
+    __tablename__ = "textbook_chunks"
+
+    id = Column(Integer, primary_key=True)
+    page_id = Column(Integer, ForeignKey("textbook_pages.id", ondelete="CASCADE"))
+    book_id = Column(String(50), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    chunk_content = Column(Text, nullable=False)
+    page_num = Column(Integer)
+    chapter_info = Column(JSON, default=dict)
+    embedding = Column(Vector(384))
+    created_at = Column(DateTime, default=datetime.now)
+
+    page = relationship("TextbookPage", back_populates="chunks")
 
 
 # =====================================================

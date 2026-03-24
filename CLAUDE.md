@@ -32,44 +32,62 @@
 
 ```
 biology-exam-analyzer/
-├── backend/           # FastAPI 后端
-│   ├── main.py       # 主入口 + API 路由
-│   ├── config.py     # 路径配置
-│   ├── database.py   # 数据库连接
-│   ├── models.py     # SQLAlchemy 模型
-│   ├── gemini_analyzer.py    # Gemini AI 分析
-│   ├── difficulty_pipeline.py # 难度评估主控（v2 特征分析+规则评分）
-│   ├── feature_extractor.py  # LLM 特征提取（6 维度）
-│   ├── rule_scorer.py        # 规则评分引擎（加权公式）
-│   ├── difficulty_engine.py  # 难度评估引擎（旧，pipeline 调用）
+├── backend/
+│   ├── main.py              # 入口（170 行）— 初始化 + 路由注册 + 全局异常处理
+│   ├── config.py            # 路径配置（UPLOAD_DIR, LOG_DIR 等）
+│   ├── database.py          # AsyncEngine + 连接池（pool_size=10）
+│   ├── models.py            # 20 张表的 ORM 定义
+│   ├── deps.py              # 惰性单例工厂（9 个服务对象）
+│   ├── middleware.py         # RequestId 中间件
+│   ├── exceptions.py        # 自定义异常
+│   ├── logger.py            # 日志配置
+│   │
+│   │   # === 路由模块（8 个） ===
+│   ├── admin_router.py      # 管理后台（prompt/日志/报告/静态资源）
+│   ├── analysis_router.py   # 核心分析（上传→拆分→AI分析→统计）
+│   ├── auth_router.py       # 认证（bcrypt + 限流 + token）
+│   ├── exercise_router.py   # 题库 CRUD + 搜索
+│   ├── knowledge_router.py  # 知识库查询
+│   ├── prediction_router.py # 成绩预测
+│   ├── quiz_router.py       # 组卷
+│   ├── textbook_router.py   # 教材管理（最大，含向量处理）
+│   │
+│   │   # === AI/ML 服务 ===
+│   ├── gemini_analyzer.py   # Gemini 多模态分析（Semaphore=5）
+│   ├── claude_client.py     # Claude API 客户端（Semaphore=3）
+│   ├── feature_extractor.py # 6 维特征提取（LLM prompt）
+│   ├── rule_scorer.py       # 非线性规则评分（2-10 分）
+│   ├── difficulty_pipeline.py # 难度评估编排
+│   ├── calibration.py       # Isotonic Regression 校准（未集成）
 │   ├── competency_analyzer.py # 素养分析
-│   ├── knowledge_mapper.py   # 知识点映射
-│   ├── document_processor.py # 文档处理（PDF/DOCX→图片）
-│   ├── report_generator.py   # PDF 报告生成
-│   ├── textbook_router.py    # 教材管理 API
-│   ├── textbook_service.py   # 教材服务层
-│   ├── exercise_router.py    # 题库 API
-│   ├── knowledge_router.py   # 知识库 API
-│   ├── quiz_router.py        # 组卷 API
-│   ├── auth_router.py        # 认证 API
-│   ├── logger.py             # 日志配置
-│   └── exceptions.py         # 自定义异常
-│   ├── archived/      # 归档代码（simulated_student, irt_estimator）
-│   ├── scripts/       # 一次性脚本（批量导入/处理）
-├── frontend/          # React + Vite 前端
-│   ├── src/
-│   │   ├── pages/     # 页面组件
-│   │   ├── components/ # 通用组件
-│   │   └── api/       # API 客户端
-│   └── ...
-├── database/          # 数据库初始化脚本
-├── uploads/           # 上传文件存储
-├── logs/              # 日志文件
-├── prompts/           # AI 提示词模板
-├── reports/           # 生成的报告
-├── docker-compose.yml # Docker 配置
-├── CLAUDE.md          # 项目规范（本文件）
-└── TODO_OPTIMIZATION.md # 优化待办清单
+│   ├── knowledge_mapper.py  # 知识点映射
+│   │
+│   │   # === 文档处理 ===
+│   ├── document_processor.py # PDF/DOCX→图片
+│   ├── rule_splitter.py     # 规则拆题
+│   ├── pdf_splitter.py      # PDF 拆分
+│   ├── word_splitter.py     # DOCX 拆分
+│   ├── report_generator.py  # PDF 报告生成
+│   │
+│   │   # === 业务服务 ===
+│   ├── session_manager.py   # 内存 Session（30min TTL）
+│   ├── task_registry.py     # 异步任务状态（未集成）
+│   ├── textbook_service.py  # 教材服务层
+│   ├── prediction_service.py # 预测服务层
+│   ├── quiz_service.py      # 组卷服务层
+│   ├── vector_service.py    # pgvector 向量搜索
+│   ├── utils.py             # 题型推断
+│   │
+│   ├── archived/            # 归档（simulated_student, irt_estimator）
+│   ├── scripts/             # 一次性脚本（批量导入/处理）
+│   └── test_feature_difficulty.py # 单元测试（14 个）
+│
+├── frontend/                # React 18 + Vite + Tailwind + MUI
+├── database/init/           # PostgreSQL 初始化脚本
+├── prompts/                 # AI 提示词模板
+├── docker-compose.yml
+├── CLAUDE.md
+└── WHAT_IS_THIS.md
 ```
 
 ## 开发环境
@@ -182,11 +200,11 @@ docker-compose up -d --build backend
 - 新增功能应考虑对现有 API 的兼容性
 - Docker 相关变更后需测试 `docker-compose up -d --build` 是否正常
 
-### 5. 已知技术债（参见 TODO_OPTIMIZATION.md）
+### 5. 已知技术债
 
-开发新功能时如果涉及以下区域，顺手优化：
-- `main.py` 过于臃肿（~1400 行）→ 新功能用独立 router 文件
-- Session 存内存（active_tokens，已加 24h TTL）→ 新功能如需持久化状态用数据库
-- ThreadPoolExecutor → 新的并发场景用 asyncio
-- 无输入校验 → 新接口必须用 Pydantic 模型
-- Word/PDF 处理器重复（word_parser_v2/word_splitter, pdf_parser/pdf_splitter/rule_splitter）→ 确认使用链路后统一
+- ~~main.py 臃肿~~ → **已完成**（170 行，8 router 拆分）
+- ~~P0 安全~~ → **已完成**（路径穿越/认证/限流/输入校验/异常脱敏）
+- **document_processor.py 阻塞事件循环** — `convert_from_path()` 等同步调用需包装 `run_in_executor`
+- **Session 内存管理** — auth_router 的 active_tokens 无定期清理
+- **文档处理器重复** — word_parser_v2/word_splitter/pdf_parser/pdf_splitter/rule_splitter 需统一
+- **calibration.py/task_registry.py 未集成** — 代码完整但无调用方

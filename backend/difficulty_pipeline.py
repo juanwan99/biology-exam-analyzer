@@ -56,9 +56,11 @@ class DifficultyPipeline:
         logger.info(f"特征提取完成: {features}")
 
         # Stage 3 (new): 规则评分
-        score = compute_difficulty(features)
+        raw_score = compute_difficulty(features)
+        from calibration import calibrate
+        score = calibrate(raw_score)
         label = score_to_label(score)
-        logger.info(f"规则评分: {score} ({label})")
+        logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})")
 
         return {
             # 旧字段（main.py / prediction_service.py 消费）
@@ -68,6 +70,7 @@ class DifficultyPipeline:
             "score_distribution_by_difficulty": self._score_distribution(score, total_score),
             # 新字段
             "features": features,
+            "raw_score": raw_score,
             "confidence": 0.7,
             "predicted_score_rate": None,
             "flags": [],
