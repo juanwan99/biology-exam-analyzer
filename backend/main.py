@@ -164,6 +164,44 @@ async def health_check():
     }
 
 
+# ============ 后台定期清理 ============
+
+@app.on_event("startup")
+async def start_cleanup_task():
+    """启动后台定期清理过期 token 和 session。"""
+    import asyncio
+
+    async def _periodic_cleanup():
+        while True:
+            await asyncio.sleep(300)  # 每 5 分钟
+            try:
+                # 清理过期 token
+                from auth_router import active_tokens, _login_attempts, TOKEN_TTL_SECONDS
+                now = datetime.now()
+                expired = [k for k, v in active_tokens.items()
+                           if (now - datetime.fromisoformat(v["login_time"])).total_seconds() > TOKEN_TTL_SECONDS]
+                for k in expired:
+                    del active_tokens[k]
+
+                # 清理过期登录尝试记录
+                stale = [ip for ip, (count, first) in _login_attempts.items()
+                         if (now - first).total_seconds() > 300]
+                for ip in stale:
+                    del _login_attempts[ip]
+
+                # 清理过期 session
+                from session_manager import clean_expired_sessions
+                clean_expired_sessions()
+
+                if expired or stale:
+                    logger.debug(f"[定期清理] tokens={len(expired)} attempts={len(stale)}")
+            except Exception as e:
+                logger.warning(f"[定期清理] 异常: {e}")
+
+    asyncio.create_task(_periodic_cleanup())
+    logger.info("[主模块] 后台清理任务已启动（间隔 5 分钟）")
+
+
 if __name__ == "__main__":
     import uvicorn
     logger.info("启动开发服务器...")
