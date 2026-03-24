@@ -107,7 +107,7 @@ async def create_exam_history(
         }
     except Exception as e:
         logger.exception(f"创建历史记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.get("/history")
@@ -138,7 +138,7 @@ async def list_exam_history(
         }
     except Exception as e:
         logger.exception(f"获取历史记录列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.get("/history/{exam_id}")
@@ -195,7 +195,7 @@ async def get_exam_history(
         raise
     except Exception as e:
         logger.exception(f"获取历史记录详情失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.delete("/history/{exam_id}")
@@ -223,7 +223,7 @@ async def delete_exam_history(
         raise
     except Exception as e:
         logger.exception(f"删除历史记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.post("/predict")
@@ -253,7 +253,7 @@ async def predict_exam_score(
         }
     except Exception as e:
         logger.exception(f"分数预估失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.post("/feedback")
@@ -286,7 +286,7 @@ async def submit_feedback(
         raise
     except Exception as e:
         logger.exception(f"提交反馈失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.get("/stats")
@@ -309,7 +309,7 @@ async def get_coverage_stats(
         }
     except Exception as e:
         logger.exception(f"获取统计数据失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.post("/rebuild-mapping")
@@ -334,4 +334,4 @@ async def rebuild_mapping(
         }
     except Exception as e:
         logger.exception(f"重建映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="服务器内部错误")

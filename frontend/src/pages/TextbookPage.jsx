@@ -33,7 +33,7 @@ function TextbookPage() {
         setStats(res.data.data)
       }
     } catch (err) {
-      console.error('加载统计失败:', err)
+      if (import.meta.env.DEV) console.error('加载统计失败:', err)
     }
   }, [])
 
@@ -49,7 +49,7 @@ function TextbookPage() {
         }
       }
     } catch (err) {
-      console.error('加载教材列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载教材列表失败:', err)
     }
   }, [selectedBook])
 
@@ -67,7 +67,7 @@ function TextbookPage() {
         setCurrentPage(page)
       }
     } catch (err) {
-      console.error('加载页面列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载页面列表失败:', err)
     } finally {
       setLoading(false)
     }
@@ -82,7 +82,7 @@ function TextbookPage() {
         setPageContent(res.data.data)
       }
     } catch (err) {
-      console.error('加载页面内容失败:', err)
+      if (import.meta.env.DEV) console.error('加载页面内容失败:', err)
     } finally {
       setLoading(false)
     }
@@ -131,7 +131,7 @@ function TextbookPage() {
         setSearchResults(res.data.data.results)
       }
     } catch (err) {
-      console.error('搜索失败:', err)
+      if (import.meta.env.DEV) console.error('搜索失败:', err)
       setMessage({ type: 'error', text: '搜索失败: ' + (err.response?.data?.detail || err.message) })
     } finally {
       setLoading(false)
@@ -155,7 +155,7 @@ function TextbookPage() {
         setSearchResults(res.data.data.results)
       }
     } catch (err) {
-      console.error('搜索失败:', err)
+      if (import.meta.env.DEV) console.error('搜索失败:', err)
     } finally {
       setLoading(false)
     }

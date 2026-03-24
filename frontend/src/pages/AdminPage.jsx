@@ -111,7 +111,7 @@ function AdminPage() {
     try {
       await axios.post('/api/auth/logout', {}, { headers: getHeaders() })
     } catch (err) {
-      console.error('登出失败:', err)
+      if (import.meta.env.DEV) console.error('登出失败:', err)
     }
     setAuthenticated(false)
     setToken('')
@@ -137,7 +137,7 @@ function AdminPage() {
       setExerciseTotal(res.data.total)
       setExerciseTotalPages(res.data.total_pages)
     } catch (err) {
-      console.error('加载题目失败:', err)
+      if (import.meta.env.DEV) console.error('加载题目失败:', err)
     } finally {
       setExerciseLoading(false)
     }
@@ -148,7 +148,7 @@ function AdminPage() {
       const res = await axios.get('/api/exercises/sources')
       setSources(res.data.items || [])
     } catch (err) {
-      console.error('加载来源失败:', err)
+      if (import.meta.env.DEV) console.error('加载来源失败:', err)
     }
   }
 
@@ -209,7 +209,7 @@ function AdminPage() {
       const res = await axios.get('/api/textbook/chapters')
       setChapters(res.data.data || [])
     } catch (err) {
-      console.error('加载章节失败:', err)
+      if (import.meta.env.DEV) console.error('加载章节失败:', err)
     } finally {
       setTextbookLoading(false)
     }
@@ -220,7 +220,7 @@ function AdminPage() {
       const res = await axios.get('/api/textbook/knowledge-points', { params: { limit: 100 } })
       setKnowledgePoints(res.data.data || [])
     } catch (err) {
-      console.error('加载知识点失败:', err)
+      if (import.meta.env.DEV) console.error('加载知识点失败:', err)
     }
   }
 
@@ -229,7 +229,7 @@ function AdminPage() {
       const res = await axios.get('/api/textbook/books')
       setBooks(res.data.data || [])
     } catch (err) {
-      console.error('加载教材列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载教材列表失败:', err)
     }
   }
 
@@ -249,7 +249,7 @@ function AdminPage() {
       setChunkTotal(res.data.total)
       setChunkTotalPages(res.data.total_pages)
     } catch (err) {
-      console.error('加载教材切片失败:', err)
+      if (import.meta.env.DEV) console.error('加载教材切片失败:', err)
     } finally {
       setTextbookLoading(false)
     }
@@ -339,7 +339,7 @@ function AdminPage() {
       setLogsTotal(res.data.total)
       setLogsTotalPages(res.data.total_pages)
     } catch (err) {
-      console.error('加载操作日志失败:', err)
+      if (import.meta.env.DEV) console.error('加载操作日志失败:', err)
     } finally {
       setLogsLoading(false)
     }
@@ -351,7 +351,7 @@ function AdminPage() {
       const res = await axios.get('/api/auth/users', { headers: getHeaders() })
       setUsers(res.data.users || [])
     } catch (err) {
-      console.error('加载用户列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载用户列表失败:', err)
     }
   }
 
@@ -381,7 +381,7 @@ function AdminPage() {
       setPrompts(response.data)
       setPromptContent(response.data.split)
     } catch (err) {
-      console.error('加载Prompt失败:', err)
+      if (import.meta.env.DEV) console.error('加载Prompt失败:', err)
     }
   }
 

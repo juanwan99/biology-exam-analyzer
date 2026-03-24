@@ -270,7 +270,7 @@ async def search_knowledge(request: SearchRequest):
         }
     except Exception as e:
         logger.error(f"搜索失败: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @router.get("/search/simple")

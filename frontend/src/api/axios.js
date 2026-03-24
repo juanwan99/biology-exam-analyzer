@@ -49,15 +49,17 @@ apiClient.interceptors.response.use(
   },
   error => {
     // 统一错误处理
-    if (error.response) {
-      // 服务器返回错误状态码
-      console.error('API错误:', error.response.status, error.response.data)
-    } else if (error.request) {
-      // 请求发送了但没有收到响应
-      console.error('网络错误: 无法连接到服务器')
-    } else {
-      // 其他错误
-      console.error('请求错误:', error.message)
+    if (import.meta.env.DEV) {
+      if (error.response) {
+        // 服务器返回错误状态码
+        console.error('API错误:', error.response.status, error.response.data)
+      } else if (error.request) {
+        // 请求发送了但没有收到响应
+        console.error('网络错误: 无法连接到服务器')
+      } else {
+        // 其他错误
+        console.error('请求错误:', error.message)
+      }
     }
     return Promise.reject(error)
   }

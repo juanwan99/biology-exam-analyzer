@@ -66,7 +66,7 @@ function AnalyzerPage() {
       setResult(response.data)
     } catch (err) {
       setError(err.response?.data?.detail || '分析失败，请检查文件格式或网络连接')
-      console.error(err)
+      if (import.meta.env.DEV) console.error(err)
     } finally {
       setLoading(false)
     }

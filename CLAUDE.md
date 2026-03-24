@@ -82,7 +82,11 @@ biology-exam-analyzer/
 │   ├── scripts/             # 一次性脚本（批量导入/处理）
 │   └── test_feature_difficulty.py # 单元测试（14 个）
 │
-├── frontend/                # React 18 + Vite + Tailwind + MUI
+├── frontend/src/
+│   ├── App.jsx              # 路由 + 导航 + ErrorBoundary
+│   ├── api/axios.js         # HTTP 客户端（token 注入 + 错误拦截）
+│   ├── pages/               # 7 个页面组件
+│   └── components/          # ErrorBoundary + 统计图表 + 结果展示
 ├── database/init/           # PostgreSQL 初始化脚本
 ├── prompts/                 # AI 提示词模板
 ├── docker-compose.yml
@@ -93,7 +97,7 @@ biology-exam-analyzer/
 ## 开发环境
 
 - 后端: Python 3.x + FastAPI + uvicorn
-- 前端: React 18 + Vite + Tailwind CSS
+- 前端: React 18 + Vite + Tailwind CSS + MUI
 - 数据库: PostgreSQL 16 + pgvector (Docker)
 - 部署: Docker Compose
 - 端口:

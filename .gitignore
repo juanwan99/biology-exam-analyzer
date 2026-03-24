@@ -1,9 +1,14 @@
 *.pyc
 __pycache__/
 .env
+.env.*
 *.log
+*.bak
 node_modules/
 uploads/
 logs/
 reports/
-.env*
+.pytest_cache/
+.venv/
+*.egg-info/
+dist/

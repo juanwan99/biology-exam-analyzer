@@ -49,7 +49,7 @@ function QuizGeneratorPage() {
         setBooks(res.data.data || [])
       }
     } catch (err) {
-      console.error('加载教材列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载教材列表失败:', err)
       setError('加载教材列表失败')
     } finally {
       setLoadingBooks(false)
@@ -64,7 +64,7 @@ function QuizGeneratorPage() {
         setQuizHistory(JSON.parse(saved))
       }
     } catch (err) {
-      console.error('加载历史记录失败:', err)
+      if (import.meta.env.DEV) console.error('加载历史记录失败:', err)
     }
   }
 
@@ -75,7 +75,7 @@ function QuizGeneratorPage() {
       setQuizHistory(newHistory)
       localStorage.setItem(QUIZ_HISTORY_KEY, JSON.stringify(newHistory))
     } catch (err) {
-      console.error('保存历史记录失败:', err)
+      if (import.meta.env.DEV) console.error('保存历史记录失败:', err)
     }
   }
 
@@ -162,7 +162,7 @@ function QuizGeneratorPage() {
         setError(res.data.message || '生成测验失败')
       }
     } catch (err) {
-      console.error('生成测验失败:', err)
+      if (import.meta.env.DEV) console.error('生成测验失败:', err)
       setError(err.response?.data?.detail || '生成测验失败，请稍后重试')
     } finally {
       setGenerating(false)

@@ -49,7 +49,7 @@ function CorrectionPage() {
         setWarnings(data.warnings || [])
         setMethod(data.method || 'unknown')
       } catch (e) {
-        console.error('Failed to fetch split results:', e)
+        if (import.meta.env.DEV) console.error('Failed to fetch split results:', e)
         alert('加载拆分结果失败: ' + e.message)
       }
     }
@@ -136,16 +136,18 @@ function CorrectionPage() {
       })
 
       // 保存结果并显示在当前页面
-      console.log('=== 收到后端返回数据 ===')
-      console.log('response.data:', response.data)
-      console.log('questions数量:', response.data?.questions?.length)
-      console.log('total_count:', response.data?.total_count)
+      if (import.meta.env.DEV) {
+        console.log('=== 收到后端返回数据 ===')
+        console.log('response.data:', response.data)
+        console.log('questions数量:', response.data?.questions?.length)
+        console.log('total_count:', response.data?.total_count)
+      }
       setResult(response.data)
       // 滚动到页面顶部查看结果
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
       alert(`确认失败: ${err.response?.data?.detail || err.message}`)
-      console.error(err)
+      if (import.meta.env.DEV) console.error(err)
     } finally {
       setLoading(false)
     }

@@ -36,7 +36,7 @@ function HistoryDataPage() {
         setHistoryList(res.data.data)
       }
     } catch (err) {
-      console.error('加载历史数据失败:', err)
+      if (import.meta.env.DEV) console.error('加载历史数据失败:', err)
       setMessage({ type: 'error', text: '加载历史数据失败' })
     } finally {
       setLoading(false)
@@ -51,7 +51,7 @@ function HistoryDataPage() {
         setStats(res.data.data)
       }
     } catch (err) {
-      console.error('加载统计数据失败:', err)
+      if (import.meta.env.DEV) console.error('加载统计数据失败:', err)
     }
   }, [])
 
@@ -70,7 +70,7 @@ function HistoryDataPage() {
         setSelectedHistory(res.data.data)
       }
     } catch (err) {
-      console.error('加载详情失败:', err)
+      if (import.meta.env.DEV) console.error('加载详情失败:', err)
       setMessage({ type: 'error', text: '加载详情失败' })
     } finally {
       setLoading(false)
@@ -91,7 +91,7 @@ function HistoryDataPage() {
         setSelectedHistory(null)
       }
     } catch (err) {
-      console.error('删除失败:', err)
+      if (import.meta.env.DEV) console.error('删除失败:', err)
       setMessage({ type: 'error', text: '删除失败' })
     } finally {
       setLoading(false)
@@ -131,7 +131,7 @@ function HistoryDataPage() {
         setMessage({ type: 'success', text: `成功解析 ${res.data.questions.length} 道题目` })
       }
     } catch (err) {
-      console.error('文件解析失败:', err)
+      if (import.meta.env.DEV) console.error('文件解析失败:', err)
       setMessage({ type: 'error', text: '文件解析失败: ' + (err.response?.data?.detail || err.message) })
     } finally {
       setLoading(false)
@@ -197,7 +197,7 @@ function HistoryDataPage() {
         setActiveTab('list')
       }
     } catch (err) {
-      console.error('提交失败:', err)
+      if (import.meta.env.DEV) console.error('提交失败:', err)
       setMessage({ type: 'error', text: '提交失败: ' + (err.response?.data?.detail || err.message) })
     } finally {
       setLoading(false)

@@ -30,7 +30,7 @@ function ExercisePage() {
       const res = await axios.get('/api/exercises/statistics')
       setStatistics(res.data)
     } catch (err) {
-      console.error('加载统计信息失败:', err)
+      if (import.meta.env.DEV) console.error('加载统计信息失败:', err)
     }
   }, [])
 
@@ -40,7 +40,7 @@ function ExercisePage() {
       const res = await axios.get('/api/exercises/sources')
       setSources(res.data.items || [])
     } catch (err) {
-      console.error('加载来源列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载来源列表失败:', err)
     }
   }, [])
 
@@ -61,7 +61,7 @@ function ExercisePage() {
       setTotalCount(res.data.total || 0)
       setCurrentPage(page)
     } catch (err) {
-      console.error('加载题目列表失败:', err)
+      if (import.meta.env.DEV) console.error('加载题目列表失败:', err)
     } finally {
       setLoading(false)
     }
@@ -448,7 +448,7 @@ function ExercisePage() {
                   <div className="grid grid-cols-2 gap-4">
                     {selectedExercise.images.map((img, idx) => {
                       const imgUrl = '/' + img.path.split('/').map(p => encodeURIComponent(p)).join('/')
-                      console.log('Loading image:', imgUrl)
+                      if (import.meta.env.DEV) console.log('Loading image:', imgUrl)
                       return (
                         <img
                           key={idx}
@@ -456,9 +456,9 @@ function ExercisePage() {
                           alt={`图${idx + 1}`}
                           className="rounded border max-h-64 object-contain"
                           onError={(e) => {
-                            console.error('Image load failed. Path:', img.path, 'URL:', imgUrl)
+                            if (import.meta.env.DEV) console.error('Image load failed. Path:', img.path, 'URL:', imgUrl)
                           }}
-                          onLoad={() => console.log('Image loaded successfully:', imgUrl)}
+                          onLoad={() => { if (import.meta.env.DEV) console.log('Image loaded successfully:', imgUrl) }}
                         />
                       )
                     })}

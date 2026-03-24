@@ -6,6 +6,7 @@ import TextbookPage from './pages/TextbookPage'
 import ExercisePage from './pages/ExercisePage'
 import QuizGeneratorPage from './pages/QuizGeneratorPage'
 import HistoryDataPage from './pages/HistoryDataPage'
+import ErrorBoundary from './components/ErrorBoundary'
 
 function App() {
   const location = useLocation()
@@ -64,15 +65,26 @@ function App() {
 
       {/* 路由 */}
       <main className="animate-fade-in">
-        <Routes>
-          <Route path="/" element={<AnalyzerPage />} />
-          <Route path="/correction" element={<CorrectionPage />} />
-          <Route path="/quiz" element={<QuizGeneratorPage />} />
-          <Route path="/history" element={<HistoryDataPage />} />
-          <Route path="/exercises" element={<ExercisePage />} />
-          <Route path="/textbook" element={<TextbookPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<AnalyzerPage />} />
+            <Route path="/correction" element={<CorrectionPage />} />
+            <Route path="/quiz" element={<QuizGeneratorPage />} />
+            <Route path="/history" element={<HistoryDataPage />} />
+            <Route path="/exercises" element={<ExercisePage />} />
+            <Route path="/textbook" element={<TextbookPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="*" element={
+              <div className="min-h-[60vh] flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-6xl mb-4">404</div>
+                  <h2 className="text-xl font-bold text-gray-800 mb-2">页面不存在</h2>
+                  <Link to="/" className="text-blue-500 hover:underline">返回首页</Link>
+                </div>
+              </div>
+            } />
+          </Routes>
+        </ErrorBoundary>
       </main>
 
       {/* 页脚 */}

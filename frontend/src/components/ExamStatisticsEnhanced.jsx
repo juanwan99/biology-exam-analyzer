@@ -224,10 +224,12 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
   }
 
   // 调试：打印气泡数据和类别
-  console.log('=== 难度因素气泡数据 ===')
-  factorsData.forEach(item => {
-    console.log(`因素: ${item.factor}, 类别: ${item.category}, 颜色应为: ${getCategoryColor(item.category)}`)
-  })
+  if (import.meta.env.DEV) {
+    console.log('=== 难度因素气泡数据 ===')
+    factorsData.forEach(item => {
+      console.log(`因素: ${item.factor}, 类别: ${item.category}, 颜色应为: ${getCategoryColor(item.category)}`)
+    })
+  }
 
   // ===== 新增：题目标签云数据 =====
   const tagsMap = new Map()

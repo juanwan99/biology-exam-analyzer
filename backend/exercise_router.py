@@ -211,7 +211,7 @@ async def list_exercises(
 
     except Exception as e:
         logger.error(f"[题库] 查询失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/detail/{exercise_id}")
@@ -266,7 +266,7 @@ async def get_exercise_detail(
         raise
     except Exception as e:
         logger.error(f"[题库] 获取详情失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/sources")
@@ -308,7 +308,7 @@ async def list_sources(
 
     except Exception as e:
         logger.error(f"[题库] 获取来源列表失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/statistics")
@@ -368,7 +368,7 @@ async def get_statistics(
 
     except Exception as e:
         logger.error(f"[题库] 获取统计信息失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/random")
@@ -414,7 +414,7 @@ async def get_random_exercises(
 
     except Exception as e:
         logger.error(f"[题库] 随机获取失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ CRUD Endpoints (Admin) ============
@@ -470,7 +470,7 @@ async def create_exercise(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 创建失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.put("/update/{exercise_id}")
@@ -540,7 +540,7 @@ async def update_exercise(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 更新失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/delete/{exercise_id}")
@@ -585,7 +585,7 @@ async def delete_exercise(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 删除失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.post("/batch-delete")
@@ -627,7 +627,7 @@ async def batch_delete_exercises(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 批量删除失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ Source CRUD Endpoints ============
@@ -670,7 +670,7 @@ async def create_source(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 来源创建失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.put("/sources/update/{source_id}")
@@ -721,7 +721,7 @@ async def update_source(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 来源更新失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/sources/delete/{source_id}")
@@ -775,4 +775,4 @@ async def delete_source(
     except Exception as e:
         await db.rollback()
         logger.error(f"[题库] 来源删除失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")

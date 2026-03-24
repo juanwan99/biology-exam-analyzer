@@ -328,7 +328,7 @@ async def upload_document(
 
     except Exception as e:
         logger.error(f"[教材上传] 处理失败: {e}", exc_info=True)
-        raise HTTPException(500, f"文档处理失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.post("/upload/textbook")
@@ -427,7 +427,7 @@ async def upload_textbook(
 
     except Exception as e:
         logger.error(f"[整本教材上传] 处理失败: {e}", exc_info=True)
-        raise HTTPException(500, f"文档处理失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.post("/upload/batch")
@@ -483,7 +483,7 @@ async def upload_batch(
         raise HTTPException(400, "JSON格式错误")
     except Exception as e:
         logger.error(f"[批量上传] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"处理失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.post("/upload/smart")
@@ -548,7 +548,7 @@ async def upload_smart(
 
     except Exception as e:
         logger.error(f"[智能教材处理] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"智能处理失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/smart/results/{filename}")
@@ -1106,7 +1106,7 @@ async def vector_process_textbook(
 
     except Exception as e:
         logger.error(f"[向量处理] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"向量处理失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.post("/vector/search")
@@ -1155,7 +1155,7 @@ async def vector_search(data: VectorSearchRequest):
 
     except Exception as e:
         logger.error(f"[向量搜索] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"向量搜索失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/vector/section/{section_id}")
@@ -1190,7 +1190,7 @@ async def get_section_context(section_id: int):
         raise
     except Exception as e:
         logger.error(f"[获取章节] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"获取章节失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/vector/book/{book_name}")
@@ -1216,7 +1216,7 @@ async def clear_book_vectors(book_name: str):
 
     except Exception as e:
         logger.error(f"[清除数据] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"清除数据失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.get("/vector/stats")
@@ -1282,7 +1282,7 @@ async def get_vector_stats():
 
     except Exception as e:
         logger.error(f"[向量统计] 失败: {e}", exc_info=True)
-        raise HTTPException(500, f"获取统计失败: {str(e)}")
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ Admin CRUD Endpoints ============
@@ -1371,7 +1371,7 @@ async def update_chapter(
         raise
     except Exception as e:
         logger.error(f"[教材] 更新章节失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/chapters/{chapter_id}")
@@ -1407,7 +1407,7 @@ async def delete_chapter(
         raise
     except Exception as e:
         logger.error(f"[教材] 删除章节失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ 内容管理 ============
@@ -1447,7 +1447,7 @@ async def update_content(
         raise
     except Exception as e:
         logger.error(f"[教材] 更新内容失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/contents/{content_id}")
@@ -1483,7 +1483,7 @@ async def delete_content(
         raise
     except Exception as e:
         logger.error(f"[教材] 删除内容失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ 知识点管理 ============
@@ -1523,7 +1523,7 @@ async def update_knowledge_point(
         raise
     except Exception as e:
         logger.error(f"[教材] 更新知识点失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/knowledge-points/{kp_id}")
@@ -1559,7 +1559,7 @@ async def delete_knowledge_point(
         raise
     except Exception as e:
         logger.error(f"[教材] 删除知识点失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 # ============ 版本管理 ============
@@ -1595,7 +1595,7 @@ async def create_version(
         return {"success": True, "message": "版本创建成功", "data": result}
     except Exception as e:
         logger.error(f"[教材] 创建版本失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.put("/versions/{version_id}")
@@ -1633,7 +1633,7 @@ async def update_version(
         raise
     except Exception as e:
         logger.error(f"[教材] 更新版本失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")
 
 
 @router.delete("/versions/{version_id}")
@@ -1669,4 +1669,4 @@ async def delete_version(
         raise
     except Exception as e:
         logger.error(f"[教材] 删除版本失败: {str(e)}")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail="服务器内部错误")

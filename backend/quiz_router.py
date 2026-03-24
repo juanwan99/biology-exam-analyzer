@@ -86,4 +86,4 @@ async def generate_quiz(request: GenerateQuizRequest):
         raise
     except Exception as e:
         logger.error(f"生成测验失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"生成测验失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务器内部错误")
