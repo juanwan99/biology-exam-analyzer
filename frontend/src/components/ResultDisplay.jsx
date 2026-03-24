@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { AlertTriangle } from 'lucide-react'
 import ExamStatisticsEnhanced from './ExamStatisticsEnhanced'
 
 // 题目详情弹窗组件
@@ -241,7 +242,7 @@ function QuestionModal({ question, onClose }) {
               <ul className="space-y-2">
                 {question.analysis.common_mistakes.map((mistake, idx) => (
                   <li key={idx} className="flex items-start gap-2 text-gray-700">
-                    <span className="text-amber-500">⚠</span>
+                    <AlertTriangle size={14} className="text-amber-500 flex-shrink-0" />
                     {mistake}
                   </li>
                 ))}

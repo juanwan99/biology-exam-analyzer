@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { useSearchParams } from 'react-router-dom'
+import { Zap, Bot, AlertTriangle, Pencil, Link as LinkIcon, Scissors, Trash2, FileText, CheckCircle } from 'lucide-react'
 import ResultDisplay from '../components/ResultDisplay'
 
 function CorrectionPage() {
@@ -177,7 +178,7 @@ function CorrectionPage() {
             <div>
               <span className="text-sm text-gray-600">拆分方式</span>
               <p className="text-lg font-medium">
-                {method === 'rule' ? '🚀 规则引擎' : method === 'llm' ? '🤖 LLM' : '⚠️ LLM降级'}
+                {method === 'rule' ? <span className="flex items-center gap-1"><Zap size={16} className="inline" /> 规则引擎</span> : method === 'llm' ? <span className="flex items-center gap-1"><Bot size={16} className="inline" /> LLM</span> : <span className="flex items-center gap-1"><AlertTriangle size={16} className="inline" /> LLM降级</span>}
               </p>
             </div>
             <div>
@@ -195,7 +196,7 @@ function CorrectionPage() {
           {/* 警告信息 */}
           {warnings.length > 0 && (
             <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
-              <p className="text-sm font-medium text-yellow-800 mb-2">⚠️ 警告信息：</p>
+              <p className="text-sm font-medium text-yellow-800 mb-2 flex items-center gap-1"><AlertTriangle size={14} className="inline" /> 警告信息：</p>
               <ul className="list-disc list-inside text-sm text-yellow-700">
                 {warnings.map((warning, idx) => (
                   <li key={idx}>{warning}</li>
@@ -234,26 +235,26 @@ function CorrectionPage() {
                   onClick={() => handleEdit(question)}
                   className="px-3 py-1 bg-[#c8f0d4] text-[#0f1c13] rounded hover:bg-[#b8d1bf] text-sm"
                 >
-                  ✏️ 编辑
+                  <Pencil size={14} className="inline mr-1" /> 编辑
                 </button>
                 <button
                   onClick={() => handleMerge(question.id)}
                   className="px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm"
                   disabled={index === questions.length - 1}
                 >
-                  🔗 合并下一题
+                  <LinkIcon size={14} className="inline mr-1" /> 合并下一题
                 </button>
                 <button
                   onClick={() => handleSplit(question.id)}
                   className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 text-sm"
                 >
-                  ✂️ 拆分
+                  <Scissors size={14} className="inline mr-1" /> 拆分
                 </button>
                 <button
                   onClick={() => handleDelete(question.id)}
                   className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
                 >
-                  🗑️ 删除
+                  <Trash2 size={14} className="inline mr-1" /> 删除
                 </button>
               </div>
             </div>
@@ -294,7 +295,7 @@ function CorrectionPage() {
             {/* 警告信息 */}
             {question.warnings && question.warnings.length > 0 && (
               <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                <p className="text-xs font-medium text-yellow-800 mb-1">⚠️ 该题警告：</p>
+                <p className="text-xs font-medium text-yellow-800 mb-1 flex items-center gap-1"><AlertTriangle size={12} className="inline" /> 该题警告：</p>
                 <ul className="list-disc list-inside text-xs text-yellow-700">
                   {question.warnings.map((warning, idx) => (
                     <li key={idx}>{warning}</li>
@@ -325,7 +326,7 @@ function CorrectionPage() {
                     onChange={() => setMode('deep')}
                     className="h-4 w-4 text-[#1a2e1f]"
                   />
-                  <span className="ml-2 text-sm">🔬 深度模式</span>
+                  <span className="ml-2 text-sm">深度模式</span>
                 </label>
               </div>
             </div>
@@ -342,7 +343,7 @@ function CorrectionPage() {
                   onChange={(e) => setGenerateReport(e.target.checked)}
                   className="h-4 w-4 text-[#1a2e1f] rounded"
                 />
-                <span className="ml-2 text-sm">📄 生成PDF报告</span>
+                <span className="ml-2 text-sm flex items-center"><FileText size={14} className="inline mr-1" /> 生成PDF报告</span>
               </label>
             </div>
           </div>
@@ -353,7 +354,7 @@ function CorrectionPage() {
             disabled={loading || questions.length === 0}
             className="px-8 py-3 bg-[#1a2e1f] text-white rounded-lg hover:bg-[#0f1c13] disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
           >
-            {loading ? '分析中...' : '✅ 确认并继续分析'}
+            {loading ? '分析中...' : <span className="flex items-center justify-center gap-1"><CheckCircle size={16} className="inline" /> 确认并继续分析</span>}
           </button>
         </div>
 

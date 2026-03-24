@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import axios from 'axios'
+import { Dna, FileText, ClipboardEdit, TrendingUp, Crosshair, Brain } from 'lucide-react'
 import ResultDisplay from '../components/ResultDisplay'
 
 function AnalyzerPage() {
@@ -76,8 +77,8 @@ function AnalyzerPage() {
     <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
       {/* 页面标题 */}
       <div className="text-center mb-12">
-        <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-[#2d5a3d] to-[#1a2e1f] shadow-xl mb-6">
-          <span className="text-4xl">🧬</span>
+        <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-[#2d5a3d] to-[#1a2e1f] shadow-xl mb-6 text-white">
+          <Dna size={48} />
         </div>
         <h1 className="text-4xl font-bold bg-gradient-to-r from-[#1a2e1f] to-[#1a2e1f] bg-clip-text text-transparent mb-4">
           生物试卷智能分析系统
@@ -126,7 +127,7 @@ function AnalyzerPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
                   <div className="w-10 h-10 rounded-lg bg-[#c8f0d4] flex items-center justify-center mr-3">
-                    <span className="text-xl">{file.name.endsWith('.pdf') ? '📄' : '📝'}</span>
+                    {file.name.endsWith('.pdf') ? <FileText size={20} className="text-[#1a2e1f]" /> : <ClipboardEdit size={20} className="text-[#1a2e1f]" />}
                   </div>
                   <div>
                     <p className="font-medium text-gray-900">{file.name}</p>
@@ -161,7 +162,7 @@ function AnalyzerPage() {
                 className="h-5 w-5 text-[#1a2e1f] focus:ring-[#c8f0d4] rounded"
               />
               <div className="ml-4">
-                <span className="font-medium text-gray-900">📄 生成PDF质量评估报告</span>
+                <span className="font-medium text-gray-900 flex items-center"><FileText size={16} className="inline mr-1" /> 生成PDF质量评估报告</span>
                 <p className="text-sm text-gray-500 mt-1">
                   包含难度曲线、素养分布等6张可视化图表（+10秒）
                 </p>
@@ -225,17 +226,17 @@ function AnalyzerPage() {
         {/* 功能特点 */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="stat-card stat-card-blue">
-            <div className="text-3xl mb-3">🎯</div>
+            <div className="text-3xl mb-3 text-[#1a2e1f]"><Crosshair size={32} /></div>
             <h3 className="font-semibold text-gray-900 mb-2">智能拆分</h3>
             <p className="text-sm text-gray-600">自动识别题目边界，精准拆分选择题和非选择题</p>
           </div>
           <div className="stat-card stat-card-green">
-            <div className="text-3xl mb-3">📈</div>
+            <div className="text-3xl mb-3 text-[#1a2e1f]"><TrendingUp size={32} /></div>
             <h3 className="font-semibold text-gray-900 mb-2">难度评估</h3>
             <p className="text-sm text-gray-600">多维度分析题目难度，生成难度曲线图</p>
           </div>
           <div className="stat-card stat-card-purple">
-            <div className="text-3xl mb-3">🧠</div>
+            <div className="text-3xl mb-3 text-[#1a2e1f]"><Brain size={32} /></div>
             <h3 className="font-semibold text-gray-900 mb-2">素养分析</h3>
             <p className="text-sm text-gray-600">评估生命观念、科学思维等核心素养覆盖</p>
           </div>

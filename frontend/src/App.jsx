@@ -1,4 +1,5 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
+import { Dna, BarChart3, ClipboardEdit, TrendingUp, Library, BookOpen, Settings } from 'lucide-react'
 import AnalyzerPage from './pages/AnalyzerPage'
 import AdminPage from './pages/AdminPage'
 import CorrectionPage from './pages/CorrectionPage'
@@ -12,12 +13,12 @@ function App() {
   const location = useLocation()
 
   const navLinks = [
-    { path: '/', label: '试卷分析', icon: '📊' },
-    { path: '/quiz', label: '测验生成', icon: '📝' },
-    { path: '/history', label: '历史数据', icon: '📈' },
-    { path: '/exercises', label: '题库', icon: '📚' },
-    { path: '/textbook', label: '教材资料', icon: '📖' },
-    { path: '/admin', label: '管理后台', icon: '⚙️' },
+    { path: '/', label: '试卷分析', icon: BarChart3 },
+    { path: '/quiz', label: '测验生成', icon: ClipboardEdit },
+    { path: '/history', label: '历史数据', icon: TrendingUp },
+    { path: '/exercises', label: '题库', icon: Library },
+    { path: '/textbook', label: '教材资料', icon: BookOpen },
+    { path: '/admin', label: '管理后台', icon: Settings },
   ]
 
   return (
@@ -36,7 +37,7 @@ function App() {
           <Link to="/" className="flex items-center gap-2.5 no-underline">
             <div className="w-9 h-9 rounded-[10px] flex items-center justify-center text-white text-lg"
               style={{ background: 'var(--color-primary)' }}>
-              🧬
+              <Dna size={20} />
             </div>
             <span className="text-lg font-bold hidden sm:inline"
               style={{ color: 'var(--color-primary)' }}>
@@ -63,7 +64,7 @@ function App() {
                 }}
               >
                 <span className="hidden md:inline">{link.label}</span>
-                <span className="md:hidden">{link.icon}</span>
+                <span className="md:hidden"><link.icon size={18} /></span>
               </Link>
             ))}
             {/* 返回 momowan 链接 */}

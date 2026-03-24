@@ -1,3 +1,4 @@
+import { TrendingUp, BarChart3 as BarChartIcon, Brain, Crosshair, Tags, Library } from 'lucide-react'
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts'
 import { Card, CardContent, Typography, Grid, Box, Chip, Accordion, AccordionSummary, AccordionDetails, Paper } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
@@ -302,7 +303,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         <Card elevation={2} className="mb-6">
           <CardContent>
             <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-              📈 难度曲线（题目顺序）
+              <TrendingUp size={18} className="inline mr-1" /> 难度曲线（题目顺序）
             </Typography>
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={difficulty_curve}>
@@ -345,7 +346,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
             <Card elevation={2} style={{ height: '100%' }}>
               <CardContent>
                 <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-                  📊 难度分值分布（细粒度）
+                  <BarChartIcon size={18} className="inline mr-1" /> 难度分值分布（细粒度）
                 </Typography>
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={difficultyScoreData}>
@@ -399,7 +400,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
             <Card elevation={2} style={{ height: '100%' }}>
               <CardContent>
                 <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-                  🧠 认知层级分布（布鲁姆分类法）
+                  <Brain size={18} className="inline mr-1" /> 认知层级分布（布鲁姆分类法）
                 </Typography>
                 <ResponsiveContainer width="100%" height={250}>
                   <PieChart>
@@ -437,7 +438,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
           <CardContent>
             <style>{bubbleAnimationStyle}</style>
             <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-              🎯 难度因素分布（气泡大小 = 出现频次）
+              <Crosshair size={18} className="inline mr-1" /> 难度因素分布（气泡大小 = 出现频次）
             </Typography>
             <ResponsiveContainer width="100%" height={350} className="bubble-container">
               <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
@@ -500,7 +501,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         <Card elevation={2} className="mb-6">
           <CardContent>
             <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-              🏷️ 题目特征标签（Top 20）
+              <Tags size={18} className="inline mr-1" /> 题目特征标签（Top 20）
             </Typography>
             <ResponsiveContainer width="100%" height={350}>
               <BarChart data={tagsData} layout="vertical">
@@ -520,7 +521,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         <Card elevation={2} className="mb-6">
           <CardContent>
             <Typography variant="h6" className="mb-4 font-semibold text-gray-700">
-              📚 知识点教材分布（五本教材覆盖情况）
+              <Library size={18} className="inline mr-1" /> 知识点教材分布（五本教材覆盖情况）
             </Typography>
 
             {/* 总览饼图 */}

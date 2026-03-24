@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Crosshair, AlertTriangle } from 'lucide-react'
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 
 /**
@@ -50,7 +51,7 @@ function ScorePrediction({ prediction }) {
       {/* 标题 */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
-          <span className="text-2xl mr-2">🎯</span>
+          <Crosshair size={24} className="mr-2 text-[#2d5a3d]" />
           <h3 className="text-lg font-semibold text-gray-800">预估分数</h3>
           <span className="ml-2 px-2 py-0.5 bg-[#ede9fe] text-[#2d5a3d] text-xs rounded-full">Beta</span>
         </div>
@@ -109,7 +110,7 @@ function ScorePrediction({ prediction }) {
       {warnings && warnings.length > 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
           <div className="flex items-start">
-            <span className="text-yellow-500 mr-2">⚠️</span>
+            <AlertTriangle size={16} className="text-yellow-500 mr-2 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-yellow-700">
               <div className="font-medium mb-1">数据覆盖提示</div>
               <ul className="list-disc list-inside">
