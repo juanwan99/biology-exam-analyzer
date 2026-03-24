@@ -673,11 +673,14 @@ async def analyze_auto(
             try:
                 prediction_service = PredictionService(db)
 
-                # 计算试卷总分
+                # 计算试卷总分（无分值时默认100分）
                 total_score = sum(
                     q.get('analysis', {}).get('total_score', q.get('total_score', 0))
                     for q in questions
                 )
+                if total_score <= 0:
+                    total_score = 100
+                    logger.info(f"[自动分析] 题目无分值信息，使用默认总分 {total_score}")
 
                 # 推断年级（默认高三，后续可以从文件名或内容推断）
                 grade = "高三"

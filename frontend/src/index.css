@@ -114,9 +114,9 @@ body {
   .badge-danger  { background: var(--macaron-coral); color: #991b1b; }
   .badge-info    { background: var(--macaron-blue); color: #075985; }
   .badge-purple  { background: var(--macaron-purple); color: #5b21b6; }
-  .page-title { @apply text-3xl font-extrabold tracking-tight; color: var(--color-primary); }
-  .section-title { @apply text-xl font-bold flex items-center gap-3; color: var(--color-primary); }
-  .section-title::before { content: ""; @apply w-1 h-7; border-radius: 50px; background: var(--color-primary-light); }
+  .page-title { @apply text-3xl font-extrabold tracking-tight; color: var(--color-primary); letter-spacing: -0.01em; }
+  .section-title { @apply text-xl font-bold flex items-center gap-3; color: var(--color-primary); letter-spacing: -0.01em; }
+  .section-title::before { content: ""; @apply w-1; height: 28px; border-radius: 50px; background: linear-gradient(180deg, var(--color-primary-light), var(--color-primary)); flex-shrink: 0; }
 }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
@@ -133,9 +133,9 @@ body {
 .animate-float { animation: float 3s ease-in-out infinite; }
 .skeleton { background: linear-gradient(90deg, #f0f4f1 25%, #e2e8e4 50%, #f0f4f1 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: 10px; }
 
-.upload-zone { @apply relative p-10; border-radius: 24px; border: 2px dashed var(--color-border); background: var(--color-bg); transition: var(--transition); cursor: pointer; }
-.upload-zone:hover { border-color: var(--color-primary-light); background: var(--macaron-mint-light); transform: scale(1.01); }
-.upload-zone.drag-over { border-color: var(--color-primary); background: var(--macaron-mint); transform: scale(1.02); }
+.upload-zone { @apply relative; padding: 48px 32px; border-radius: 24px; border: 2px dashed var(--color-border); background: var(--color-bg-alt); transition: var(--transition); cursor: pointer; }
+.upload-zone:hover { border-color: var(--color-primary-light); background: var(--macaron-mint-light); transform: scale(1.01); box-shadow: 0 8px 24px rgba(200, 240, 212, 0.3); }
+.upload-zone.drag-over { border-color: var(--color-primary); background: var(--macaron-mint); transform: scale(1.02); box-shadow: 0 12px 32px rgba(200, 240, 212, 0.5); }
 
 .loader { width: 48px; height: 48px; border: 4px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
 .dots-loader { display: flex; gap: 8px; }
@@ -144,9 +144,9 @@ body {
 .dots-loader span:nth-child(2) { animation-delay: 0.2s; }
 .dots-loader span:nth-child(3) { animation-delay: 0.4s; }
 
-.stat-card { @apply bg-white relative overflow-hidden p-6; border-radius: 24px; border: 1px solid var(--color-border-light); box-shadow: var(--shadow-sm); transition: var(--transition); }
+.stat-card { @apply bg-white relative overflow-hidden; padding: 28px 24px; border-radius: 24px; border: 1px solid var(--color-border-light); box-shadow: var(--shadow-sm); transition: var(--transition); }
 .stat-card::before { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; border-radius: 0 4px 4px 0; }
-.stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+.stat-card:hover { transform: translateY(-6px); box-shadow: var(--shadow-lg); border-color: var(--color-border); }
 .stat-card-blue::before   { background: var(--macaron-blue); }
 .stat-card-green::before  { background: var(--macaron-mint); }
 .stat-card-purple::before { background: var(--macaron-purple); }

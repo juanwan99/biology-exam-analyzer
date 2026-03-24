@@ -80,12 +80,22 @@ function App() {
         </ErrorBoundary>
       </main>
 
-      {/* 页脚 */}
-      <footer className="py-8 mt-auto" style={{ borderTop: '1px solid var(--color-border-light)' }}>
-        <div className="max-w-[1200px] mx-auto px-6 text-center text-sm"
-          style={{ color: 'var(--color-muted)' }}>
-          <p>第三届湖南省基础教育教学改革研究项目</p>
-          <p className="mt-1">基于DeepSeek 指向素养培育的高中生物试题审题模型的构建（25JGYB0860）</p>
+      {/* 页脚 — 带渐变分隔 */}
+      <footer className="mt-auto" style={{ paddingTop: '0' }}>
+        <div
+          style={{
+            height: '1px',
+            background: 'linear-gradient(90deg, transparent 0%, var(--color-border) 50%, transparent 100%)',
+          }}
+        />
+        <div
+          className="max-w-[1200px] mx-auto px-6 text-center text-sm"
+          style={{ color: 'var(--color-muted)', padding: '48px 24px' }}
+        >
+          <p style={{ fontWeight: 500 }}>第三届湖南省基础教育教学改革研究项目</p>
+          <p style={{ marginTop: '8px', lineHeight: 1.6 }}>
+            基于DeepSeek 指向素养培育的高中生物试题审题模型的构建（25JGYB0860）
+          </p>
         </div>
       </footer>
     </div>

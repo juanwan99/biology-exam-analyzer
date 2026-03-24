@@ -287,8 +287,16 @@ function ResultDisplay({ data }) {
   if (!data || !data.questions) return null
 
   return (
-    <div className="mt-12 max-w-7xl mx-auto">
-      <div className="bg-white p-8" style={{ borderRadius: '24px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-lg)' }}>
+    <div className="max-w-[1200px] mx-auto">
+      <div
+        className="bg-white"
+        style={{
+          borderRadius: '24px',
+          border: '1px solid var(--color-border-light)',
+          boxShadow: 'var(--shadow-lg)',
+          padding: 'clamp(24px, 4vw, 48px)',
+        }}
+      >
         {/* 整卷分析 */}
         {data.exam_statistics && (
           <ExamStatisticsEnhanced
@@ -299,64 +307,74 @@ function ResultDisplay({ data }) {
         )}
 
         {/* 统计信息 */}
-        <div className="mb-8 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="stat-card stat-card-blue">
-            <div className="text-sm text-[#5a6b5e] mb-1">题目总数</div>
-            <div className="text-3xl font-bold text-[#1a2e1f]">{data.total_count || 0}</div>
-          </div>
-          <div className="stat-card stat-card-green">
-            <div className="text-sm text-[#5a6b5e] mb-1">处理耗时</div>
-            <div className="text-3xl font-bold text-[#2d5a3d]">
-              {(data.processing_time || 0).toFixed(1)}s
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6" style={{ marginBottom: '48px' }}>
+          <div className="stat-card stat-card-blue" style={{ padding: '28px 24px' }}>
+            <div className="text-sm mb-2" style={{ color: 'var(--color-muted)' }}>题目总数</div>
+            <div className="font-extrabold" style={{ fontSize: '2.25rem', color: 'var(--color-primary)', lineHeight: 1.1 }}>
+              {data.total_count || 0}
             </div>
           </div>
-          <div className="stat-card stat-card-purple">
-            <div className="text-sm text-[#5a6b5e] mb-1">评估模式</div>
-            <div className="text-2xl font-bold text-[#2d5a3d]">
+          <div className="stat-card stat-card-green" style={{ padding: '28px 24px' }}>
+            <div className="text-sm mb-2" style={{ color: 'var(--color-muted)' }}>处理耗时</div>
+            <div className="font-extrabold" style={{ fontSize: '2.25rem', color: 'var(--color-primary-light)', lineHeight: 1.1 }}>
+              {(data.processing_time || 0).toFixed(1)}<span className="text-lg font-semibold ml-0.5">s</span>
+            </div>
+          </div>
+          <div className="stat-card stat-card-purple" style={{ padding: '28px 24px' }}>
+            <div className="text-sm mb-2" style={{ color: 'var(--color-muted)' }}>评估模式</div>
+            <div className="font-extrabold" style={{ fontSize: '1.75rem', color: 'var(--color-primary-light)', lineHeight: 1.1 }}>
               {data.mode === 'fast' ? '快速' : '深度'}
             </div>
           </div>
-          <div className="stat-card stat-card-pink">
-            <div className="text-sm text-[#5a6b5e] mb-1">平均耗时</div>
-            <div className="text-3xl font-bold text-[#1a2e1f]">
-              {data.total_count ? (data.processing_time / data.total_count).toFixed(1) : 0}s
+          <div className="stat-card stat-card-pink" style={{ padding: '28px 24px' }}>
+            <div className="text-sm mb-2" style={{ color: 'var(--color-muted)' }}>平均耗时</div>
+            <div className="font-extrabold" style={{ fontSize: '2.25rem', color: 'var(--color-primary)', lineHeight: 1.1 }}>
+              {data.total_count ? (data.processing_time / data.total_count).toFixed(1) : 0}<span className="text-lg font-semibold ml-0.5">s</span>
             </div>
           </div>
         </div>
 
-        {/* 报告下载 */}
+        {/* 报告下载 — 突出 CTA */}
         {data.report_url && (
-          <div className="mb-8 p-6 bg-gradient-to-r from-[#e8f8ee] to-[#c8f0d4] border border-[#b8d1bf] rounded-xl">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <h3 className="text-lg font-semibold text-[#1a2e1f] mb-1">
-                  质量评估报告已生成
-                </h3>
-                <p className="text-sm text-[#5a6b5e]">
-                  包含难度曲线、素养分布等可视化图表
-                </p>
-              </div>
-              <a
-                href={data.report_url}
-                download
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-primary flex items-center gap-2"
-              >
-                下载PDF报告
-              </a>
-            </div>
+          <div
+            style={{
+              marginBottom: '48px',
+              padding: '32px 36px',
+              background: 'linear-gradient(135deg, var(--macaron-mint-light), var(--macaron-mint))',
+              border: '1px solid #b8d1bf',
+              borderRadius: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <h3 className="font-bold" style={{ color: 'var(--color-primary)', fontSize: '1.25rem', marginBottom: '8px' }}>
+              质量评估报告已生成
+            </h3>
+            <p className="text-sm" style={{ color: 'var(--color-secondary)', marginBottom: '24px' }}>
+              包含难度曲线、素养分布等可视化图表
+            </p>
+            <a
+              href={data.report_url}
+              download
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary"
+              style={{ padding: '14px 48px', fontSize: '16px' }}
+            >
+              下载PDF报告
+            </a>
           </div>
         )}
 
         {/* 题目列表 */}
         <div>
-          <h2 className="section-title mb-4">
+          <h2 className="section-title" style={{ marginBottom: '12px' }}>
             题目详细分析（共 {data.questions.length} 题）
           </h2>
-          <p className="text-sm text-[#8a9a8e] mb-4">点击题目查看详细分析</p>
+          <p className="text-sm" style={{ color: 'var(--color-muted)', marginBottom: '24px' }}>
+            点击题目查看详细分析
+          </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.questions.map((question, index) => {
               const hasError = question.analysis?.error
 
@@ -364,30 +382,78 @@ function ResultDisplay({ data }) {
                 <button
                   key={question.id || index}
                   onClick={() => setSelectedQuestion({ ...question, index })}
-                  className="text-left p-5 bg-white border border-[#f0f4f1] hover:border-[#2d5a3d] hover:-translate-y-1.5 transition-all"
-                  style={{ borderRadius: '24px', boxShadow: 'var(--shadow-sm)', transition: 'var(--transition)' }}
-                  onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-lg)' }}
-                  onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)' }}
+                  className="text-left bg-white"
+                  style={{
+                    padding: '24px',
+                    borderRadius: '24px',
+                    border: '1px solid var(--color-border-light)',
+                    boxShadow: 'var(--shadow-sm)',
+                    transition: 'var(--transition)',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.boxShadow = 'var(--shadow-lg)'
+                    e.currentTarget.style.transform = 'translateY(-4px)'
+                    e.currentTarget.style.borderColor = 'var(--color-primary-light)'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
+                    e.currentTarget.style.transform = 'translateY(0)'
+                    e.currentTarget.style.borderColor = 'var(--color-border-light)'
+                  }}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-lg font-bold text-[#1a2e1f]">
+                  <div className="flex items-center justify-between" style={{ marginBottom: '12px' }}>
+                    <span className="font-bold" style={{ fontSize: '1.1rem', color: 'var(--color-primary)' }}>
                       题目 {question.id || index + 1}
                     </span>
-                    <span className="text-[#8a9a8e]">→</span>
+                    <span
+                      className="inline-flex items-center justify-center"
+                      style={{
+                        width: '28px',
+                        height: '28px',
+                        borderRadius: '50%',
+                        background: 'var(--macaron-mint-light)',
+                        color: 'var(--color-primary-light)',
+                        fontSize: '14px',
+                      }}
+                    >
+                      &rarr;
+                    </span>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 mb-3">
+                  <div className="flex flex-wrap gap-2" style={{ marginBottom: '14px' }}>
                     {hasError ? (
-                      <span className="px-2 py-1 bg-[#fde8e8] text-[#991b1b] rounded text-xs">分析失败</span>
+                      <span
+                        className="text-xs font-semibold"
+                        style={{
+                          padding: '4px 12px',
+                          borderRadius: '50px',
+                          background: 'var(--macaron-coral)',
+                          color: '#991b1b',
+                        }}
+                      >
+                        分析失败
+                      </span>
                     ) : (
                       <>
                         {question.difficulty?.final_difficulty && (
-                          <span className={`px-2 py-1 rounded text-xs ${getDifficultyColor(question.difficulty.final_difficulty)}`}>
+                          <span
+                            className={`text-xs font-semibold ${getDifficultyColor(question.difficulty.final_difficulty)}`}
+                            style={{ padding: '4px 12px', borderRadius: '50px' }}
+                          >
                             难度 {question.difficulty.final_difficulty.toFixed(1)}
                           </span>
                         )}
                         {question.competency?.primary_competency && (
-                          <span className="px-2 py-1 bg-[#c8f0d4] text-[#0f1c13] rounded text-xs">
+                          <span
+                            className="text-xs font-semibold"
+                            style={{
+                              padding: '4px 12px',
+                              borderRadius: '50px',
+                              background: 'var(--macaron-mint)',
+                              color: 'var(--color-primary-dark)',
+                            }}
+                          >
                             {question.competency.primary_competency}
                           </span>
                         )}
@@ -395,7 +461,16 @@ function ResultDisplay({ data }) {
                     )}
                   </div>
 
-                  <p className="text-sm text-[#5a6b5e] overflow-hidden" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  <p
+                    className="text-sm overflow-hidden"
+                    style={{
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      color: 'var(--color-secondary)',
+                      lineHeight: 1.6,
+                    }}
+                  >
                     {question.content?.substring(0, 100) || '暂无内容'}
                   </p>
                 </button>

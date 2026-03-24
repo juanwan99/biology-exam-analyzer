@@ -308,43 +308,65 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
     .slice(0, 20)
 
   return (
-    <div className="mb-12">
-      <h2 className="section-title mb-6">
+    <div style={{ marginBottom: '56px' }}>
+      <h2 className="section-title" style={{ marginBottom: '32px' }}>
         整卷质量分析（增强版）
       </h2>
 
       {/* 分数预估（如果有数据） */}
       {scorePrediction && (
-        <div className="mb-6">
+        <div style={{ marginBottom: '32px' }}>
           <ScorePrediction prediction={scorePrediction} />
         </div>
       )}
 
-      {/* 关键指标卡片 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <div className="card">
-          <div className="p-6">
-            <p className="text-sm text-[#5a6b5e] mb-1">
+      {/* 关键指标卡片 — 突出大数字 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6" style={{ marginBottom: '48px' }}>
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'linear-gradient(135deg, #ffffff 0%, var(--macaron-mint-light) 100%)',
+            transition: 'var(--transition)',
+            overflow: 'hidden',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = 'var(--shadow-lg)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)' }}
+        >
+          <div style={{ padding: '32px' }}>
+            <p className="text-sm font-medium" style={{ color: 'var(--color-muted)', marginBottom: '8px' }}>
               平均难度系数
             </p>
-            <div className="text-4xl font-bold text-[#1a2e1f]">
+            <div className="font-extrabold" style={{ fontSize: '3rem', color: 'var(--color-primary)', lineHeight: 1.1 }}>
               {avg_difficulty !== undefined ? avg_difficulty.toFixed(2) : 'N/A'}
             </div>
-            <p className="text-sm text-[#8a9a8e] mt-2">
+            <p className="text-sm" style={{ color: 'var(--color-muted)', marginTop: '12px' }}>
               满分10分制 {avg_difficulty <= 3.5 ? '偏简单' : avg_difficulty <= 6.5 ? '适中' : '偏困难'}
             </p>
           </div>
         </div>
 
-        <div className="card">
-          <div className="p-6">
-            <p className="text-sm text-[#5a6b5e] mb-1">
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'linear-gradient(135deg, #ffffff 0%, var(--macaron-blue-light) 100%)',
+            transition: 'var(--transition)',
+            overflow: 'hidden',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = 'var(--shadow-lg)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)' }}
+        >
+          <div style={{ padding: '32px' }}>
+            <p className="text-sm font-medium" style={{ color: 'var(--color-muted)', marginBottom: '8px' }}>
               平均认知层级
             </p>
-            <div className="text-4xl font-bold text-[#2d5a3d]">
+            <div className="font-extrabold" style={{ fontSize: '3rem', color: 'var(--color-primary-light)', lineHeight: 1.1 }}>
               {avg_cognitive_level !== undefined ? avg_cognitive_level.toFixed(2) : 'N/A'}
             </div>
-            <p className="text-sm text-[#8a9a8e] mt-2">
+            <p className="text-sm" style={{ color: 'var(--color-muted)', marginTop: '12px' }}>
               满分10分制 布鲁姆认知层级评估
             </p>
           </div>
@@ -353,12 +375,22 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
 
       {/* 难度曲线图 */}
       {difficulty_curve && difficulty_curve.length > 0 && (
-        <div className="card mb-6">
-          <div className="p-6">
-            <h3 className="section-title mb-4 text-lg">
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'var(--color-bg)',
+            marginBottom: '32px',
+            transition: 'var(--transition)',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '32px' }}>
+            <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
               <TrendingUp size={18} className="inline mr-1" /> 难度曲线（题目顺序）
             </h3>
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={320}>
               <LineChart data={difficulty_curve}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
                 <XAxis
@@ -372,19 +404,21 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                 <Tooltip
                   formatter={(value) => [value.toFixed(2), '难度系数']}
                   labelFormatter={(label) => `题目 ${label}`}
+                  contentStyle={{ borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}
                 />
                 <Legend />
                 <Line
                   type="monotone"
                   dataKey="difficulty"
                   stroke="#2d5a3d"
-                  strokeWidth={2}
+                  strokeWidth={2.5}
                   name="难度系数"
-                  dot={{ fill: '#2d5a3d', r: 4 }}
+                  dot={{ fill: '#2d5a3d', r: 5, strokeWidth: 2, stroke: '#fff' }}
+                  activeDot={{ r: 7, stroke: '#2d5a3d', strokeWidth: 2, fill: '#c8f0d4' }}
                 />
               </LineChart>
             </ResponsiveContainer>
-            <p className="text-sm text-[#8a9a8e] mt-3 text-center">
+            <p className="text-sm text-center" style={{ color: 'var(--color-muted)', marginTop: '16px' }}>
               建议：试卷难度应呈阶梯式上升，避免大幅波动
             </p>
           </div>
@@ -392,15 +426,24 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
       )}
 
       {/* 双列布局：难度分布（分值） + 认知层级分布 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6" style={{ marginBottom: '32px' }}>
         {/* 难度分值分布柱状图 */}
         {hasScoreData && (
-          <div className="card" style={{ height: '100%' }}>
-            <div className="p-6">
-              <h3 className="section-title mb-4 text-lg">
+          <div
+            style={{
+              height: '100%',
+              borderRadius: '24px',
+              border: '1px solid var(--color-border-light)',
+              boxShadow: 'var(--shadow-sm)',
+              background: 'var(--color-bg)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '32px' }}>
+              <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
                 <BarChartIcon size={18} className="inline mr-1" /> 难度分值分布（细粒度）
               </h3>
-              <ResponsiveContainer width="100%" height={250}>
+              <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={difficultyScoreData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
                   <XAxis dataKey="name" />
@@ -410,32 +453,32 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                       if (active && payload && payload.length) {
                         const data = payload[0].payload
                         return (
-                          <div className="bg-white p-3 rounded-xl border border-[#e2e8e4]" style={{ boxShadow: 'var(--shadow-md)' }}>
+                          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}>
                             <p className="font-semibold" style={{ color: data.fill }}>
                               {data.name}
                             </p>
-                            <p className="text-sm text-[#1a2e1f]">分值: {data.score.toFixed(1)}分</p>
-                            <p className="text-sm text-[#1a2e1f]">占比: {data.percentage}%</p>
+                            <p className="text-sm" style={{ color: 'var(--color-primary)' }}>分值: {data.score.toFixed(1)}分</p>
+                            <p className="text-sm" style={{ color: 'var(--color-primary)' }}>占比: {data.percentage}%</p>
                           </div>
                         )
                       }
                       return null
                     }}
                   />
-                  <Bar dataKey="score" name="总分值" radius={[6, 6, 0, 0]}>
+                  <Bar dataKey="score" name="总分值" radius={[8, 8, 0, 0]}>
                     {difficultyScoreData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.fill} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              <div className="mt-4 p-3 bg-[#e8f8ee] rounded-xl">
-                <p className="text-sm text-[#5a6b5e]">
+              <div style={{ marginTop: '20px', padding: '14px 16px', background: 'var(--macaron-mint-light)', borderRadius: '14px' }}>
+                <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
                   <strong>理想比例：</strong>简单 30% 中等 50% 困难 20%
                 </p>
-                <div className="mt-2 flex flex-wrap gap-4">
+                <div className="flex flex-wrap gap-4" style={{ marginTop: '8px' }}>
                   {difficultyScoreData.map(item => (
-                    <span key={item.name} className="text-sm text-[#5a6b5e]">
+                    <span key={item.name} className="text-sm" style={{ color: 'var(--color-secondary)' }}>
                       {item.name}: {item.score.toFixed(1)}分 ({item.percentage}%)
                     </span>
                   ))}
@@ -447,12 +490,21 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
 
         {/* 认知层级饼图 */}
         {cognitivePieData.length > 0 && (
-          <div className="card" style={{ height: '100%' }}>
-            <div className="p-6">
-              <h3 className="section-title mb-4 text-lg">
+          <div
+            style={{
+              height: '100%',
+              borderRadius: '24px',
+              border: '1px solid var(--color-border-light)',
+              boxShadow: 'var(--shadow-sm)',
+              background: 'var(--color-bg)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '32px' }}>
+              <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
                 <Brain size={18} className="inline mr-1" /> 认知层级分布（布鲁姆分类法）
               </h3>
-              <ResponsiveContainer width="100%" height={250}>
+              <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie
                     data={cognitivePieData}
@@ -460,7 +512,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     cy="50%"
                     labelLine={true}
                     label={(entry) => `${entry.name} ${entry.value}%`}
-                    outerRadius={80}
+                    outerRadius={85}
                     fill="#2d5a3d"
                     dataKey="value"
                   >
@@ -468,12 +520,14 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                       <Cell key={`cell-${index}`} fill={COGNITIVE_COLORS[index % COGNITIVE_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
-              <div className="mt-4 p-3 bg-[#e8f8ee] rounded-xl">
-                <p className="text-sm text-[#5a6b5e]">
-                  <strong>专业提示：</strong>高阶思维（分析/综合/评价）占比建议 >= 50%
+              <div style={{ marginTop: '20px', padding: '14px 16px', background: 'var(--macaron-mint-light)', borderRadius: '14px' }}>
+                <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                  <strong>专业提示：</strong>高阶思维（分析/综合/评价）占比建议 &ge; 50%
                 </p>
               </div>
             </div>
@@ -483,13 +537,22 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
 
       {/* 难度因素气泡图 */}
       {factorsData.length > 0 && (
-        <div className="card mb-6">
-          <div className="p-6">
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'var(--color-bg)',
+            marginBottom: '32px',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '32px' }}>
             <style>{bubbleAnimationStyle}</style>
-            <h3 className="section-title mb-4 text-lg">
+            <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
               <Crosshair size={18} className="inline mr-1" /> 难度因素分布（气泡大小 = 出现频次）
             </h3>
-            <ResponsiveContainer width="100%" height={350} className="bubble-container">
+            <ResponsiveContainer width="100%" height={360} className="bubble-container">
               <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
                 <XAxis
@@ -511,11 +574,11 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     if (active && payload && payload.length) {
                       const data = payload[0].payload
                       return (
-                        <div className="bg-white p-3 rounded-xl border border-[#e2e8e4]" style={{ boxShadow: 'var(--shadow-md)' }}>
-                          <p className="font-semibold text-[#1a2e1f]">{data.factor}</p>
-                          <p className="text-sm text-[#5a6b5e]">出现次数: {data.count}</p>
-                          <p className="text-sm text-[#5a6b5e]">平均影响: {data.avgImpact.toFixed(1)}/3</p>
-                          <p className="text-sm text-[#5a6b5e]">类别: {data.category}</p>
+                        <div style={{ background: '#fff', padding: '14px 18px', borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}>
+                          <p className="font-semibold" style={{ color: 'var(--color-primary)', marginBottom: '4px' }}>{data.factor}</p>
+                          <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>出现次数: {data.count}</p>
+                          <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>平均影响: {data.avgImpact.toFixed(1)}/3</p>
+                          <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>类别: {data.category}</p>
                         </div>
                       )
                     }
@@ -535,11 +598,11 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                 </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="badge" style={{ backgroundColor: '#2d5a3d', color: 'white', borderRadius: '50px' }}>推理复杂</span>
-              <span className="badge" style={{ backgroundColor: '#10b981', color: 'white', borderRadius: '50px' }}>知识跨度</span>
-              <span className="badge" style={{ backgroundColor: '#5a9a6d', color: 'white', borderRadius: '50px' }}>信息隐藏</span>
-              <span className="badge" style={{ backgroundColor: '#f59e0b', color: 'white', borderRadius: '50px' }}>陌生情境</span>
+            <div className="flex flex-wrap gap-3" style={{ marginTop: '20px' }}>
+              <span className="badge" style={{ backgroundColor: '#2d5a3d', color: 'white', borderRadius: '50px', padding: '6px 16px' }}>推理复杂</span>
+              <span className="badge" style={{ backgroundColor: '#10b981', color: 'white', borderRadius: '50px', padding: '6px 16px' }}>知识跨度</span>
+              <span className="badge" style={{ backgroundColor: '#5a9a6d', color: 'white', borderRadius: '50px', padding: '6px 16px' }}>信息隐藏</span>
+              <span className="badge" style={{ backgroundColor: '#f59e0b', color: 'white', borderRadius: '50px', padding: '6px 16px' }}>陌生情境</span>
             </div>
           </div>
         </div>
@@ -547,34 +610,56 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
 
       {/* 题目标签云（使用条形图模拟） */}
       {tagsData.length > 0 && (
-        <div className="card mb-6">
-          <div className="p-6">
-            <h3 className="section-title mb-4 text-lg">
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'var(--macaron-purple-light)',
+            marginBottom: '32px',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '32px' }}>
+            <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
               <Tags size={18} className="inline mr-1" /> 题目特征标签（Top 20）
             </h3>
-            <ResponsiveContainer width="100%" height={350}>
-              <BarChart data={tagsData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
-                <XAxis type="number" label={{ value: '出现次数', position: 'insideBottom', offset: -5 }} />
-                <YAxis type="category" dataKey="name" width={120} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#2d5a3d" name="出现次数" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div style={{ background: '#fff', borderRadius: '16px', padding: '20px' }}>
+              <ResponsiveContainer width="100%" height={360}>
+                <BarChart data={tagsData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
+                  <XAxis type="number" label={{ value: '出现次数', position: 'insideBottom', offset: -5 }} />
+                  <YAxis type="category" dataKey="name" width={120} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}
+                  />
+                  <Bar dataKey="count" fill="#2d5a3d" name="出现次数" radius={[0, 8, 8, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       )}
 
       {/* 知识点教材分布 */}
       {textbookDistData.length > 0 && (
-        <div className="card mb-6">
-          <div className="p-6">
-            <h3 className="section-title mb-4 text-lg">
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'var(--color-bg)',
+            marginBottom: '32px',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '32px' }}>
+            <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
               <Library size={18} className="inline mr-1" /> 知识点教材分布（五本教材覆盖情况）
             </h3>
 
             {/* 总览饼图 */}
-            <ResponsiveContainer width="100%" height={280}>
+            <ResponsiveContainer width="100%" height={300}>
               <PieChart>
                 <Pie
                   data={textbookDistData}
@@ -582,7 +667,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  outerRadius={90}
+                  outerRadius={95}
                   label={({ name, percentage }) => `${name} ${percentage}%`}
                   labelLine
                 >
@@ -595,12 +680,12 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     if (active && payload && payload.length) {
                       const data = payload[0].payload
                       return (
-                        <div className="bg-white p-3 rounded-xl border border-[#e2e8e4]" style={{ boxShadow: 'var(--shadow-md)' }}>
+                        <div style={{ background: '#fff', padding: '14px 18px', borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}>
                           <p className="font-semibold" style={{ color: data.fill }}>
                             {data.name}
                           </p>
-                          <p className="text-sm text-[#1a2e1f]">知识点数: {data.count}</p>
-                          <p className="text-sm text-[#1a2e1f]">占比: {data.percentage}%</p>
+                          <p className="text-sm" style={{ color: 'var(--color-primary)' }}>知识点数: {data.count}</p>
+                          <p className="text-sm" style={{ color: 'var(--color-primary)' }}>占比: {data.percentage}%</p>
                         </div>
                       )
                     }
@@ -611,8 +696,8 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
             </ResponsiveContainer>
 
             {/* 各教材章节分布（折叠列表） */}
-            <div className="mt-6">
-              <p className="mb-3 text-[#5a6b5e] font-semibold text-sm">
+            <div style={{ marginTop: '32px' }}>
+              <p className="font-semibold text-sm" style={{ color: 'var(--color-secondary)', marginBottom: '16px' }}>
                 各教材章节分布详情（点击展开）
               </p>
               {Object.entries(knowledge_textbook_distribution || {}).map(([textbook, data]) => {
@@ -634,22 +719,27 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     percentage={data.percentage}
                   >
                     {chapters.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {chapters.map(ch => (
                           <div
                             key={ch.number}
-                            className="p-4 rounded-xl border border-[#f0f4f1] hover:border-[#c8f0d4] transition-all"
                             style={{
+                              padding: '18px 20px',
+                              borderRadius: '16px',
+                              border: '1px solid var(--color-border-light)',
                               backgroundColor: `${textbookColors[textbook]}08`,
-                              boxShadow: 'var(--shadow-sm)'
+                              boxShadow: 'var(--shadow-sm)',
+                              transition: 'var(--transition)',
                             }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--macaron-mint)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--color-border-light)'; e.currentTarget.style.transform = 'translateY(0)' }}
                           >
-                            <p className="font-medium text-[#1a2e1f] text-sm">
+                            <p className="font-medium text-sm" style={{ color: 'var(--color-primary)' }}>
                               {ch.number} {ch.name}
                             </p>
                             <p
-                              className="font-bold mt-1 text-lg"
-                              style={{ color: textbookColors[textbook] }}
+                              className="font-bold text-lg"
+                              style={{ color: textbookColors[textbook], marginTop: '6px' }}
                             >
                               {ch.count}个知识点
                             </p>
@@ -657,7 +747,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-[#8a9a8e]">
+                      <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
                         暂无章节数据
                       </p>
                     )}
@@ -666,8 +756,8 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
               })}
             </div>
 
-            <div className="mt-4 p-3 bg-[#e8f8ee] rounded-xl">
-              <p className="text-sm text-[#5a6b5e]">
+            <div style={{ marginTop: '24px', padding: '16px 20px', background: 'var(--macaron-mint-light)', borderRadius: '14px' }}>
+              <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
                 <strong>说明：</strong>知识点已自动映射到对应教材章节，帮助教师全面把握试卷在五本教材中的分布情况，
                 确保知识点覆盖的均衡性和全面性。
               </p>

@@ -74,26 +74,58 @@ function AnalyzerPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
-      {/* 页面标题 */}
-      <div className="text-center mb-12">
-        <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-[#2d5a3d] to-[#1a2e1f] shadow-xl mb-6 text-white">
-          <ScanSearch size={48} />
+    <div className="max-w-[1200px] mx-auto px-6">
+      {/* Hero 区域 — 大留白 */}
+      <div className="text-center" style={{ paddingTop: '80px', paddingBottom: '64px' }}>
+        <div
+          className="inline-flex items-center justify-center w-24 h-24 text-white animate-float"
+          style={{
+            borderRadius: '28px',
+            background: 'linear-gradient(135deg, #2d5a3d, #1a2e1f)',
+            boxShadow: '0 16px 40px rgba(26, 46, 31, 0.2)',
+            marginBottom: '32px',
+          }}
+        >
+          <ScanSearch size={52} />
         </div>
-        <h1 className="text-4xl font-bold mb-4" style={{ color: 'var(--color-primary)' }}>
+        <h1
+          className="font-extrabold tracking-tight"
+          style={{
+            fontSize: 'clamp(2.25rem, 5vw, 3.25rem)',
+            color: 'var(--color-primary)',
+            marginBottom: '16px',
+            lineHeight: 1.15,
+          }}
+        >
           智能试卷分析系统
         </h1>
-        <p className="text-lg max-w-2xl mx-auto" style={{ color: 'var(--color-secondary)' }}>
+        <p
+          className="max-w-xl mx-auto"
+          style={{
+            fontSize: '1.125rem',
+            lineHeight: 1.7,
+            color: 'var(--color-secondary)',
+          }}
+        >
           上传试卷（支持 DOCX 和 PDF 格式），AI 自动拆分并深度分析每道题目
         </p>
       </div>
 
       {/* 上传区域 */}
-      <div className="max-w-2xl mx-auto">
-        <div className="card p-8">
+      <div className="max-w-2xl mx-auto" style={{ paddingBottom: '80px' }}>
+        <div
+          className="bg-white"
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-lg)',
+            padding: '36px',
+          }}
+        >
           {/* 拖拽上传区域 */}
           <div
-            className={`upload-zone ${dragOver ? 'drag-over' : ''} mb-6`}
+            className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
+            style={{ marginBottom: '28px', padding: '48px 32px' }}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -107,15 +139,26 @@ function AnalyzerPage() {
               className="hidden"
             />
             <div className="text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#c8f0d4] mb-4">
-                <svg className="w-8 h-8 text-[#1a2e1f]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              {/* 装饰性插图圆 */}
+              <div
+                className="inline-flex items-center justify-center"
+                style={{
+                  width: '80px',
+                  height: '80px',
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, var(--macaron-mint-light), var(--macaron-mint))',
+                  marginBottom: '20px',
+                  boxShadow: '0 8px 24px rgba(200, 240, 212, 0.5)',
+                }}
+              >
+                <svg className="w-10 h-10 text-[#1a2e1f]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
               </div>
-              <p className="text-lg font-medium text-gray-700 mb-2">
+              <p className="text-lg font-semibold mb-2" style={{ color: 'var(--color-primary)' }}>
                 拖拽文件到这里，或点击选择文件
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
                 支持 DOCX、PDF 格式，最大 50MB
               </p>
             </div>
@@ -123,20 +166,41 @@ function AnalyzerPage() {
 
           {/* 已选文件信息 */}
           {file && (
-            <div className="mb-6 p-4 bg-gradient-to-r from-[#e8f8ee] to-[#e8f8ee] border border-[#b8d1bf] rounded-xl animate-fade-in">
+            <div
+              className="animate-fade-in"
+              style={{
+                marginBottom: '28px',
+                padding: '16px 20px',
+                background: 'linear-gradient(135deg, var(--macaron-mint-light), #f0faf3)',
+                border: '1px solid #b8d1bf',
+                borderRadius: '16px',
+              }}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
-                  <div className="w-10 h-10 rounded-lg bg-[#c8f0d4] flex items-center justify-center mr-3">
-                    {file.name.endsWith('.pdf') ? <FileText size={20} className="text-[#1a2e1f]" /> : <ClipboardEdit size={20} className="text-[#1a2e1f]" />}
+                  <div
+                    className="flex items-center justify-center"
+                    style={{
+                      width: '44px',
+                      height: '44px',
+                      borderRadius: '12px',
+                      background: 'var(--macaron-mint)',
+                      marginRight: '14px',
+                    }}
+                  >
+                    {file.name.endsWith('.pdf') ? <FileText size={22} className="text-[#1a2e1f]" /> : <ClipboardEdit size={22} className="text-[#1a2e1f]" />}
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900">{file.name}</p>
-                    <p className="text-sm text-gray-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                    <p className="font-semibold" style={{ color: 'var(--color-primary)' }}>{file.name}</p>
+                    <p className="text-sm" style={{ color: 'var(--color-muted)', marginTop: '2px' }}>{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                  className="text-gray-400 hover:text-red-500 transition-colors"
+                  className="transition-colors"
+                  style={{ color: 'var(--color-muted)', padding: '6px' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = '#dc3545' }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--color-muted)' }}
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -147,14 +211,19 @@ function AnalyzerPage() {
           )}
 
           {/* PDF报告生成选项 */}
-          <div className="mb-6">
-            <label className={`
-              flex items-center cursor-pointer p-4 border-2 rounded-xl transition-all
-              ${generateReport
-                ? 'border-[#2d5a3d] bg-[#e8f8ee]'
-                : 'border-gray-200 hover:border-[#b8d1bf] bg-white'
-              }
-            `}>
+          <div style={{ marginBottom: '28px' }}>
+            <label
+              className="flex items-center cursor-pointer transition-all"
+              style={{
+                padding: '18px 20px',
+                border: generateReport ? '2px solid var(--color-primary-light)' : '2px solid var(--color-border-light)',
+                borderRadius: '16px',
+                background: generateReport ? 'var(--macaron-mint-light)' : 'var(--color-bg)',
+                transition: 'var(--transition)',
+              }}
+              onMouseEnter={e => { if (!generateReport) { e.currentTarget.style.borderColor = '#b8d1bf' } }}
+              onMouseLeave={e => { if (!generateReport) { e.currentTarget.style.borderColor = 'var(--color-border-light)' } }}
+            >
               <input
                 type="checkbox"
                 checked={generateReport}
@@ -162,8 +231,10 @@ function AnalyzerPage() {
                 className="h-5 w-5 text-[#1a2e1f] focus:ring-[#c8f0d4] rounded"
               />
               <div className="ml-4">
-                <span className="font-medium text-gray-900 flex items-center"><FileText size={16} className="inline mr-1" /> 生成PDF质量评估报告</span>
-                <p className="text-sm text-gray-500 mt-1">
+                <span className="font-semibold flex items-center" style={{ color: 'var(--color-primary)' }}>
+                  <FileText size={16} className="inline mr-1.5" /> 生成PDF质量评估报告
+                </span>
+                <p className="text-sm mt-1" style={{ color: 'var(--color-muted)' }}>
                   包含难度曲线、素养分布等6张可视化图表（+10秒）
                 </p>
               </div>
@@ -174,7 +245,8 @@ function AnalyzerPage() {
           <button
             onClick={handleUpload}
             disabled={!file || loading}
-            className="w-full btn-primary py-4 text-lg"
+            className="w-full btn-primary"
+            style={{ padding: '18px 0', fontSize: '17px', letterSpacing: '0.5px' }}
           >
             {loading ? (
               <span className="flex items-center justify-center">
@@ -193,16 +265,27 @@ function AnalyzerPage() {
 
           {/* 加载状态 */}
           {loading && (
-            <div className="mt-8 text-center animate-fade-in">
-              <div className="inline-block">
-                <div className="flex items-center justify-center space-x-2 mb-4">
-                  <div className="w-3 h-3 bg-[#1a2e1f] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-3 h-3 bg-[#1a2e1f] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-3 h-3 bg-[#1a2e1f] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+            <div className="animate-fade-in" style={{ marginTop: '40px', textAlign: 'center' }}>
+              <div
+                className="inline-flex items-center justify-center"
+                style={{
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '50%',
+                  background: 'var(--macaron-mint-light)',
+                  marginBottom: '20px',
+                }}
+              >
+                <div className="flex items-center space-x-2">
+                  <div className="w-2.5 h-2.5 bg-[#1a2e1f] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                  <div className="w-2.5 h-2.5 bg-[#2d5a3d] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                  <div className="w-2.5 h-2.5 bg-[#5a9a6d] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                 </div>
               </div>
-              <p className="text-gray-600 font-medium">正在拆分并分析试卷...</p>
-              <p className="text-sm text-gray-500 mt-2">
+              <p className="font-semibold" style={{ color: 'var(--color-primary)', fontSize: '16px' }}>
+                正在拆分并分析试卷...
+              </p>
+              <p className="text-sm" style={{ color: 'var(--color-muted)', marginTop: '8px' }}>
                 {mode === 'deep' ? '深度模式预计需要 2-3 分钟' : '快速模式预计需要 1 分钟'}
               </p>
             </div>
@@ -210,43 +293,119 @@ function AnalyzerPage() {
 
           {/* 错误提示 */}
           {error && (
-            <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl animate-fade-in">
+            <div
+              className="animate-fade-in"
+              style={{
+                marginTop: '28px',
+                padding: '18px 20px',
+                background: 'var(--macaron-coral-light)',
+                border: '1px solid var(--macaron-coral)',
+                borderRadius: '16px',
+              }}
+            >
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <p className="ml-3 text-red-800">{error}</p>
+                <p className="ml-3 text-[#991b1b]">{error}</p>
               </div>
             </div>
           )}
         </div>
 
-        {/* 功能特点 */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="stat-card stat-card-blue">
-            <div className="text-3xl mb-3 text-[#1a2e1f]"><Crosshair size={32} /></div>
-            <h3 className="font-semibold text-gray-900 mb-2">智能拆分</h3>
-            <p className="text-sm text-gray-600">自动识别题目边界，精准拆分选择题和非选择题</p>
-          </div>
-          <div className="stat-card stat-card-green">
-            <div className="text-3xl mb-3 text-[#1a2e1f]"><TrendingUp size={32} /></div>
-            <h3 className="font-semibold text-gray-900 mb-2">难度评估</h3>
-            <p className="text-sm text-gray-600">多维度分析题目难度，生成难度曲线图</p>
-          </div>
-          <div className="stat-card stat-card-purple">
-            <div className="text-3xl mb-3 text-[#1a2e1f]"><Brain size={32} /></div>
-            <h3 className="font-semibold text-gray-900 mb-2">素养分析</h3>
-            <p className="text-sm text-gray-600">评估生命观念、科学思维等核心素养覆盖</p>
-          </div>
+        {/* 功能特点 — macaron 风格卡片 */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6" style={{ marginTop: '64px' }}>
+          {[
+            {
+              icon: <Crosshair size={28} />,
+              title: '智能拆分',
+              desc: '自动识别题目边界，精准拆分选择题和非选择题',
+              bg: 'var(--macaron-blue-light)',
+              accent: 'var(--macaron-blue)',
+              iconBg: '#e0f2fe',
+            },
+            {
+              icon: <TrendingUp size={28} />,
+              title: '难度评估',
+              desc: '多维度分析题目难度，生成难度曲线图',
+              bg: 'var(--macaron-mint-light)',
+              accent: 'var(--macaron-mint)',
+              iconBg: '#c8f0d4',
+            },
+            {
+              icon: <Brain size={28} />,
+              title: '素养分析',
+              desc: '评估生命观念、科学思维等核心素养覆盖',
+              bg: 'var(--macaron-purple-light)',
+              accent: 'var(--macaron-purple)',
+              iconBg: '#ede9fe',
+            },
+          ].map((feat) => (
+            <div
+              key={feat.title}
+              className="text-center"
+              style={{
+                padding: '36px 28px',
+                borderRadius: '24px',
+                background: feat.bg,
+                border: `1px solid ${feat.accent}`,
+                boxShadow: 'var(--shadow-sm)',
+                transition: 'var(--transition)',
+                cursor: 'default',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.transform = 'translateY(-6px)'
+                e.currentTarget.style.boxShadow = 'var(--shadow-lg)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.transform = 'translateY(0)'
+                e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
+              }}
+            >
+              <div
+                className="inline-flex items-center justify-center"
+                style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '16px',
+                  background: feat.iconBg,
+                  color: 'var(--color-primary)',
+                  marginBottom: '16px',
+                }}
+              >
+                {feat.icon}
+              </div>
+              <h3
+                className="font-bold"
+                style={{ color: 'var(--color-primary)', fontSize: '1.05rem', marginBottom: '8px' }}
+              >
+                {feat.title}
+              </h3>
+              <p style={{ color: 'var(--color-secondary)', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                {feat.desc}
+              </p>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* 结果展示 */}
+      {/* 结果展示 — 带分隔 */}
       {result && (
-        <div className="mt-12 animate-fade-in">
-          <ResultDisplay data={result} />
+        <div style={{ paddingTop: '16px', paddingBottom: '48px' }}>
+          <div
+            style={{
+              width: '80px',
+              height: '4px',
+              borderRadius: '50px',
+              background: 'var(--macaron-mint)',
+              margin: '0 auto 48px',
+            }}
+          />
+          <div className="animate-fade-in">
+            <ResultDisplay data={result} />
+          </div>
         </div>
       )}
     </div>

@@ -210,6 +210,13 @@ class PredictionService:
         warnings = []
         knowledge_points_coverage = {}
 
+        # 如果题目没有分值，按总分均分
+        has_scores = any(
+            float(q.get('total_score', q.get('analysis', {}).get('total_score', 0))) > 0
+            for q in questions
+        )
+        default_score = total_score / len(questions) if (not has_scores and len(questions) > 0) else 0
+
         for i, q in enumerate(questions):
             # 提取难度和知识点
             difficulty_data = q.get('difficulty', {})
@@ -217,7 +224,9 @@ class PredictionService:
             analysis = q.get('analysis', {})
             kps = analysis.get('knowledge_points', [])
             chapter = analysis.get('textbook_chapter')
-            q_score = float(q.get('total_score', 0))
+            q_score = float(q.get('total_score', analysis.get('total_score', 0)))
+            if q_score <= 0:
+                q_score = default_score
 
             # 预测得分率
             rate, ci_low, ci_high = await self.mapper.predict_rate(
