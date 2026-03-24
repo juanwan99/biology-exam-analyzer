@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import axios from 'axios'
-import { Dna, FileText, ClipboardEdit, TrendingUp, Crosshair, Brain } from 'lucide-react'
+import { ScanSearch, FileText, ClipboardEdit, TrendingUp, Crosshair, Brain } from 'lucide-react'
 import ResultDisplay from '../components/ResultDisplay'
 
 function AnalyzerPage() {
@@ -78,13 +78,13 @@ function AnalyzerPage() {
       {/* 页面标题 */}
       <div className="text-center mb-12">
         <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-[#2d5a3d] to-[#1a2e1f] shadow-xl mb-6 text-white">
-          <Dna size={48} />
+          <ScanSearch size={48} />
         </div>
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-[#1a2e1f] to-[#1a2e1f] bg-clip-text text-transparent mb-4">
-          生物试卷智能分析系统
+        <h1 className="text-4xl font-bold mb-4" style={{ color: 'var(--color-primary)' }}>
+          智能试卷分析系统
         </h1>
-        <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-          上传生物试卷（支持 DOCX 和 PDF 格式），AI 自动拆分并深度分析每道题目
+        <p className="text-lg max-w-2xl mx-auto" style={{ color: 'var(--color-secondary)' }}>
+          上传试卷（支持 DOCX 和 PDF 格式），AI 自动拆分并深度分析每道题目
         </p>
       </div>
 

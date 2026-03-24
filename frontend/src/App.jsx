@@ -1,25 +1,12 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
-import { Dna, BarChart3, ClipboardEdit, TrendingUp, Library, BookOpen, Settings } from 'lucide-react'
+import { ScanSearch } from 'lucide-react'
 import AnalyzerPage from './pages/AnalyzerPage'
 import AdminPage from './pages/AdminPage'
 import CorrectionPage from './pages/CorrectionPage'
-import TextbookPage from './pages/TextbookPage'
-import ExercisePage from './pages/ExercisePage'
-import QuizGeneratorPage from './pages/QuizGeneratorPage'
-import HistoryDataPage from './pages/HistoryDataPage'
 import ErrorBoundary from './components/ErrorBoundary'
 
 function App() {
   const location = useLocation()
-
-  const navLinks = [
-    { path: '/', label: '试卷分析', icon: BarChart3 },
-    { path: '/quiz', label: '测验生成', icon: ClipboardEdit },
-    { path: '/history', label: '历史数据', icon: TrendingUp },
-    { path: '/exercises', label: '题库', icon: Library },
-    { path: '/textbook', label: '教材资料', icon: BookOpen },
-    { path: '/admin', label: '管理后台', icon: Settings },
-  ]
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -35,41 +22,24 @@ function App() {
         <div className="max-w-[1200px] mx-auto px-6 h-full flex items-center justify-between">
           {/* 品牌 */}
           <Link to="/" className="flex items-center gap-2.5 no-underline">
-            <div className="w-9 h-9 rounded-[10px] flex items-center justify-center text-white text-lg"
+            <div className="w-9 h-9 rounded-[10px] flex items-center justify-center text-white"
               style={{ background: 'var(--color-primary)' }}>
-              <Dna size={20} />
+              <ScanSearch size={20} />
             </div>
             <span className="text-lg font-bold hidden sm:inline"
               style={{ color: 'var(--color-primary)' }}>
-              生物审题
+              智能审题
             </span>
           </Link>
 
-          {/* 导航链接 */}
-          <div className="flex items-center gap-5">
-            {navLinks.map((link) => (
-              <Link
-                key={link.path}
-                to={link.path}
-                className="no-underline text-[15px] font-medium py-1"
-                style={{
-                  color: location.pathname === link.path
-                    ? 'var(--color-primary)'
-                    : 'var(--color-secondary)',
-                  fontWeight: location.pathname === link.path ? 600 : 500,
-                  borderBottom: location.pathname === link.path
-                    ? '2px solid var(--color-primary)'
-                    : '2px solid transparent',
-                  transition: 'var(--transition)',
-                }}
-              >
-                <span className="hidden md:inline">{link.label}</span>
-                <span className="md:hidden"><link.icon size={18} /></span>
-              </Link>
-            ))}
-            {/* 返回 momowan 链接 */}
+          {/* 右侧 */}
+          <div className="flex items-center gap-4">
+            <span className="text-[14px] hidden md:inline"
+              style={{ color: 'var(--color-muted)' }}>
+              AI 试卷分析系统
+            </span>
             <a href="https://momowan.xyz"
-              className="no-underline text-[15px] font-medium ml-2 px-4 py-1.5 rounded-[50px]"
+              className="no-underline text-[15px] font-medium px-4 py-1.5 rounded-[50px]"
               style={{
                 color: 'var(--color-primary)',
                 border: '1.5px solid var(--color-border)',
@@ -93,10 +63,6 @@ function App() {
           <Routes>
             <Route path="/" element={<AnalyzerPage />} />
             <Route path="/correction" element={<CorrectionPage />} />
-            <Route path="/quiz" element={<QuizGeneratorPage />} />
-            <Route path="/history" element={<HistoryDataPage />} />
-            <Route path="/exercises" element={<ExercisePage />} />
-            <Route path="/textbook" element={<TextbookPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={
               <div className="min-h-[60vh] flex items-center justify-center">
