@@ -27,7 +27,7 @@ services:
     volumes:
       - ./backend:/app  # Python代码实时同步，修改后只需重启容器
       - ./logs:/app/logs
-      - ./prompts:/app/prompts
+      - ./backend/prompts:/app/prompts
       - ./uploads:/app/uploads
       - ./backend/rules:/app/rules
       - ./reports:/app/reports
