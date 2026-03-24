@@ -673,14 +673,19 @@ async def analyze_auto(
             try:
                 prediction_service = PredictionService(db)
 
-                # 计算试卷总分（无分值时默认100分）
-                total_score = sum(
+                # 计算试卷总分
+                # Gemini 可能只提取部分题目分值，导致总分不完整
+                # 策略：如果提取的总分 < 题目数*2（不合理），使用默认 100 分
+                raw_total = sum(
                     q.get('analysis', {}).get('total_score', q.get('total_score', 0))
                     for q in questions
                 )
-                if total_score <= 0:
+                min_reasonable = len(questions) * 2  # 每题至少 2 分
+                if raw_total < min_reasonable:
                     total_score = 100
-                    logger.info(f"[自动分析] 题目无分值信息，使用默认总分 {total_score}")
+                    logger.info(f"[自动分析] 提取总分 {raw_total} 不合理（< {min_reasonable}），使用默认 100 分")
+                else:
+                    total_score = raw_total
 
                 # 推断年级（默认高三，后续可以从文件名或内容推断）
                 grade = "高三"

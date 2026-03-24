@@ -92,14 +92,17 @@ function ScorePrediction({ prediction }) {
         <div className="bg-white rounded-xl p-4 border border-[#f0f4f1]">
           <div className="text-center">
             <div className={`text-xl font-semibold ${getReliabilityColor(reliability_score)}`}>
-              {((reliability_score || 0) * 100).toFixed(0)}%
+              {(reliability_score || 0) < 0.3 ? '冷启动' : `${((reliability_score || 0) * 100).toFixed(0)}%`}
             </div>
             <div className="text-sm text-[#5a6b5e] mt-1">预估可靠度</div>
+            {(reliability_score || 0) < 0.3 && (
+              <div className="text-xs text-[#8a9a8e] mt-1">暂无历史数据，基于经验值预估</div>
+            )}
             {/* 进度条 */}
             <div className="mt-2 h-2 bg-[#e2e8e4] rounded-full overflow-hidden">
               <div
                 className={`h-full ${getReliabilityBgColor(reliability_score)} transition-all duration-500`}
-                style={{ width: `${(reliability_score || 0) * 100}%` }}
+                style={{ width: `${Math.max((reliability_score || 0) * 100, 5)}%` }}
               />
             </div>
           </div>
