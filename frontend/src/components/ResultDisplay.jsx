@@ -21,7 +21,7 @@ function QuestionModal({ question, onClose }) {
         onClick={e => e.stopPropagation()}
       >
         {/* 弹窗头部 */}
-        <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-6 py-4 flex items-center justify-between z-10">
+        <div className="sticky top-0 bg-gradient-to-r from-[#2d5a3d] to-[#1a2e1f] text-white px-6 py-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xl font-bold">题目 {question.id || (question.index + 1)}</span>
             {question.difficulty?.final_difficulty && !hasError && (
@@ -72,14 +72,14 @@ function QuestionModal({ question, onClose }) {
           {question.difficulty && !question.difficulty.error && (
             <div className="mb-6">
               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                <span className="w-1 h-5 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></span>
+                <span className="w-1 h-5 bg-gradient-to-b from-[#2d5a3d] to-[#1a2e1f] rounded-full"></span>
                 难度评估
               </h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {question.difficulty.knowledge_complexity !== undefined && (
-                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
+                  <div className="bg-[#e8f8ee] p-3 rounded-lg border border-[#c8f0d4] text-center">
                     <div className="text-xs text-gray-500 mb-1">知识复杂度</div>
-                    <div className="text-2xl font-bold text-blue-600">
+                    <div className="text-2xl font-bold text-[#1a2e1f]">
                       {question.difficulty.knowledge_complexity.toFixed(1)}
                     </div>
                   </div>
@@ -93,9 +93,9 @@ function QuestionModal({ question, onClose }) {
                   </div>
                 )}
                 {question.difficulty.information_extraction !== undefined && (
-                  <div className="bg-purple-50 p-3 rounded-lg border border-purple-100 text-center">
+                  <div className="bg-[#f3f0ff] p-3 rounded-lg border border-[#e2e8e4] text-center">
                     <div className="text-xs text-gray-500 mb-1">信息提取</div>
-                    <div className="text-2xl font-bold text-purple-600">
+                    <div className="text-2xl font-bold text-[#2d5a3d]">
                       {question.difficulty.information_extraction.toFixed(1)}
                     </div>
                   </div>
@@ -146,17 +146,17 @@ function QuestionModal({ question, onClose }) {
                   </div>
                 )}
                 {question.competency['科学思维']?.涉及 && (
-                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
+                  <div className="bg-[#e8f8ee] p-3 rounded-lg border border-[#b8d1bf] text-center">
                     <div className="text-xs text-gray-500 mb-1">科学思维</div>
-                    <div className="text-2xl font-bold text-blue-600">
+                    <div className="text-2xl font-bold text-[#1a2e1f]">
                       {(question.competency['科学思维'].权重 * 100).toFixed(0)}%
                     </div>
                   </div>
                 )}
                 {question.competency['科学探究']?.涉及 && (
-                  <div className="bg-purple-50 p-3 rounded-lg border border-purple-200 text-center">
+                  <div className="bg-[#f3f0ff] p-3 rounded-lg border border-[#e2e8e4] text-center">
                     <div className="text-xs text-gray-500 mb-1">科学探究</div>
-                    <div className="text-2xl font-bold text-purple-600">
+                    <div className="text-2xl font-bold text-[#2d5a3d]">
                       {(question.competency['科学探究'].权重 * 100).toFixed(0)}%
                     </div>
                   </div>
@@ -177,14 +177,14 @@ function QuestionModal({ question, onClose }) {
           {question.analysis?.knowledge_points && question.analysis.knowledge_points.length > 0 && (
             <div className="mb-6">
               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                <span className="w-1 h-5 bg-gradient-to-b from-indigo-500 to-blue-500 rounded-full"></span>
+                <span className="w-1 h-5 bg-gradient-to-b from-[#2d5a3d] to-[#1a2e1f] rounded-full"></span>
                 知识点
               </h4>
               <div className="flex flex-wrap gap-2">
                 {question.analysis.knowledge_points.map((point, idx) => (
                   <span
                     key={idx}
-                    className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-sm font-medium border border-indigo-100"
+                    className="px-3 py-1.5 bg-[#e8f8ee] text-[#0f1c13] rounded-full text-sm font-medium border border-[#c8f0d4]"
                   >
                     {point}
                   </span>
@@ -301,7 +301,7 @@ function ResultDisplay({ data }) {
         <div className="mb-8 grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="stat-card stat-card-blue">
             <div className="text-sm text-gray-500 mb-1">题目总数</div>
-            <div className="text-3xl font-bold text-blue-600">{data.total_count || 0}</div>
+            <div className="text-3xl font-bold text-[#1a2e1f]">{data.total_count || 0}</div>
           </div>
           <div className="stat-card stat-card-green">
             <div className="text-sm text-gray-500 mb-1">处理耗时</div>
@@ -311,7 +311,7 @@ function ResultDisplay({ data }) {
           </div>
           <div className="stat-card stat-card-purple">
             <div className="text-sm text-gray-500 mb-1">评估模式</div>
-            <div className="text-2xl font-bold text-purple-600">
+            <div className="text-2xl font-bold text-[#2d5a3d]">
               {data.mode === 'fast' ? '快速' : '深度'}
             </div>
           </div>
@@ -325,7 +325,7 @@ function ResultDisplay({ data }) {
 
         {/* 报告下载 */}
         {data.report_url && (
-          <div className="mb-8 p-6 bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-xl">
+          <div className="mb-8 p-6 bg-gradient-to-r from-[#e8f8ee] to-[#f3f0ff] border border-[#b8d1bf] rounded-xl">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-1">
@@ -363,7 +363,7 @@ function ResultDisplay({ data }) {
                 <button
                   key={question.id || index}
                   onClick={() => setSelectedQuestion({ ...question, index })}
-                  className="text-left p-4 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-lg transition-all"
+                  className="text-left p-4 bg-white border border-gray-200 rounded-xl hover:border-[#b8d1bf] hover:shadow-lg transition-all"
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-lg font-bold text-gray-800">
@@ -383,7 +383,7 @@ function ResultDisplay({ data }) {
                           </span>
                         )}
                         {question.competency?.primary_competency && (
-                          <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">
+                          <span className="px-2 py-1 bg-[#c8f0d4] text-[#0f1c13] rounded text-xs">
                             {question.competency.primary_competency}
                           </span>
                         )}

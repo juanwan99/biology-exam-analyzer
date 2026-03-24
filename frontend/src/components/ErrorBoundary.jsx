@@ -29,7 +29,7 @@ class ErrorBoundary extends React.Component {
                 this.setState({ hasError: false, error: null })
                 window.location.reload()
               }}
-              className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+              className="px-6 py-2 bg-[#2d5a3d] text-white rounded-lg hover:bg-[#1a2e1f] transition-colors"
             >
               刷新页面
             </button>

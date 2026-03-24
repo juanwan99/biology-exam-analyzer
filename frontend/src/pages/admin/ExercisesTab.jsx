@@ -142,7 +142,7 @@ function ExercisesTab({ token, getHeaders }) {
             />
             <button
               onClick={() => loadExercises(1)}
-              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              className="bg-[#2d5a3d] text-white px-4 py-2 rounded hover:bg-[#1a2e1f]"
             >
               搜索
             </button>
@@ -170,7 +170,7 @@ function ExercisesTab({ token, getHeaders }) {
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className="px-2 py-0.5 bg-blue-500 text-white text-xs rounded flex-shrink-0">{ex.question_type}</span>
+                          <span className="px-2 py-0.5 bg-[#2d5a3d] text-white text-xs rounded flex-shrink-0">{ex.question_type}</span>
                           {ex.year && <span className="text-gray-500 text-xs">{ex.year}年</span>}
                           <span className="text-gray-400 text-xs">ID: {ex.id}</span>
                         </div>
@@ -179,7 +179,7 @@ function ExercisesTab({ token, getHeaders }) {
                       <div className="flex gap-1 ml-2 flex-shrink-0">
                         <button
                           onClick={() => setEditingExercise(ex)}
-                          className="px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded"
+                          className="px-2 py-1 text-xs text-[#1a2e1f] hover:bg-[#e8f8ee] rounded"
                         >
                           编辑
                         </button>
@@ -236,7 +236,7 @@ function ExercisesTab({ token, getHeaders }) {
                     <div className="text-gray-500 text-xs">{src.source_type} ({src.exercise_count}题)</div>
                   </div>
                   <div className="flex gap-1 ml-2 flex-shrink-0">
-                    <button onClick={() => setEditingSource(src)} className="text-blue-600 text-xs px-1">编辑</button>
+                    <button onClick={() => setEditingSource(src)} className="text-[#1a2e1f] text-xs px-1">编辑</button>
                     <button onClick={() => deleteSource(src.id)} className="text-red-600 text-xs px-1">删除</button>
                   </div>
                 </div>
@@ -344,7 +344,7 @@ function ExercisesTab({ token, getHeaders }) {
               </div>
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button onClick={() => setEditingExercise(null)} className="px-4 py-2 border rounded hover:bg-gray-100">取消</button>
-                <button onClick={saveExercise} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">保存</button>
+                <button onClick={saveExercise} className="px-4 py-2 bg-[#2d5a3d] text-white rounded hover:bg-[#1a2e1f]">保存</button>
               </div>
             </div>
           </div>
@@ -403,7 +403,7 @@ function ExercisesTab({ token, getHeaders }) {
               </div>
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button onClick={() => setEditingSource(null)} className="px-4 py-2 border rounded hover:bg-gray-100">取消</button>
-                <button onClick={saveSource} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">保存</button>
+                <button onClick={saveSource} className="px-4 py-2 bg-[#2d5a3d] text-white rounded hover:bg-[#1a2e1f]">保存</button>
               </div>
             </div>
           </div>

@@ -182,7 +182,7 @@ function TextbookPage() {
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white rounded-lg shadow p-4">
-            <div className="text-2xl font-bold text-blue-600">{stats.total_books}</div>
+            <div className="text-2xl font-bold text-[#1a2e1f]">{stats.total_books}</div>
             <div className="text-sm text-gray-500">教材数量</div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
@@ -190,7 +190,7 @@ function TextbookPage() {
             <div className="text-sm text-gray-500">总页数</div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
-            <div className="text-2xl font-bold text-purple-600">{stats.total_chunks}</div>
+            <div className="text-2xl font-bold text-[#1a2e1f]">{stats.total_chunks}</div>
             <div className="text-sm text-gray-500">文本切片</div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
@@ -240,7 +240,7 @@ function TextbookPage() {
               onClick={() => setActiveTab(tab.id)}
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === tab.id
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-[#2d5a3d] text-[#1a2e1f]'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
@@ -259,8 +259,8 @@ function TextbookPage() {
               // 根据book_id确定颜色
               const colorMap = {
                 'bx1': { bg: 'bg-green-50', border: 'border-green-400', text: 'text-green-700', selected: 'ring-green-500' },
-                'bx2': { bg: 'bg-blue-50', border: 'border-blue-400', text: 'text-blue-700', selected: 'ring-blue-500' },
-                'xxbx1': { bg: 'bg-purple-50', border: 'border-purple-400', text: 'text-purple-700', selected: 'ring-purple-500' },
+                'bx2': { bg: 'bg-[#e8f8ee]', border: 'border-[#2d5a3d]', text: 'text-[#0f1c13]', selected: 'ring-[#c8f0d4]' },
+                'xxbx1': { bg: 'bg-[#e8f8ee]', border: 'border-[#2d5a3d]', text: 'text-[#0f1c13]', selected: 'ring-[#c8f0d4]' },
                 'xxbx2': { bg: 'bg-orange-50', border: 'border-orange-400', text: 'text-orange-700', selected: 'ring-orange-500' },
                 'xxbx3': { bg: 'bg-pink-50', border: 'border-pink-400', text: 'text-pink-700', selected: 'ring-pink-500' },
               }
@@ -307,7 +307,7 @@ function TextbookPage() {
                       onClick={() => handleSelectPage(page)}
                       className={`w-full text-left p-3 rounded-lg border transition ${
                         selectedPage?.id === page.id
-                          ? 'bg-blue-50 border-blue-300'
+                          ? 'bg-[#e8f8ee] border-[#b8d1bf]'
                           : 'hover:bg-gray-50 border-gray-200'
                       }`}
                     >
@@ -437,7 +437,7 @@ function TextbookPage() {
                   className="mr-2"
                 />
                 <span className="text-sm">
-                  <span className="font-medium text-purple-700">语义搜索</span>
+                  <span className="font-medium text-[#0f1c13]">语义搜索</span>
                   <span className="text-gray-500">（理解语义，更智能）</span>
                 </span>
               </label>
@@ -491,8 +491,8 @@ function TextbookPage() {
                 disabled={loading || !searchQuery.trim()}
                 className={`px-6 rounded-lg disabled:bg-gray-300 ${
                   searchMode === 'semantic'
-                    ? 'bg-purple-600 text-white hover:bg-purple-700'
-                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                    ? 'bg-[#1a2e1f] text-white hover:bg-[#0f1c13]'
+                    : 'bg-[#1a2e1f] text-white hover:bg-[#0f1c13]'
                 }`}
               >
                 {loading ? '搜索中...' : '搜索'}
@@ -509,21 +509,21 @@ function TextbookPage() {
                   <div key={result.chunk_id || index} className="border rounded-lg p-4">
                     {/* 章节定位路径 */}
                     {result.location && (
-                      <div className="text-xs text-purple-600 mb-2 font-medium">
+                      <div className="text-xs text-[#1a2e1f] mb-2 font-medium">
                         {result.location}
                       </div>
                     )}
                     <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                      <span className="text-xs bg-[#c8f0d4] text-[#0f1c13] px-2 py-0.5 rounded">
                         {result.short_name || result.book_name}
                       </span>
                       {result.chapter && (
-                        <span className="text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded">
+                        <span className="text-xs bg-[#e8f8ee] text-[#1a2e1f] px-2 py-0.5 rounded">
                           {result.chapter}
                         </span>
                       )}
                       {result.section && (
-                        <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded">
+                        <span className="text-xs bg-[#e8f8ee] text-[#1a2e1f] px-2 py-0.5 rounded">
                           {result.section}
                         </span>
                       )}

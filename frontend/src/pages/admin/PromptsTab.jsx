@@ -45,13 +45,13 @@ function PromptsTab({ token, getHeaders }) {
       <div className="flex gap-4 mb-6">
         <button
           onClick={() => switchPrompt('split')}
-          className={`px-4 py-2 rounded ${editingPrompt === 'split' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+          className={`px-4 py-2 rounded ${editingPrompt === 'split' ? 'bg-[#1a2e1f] text-white' : 'bg-gray-200 text-gray-700'}`}
         >
           拆分Prompt
         </button>
         <button
           onClick={() => switchPrompt('analysis')}
-          className={`px-4 py-2 rounded ${editingPrompt === 'analysis' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+          className={`px-4 py-2 rounded ${editingPrompt === 'analysis' ? 'bg-[#1a2e1f] text-white' : 'bg-gray-200 text-gray-700'}`}
         >
           分析Prompt
         </button>

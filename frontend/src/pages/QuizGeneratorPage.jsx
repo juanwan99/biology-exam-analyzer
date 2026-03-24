@@ -253,7 +253,7 @@ function QuizGeneratorPage() {
                   <button
                     type="button"
                     onClick={() => setShowBookDropdown(!showBookDropdown)}
-                    className="w-full px-2 py-1.5 text-left bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    className="w-full px-2 py-1.5 text-left bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                   >
                     <span className={selectedBooks.length === 0 ? 'text-gray-400' : 'text-gray-900'}>
                       {getSelectedBookNames()}
@@ -277,7 +277,7 @@ function QuizGeneratorPage() {
                               type="checkbox"
                               checked={selectedBooks.includes(book.book_id)}
                               onChange={() => toggleBook(book.book_id)}
-                              className="mr-2 h-4 w-4 text-blue-600 rounded"
+                              className="mr-2 h-4 w-4 text-[#1a2e1f] rounded"
                             />
                             <div className="flex-1 text-sm">
                               <div className="text-gray-900">{book.book_name}</div>
@@ -306,7 +306,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.single_choice}
                   onChange={(e) => setConfig(prev => ({ ...prev, single_choice: parseInt(e.target.value) }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   {[0, 5, 10, 15, 20, 25, 30].map(num => (
                     <option key={num} value={num}>{num} 题</option>
@@ -324,7 +324,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.multiple_choice}
                   onChange={(e) => setConfig(prev => ({ ...prev, multiple_choice: parseInt(e.target.value) }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   {[0, 3, 5, 8, 10, 15, 20].map(num => (
                     <option key={num} value={num}>{num} 题</option>
@@ -342,7 +342,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.fill_blank}
                   onChange={(e) => setConfig(prev => ({ ...prev, fill_blank: parseInt(e.target.value) }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   {[0, 2, 3, 5, 8, 10].map(num => (
                     <option key={num} value={num}>{num} 题</option>
@@ -360,7 +360,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.short_answer}
                   onChange={(e) => setConfig(prev => ({ ...prev, short_answer: parseInt(e.target.value) }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   {[0, 1, 2, 3, 5, 8].map(num => (
                     <option key={num} value={num}>{num} 题</option>
@@ -378,7 +378,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.difficulty}
                   onChange={(e) => setConfig(prev => ({ ...prev, difficulty: e.target.value }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   <option value="easy">简单</option>
                   <option value="medium">中等</option>
@@ -397,7 +397,7 @@ function QuizGeneratorPage() {
                 <select
                   value={config.use_ai_generation ? 'yes' : 'no'}
                   onChange={(e) => setConfig(prev => ({ ...prev, use_ai_generation: e.target.value === 'yes' }))}
-                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#c8f0d4] focus:border-[#2d5a3d] text-sm"
                 >
                   <option value="no">关闭</option>
                   <option value="yes">开启</option>
@@ -406,15 +406,15 @@ function QuizGeneratorPage() {
             </div>
 
             {/* 总题数和生成按钮 */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <div className="bg-[#e8f8ee] border border-[#b8d1bf] rounded-lg p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-gray-700">总题数</span>
-                <span className="text-2xl font-bold text-blue-600">{getTotalQuestions()}</span>
+                <span className="text-2xl font-bold text-[#1a2e1f]">{getTotalQuestions()}</span>
               </div>
               <button
                 onClick={generateQuiz}
                 disabled={generating || selectedBooks.length === 0 || getTotalQuestions() === 0}
-                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium text-sm hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                className="w-full bg-[#1a2e1f] text-white py-2 px-4 rounded-lg font-medium text-sm hover:bg-[#0f1c13] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
               >
                 {generating ? (
                   <span className="flex items-center justify-center">
@@ -435,7 +435,7 @@ function QuizGeneratorPage() {
               <div className="bg-white rounded-lg shadow p-3">
                 <button
                   onClick={() => setShowHistory(!showHistory)}
-                  className="w-full flex items-center justify-between text-sm text-gray-700 hover:text-blue-600"
+                  className="w-full flex items-center justify-between text-sm text-gray-700 hover:text-[#1a2e1f]"
                 >
                   <span className="flex items-center">
                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -529,7 +529,7 @@ function QuizGeneratorPage() {
                   {generatedQuiz.questions?.map((question, idx) => (
                     <div key={idx} className="p-4">
                       <div className="flex items-start">
-                        <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center bg-blue-100 text-blue-600 rounded font-semibold text-sm">
+                        <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center bg-[#c8f0d4] text-[#1a2e1f] rounded font-semibold text-sm">
                           {idx + 1}
                         </div>
                         <div className="ml-3 flex-1">

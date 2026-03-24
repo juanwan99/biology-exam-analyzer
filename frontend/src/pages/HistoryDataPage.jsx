@@ -213,7 +213,7 @@ function HistoryDataPage() {
         <select
           value={gradeFilter}
           onChange={(e) => setGradeFilter(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
         >
           <option value="">全部</option>
           <option value="高一">高一</option>
@@ -257,7 +257,7 @@ function HistoryDataPage() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     <button
                       onClick={() => handleViewHistory(item.id)}
-                      className="text-blue-600 hover:text-blue-800 mr-3"
+                      className="text-[#1a2e1f] hover:text-[#0a120c] mr-3"
                     >
                       查看
                     </button>
@@ -348,11 +348,11 @@ function HistoryDataPage() {
         {[1, 2, 3].map((step) => (
           <div key={step} className="flex items-center">
             <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-              uploadStep >= step ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+              uploadStep >= step ? 'bg-[#1a2e1f] text-white' : 'bg-gray-200 text-gray-600'
             }`}>
               {step}
             </div>
-            {step < 3 && <div className={`w-12 h-1 ${uploadStep > step ? 'bg-blue-600' : 'bg-gray-200'}`} />}
+            {step < 3 && <div className={`w-12 h-1 ${uploadStep > step ? 'bg-[#1a2e1f]' : 'bg-gray-200'}`} />}
           </div>
         ))}
       </div>
@@ -375,7 +375,7 @@ function HistoryDataPage() {
                 <div className="text-4xl mb-2">📄</div>
                 <p className="text-gray-600">点击选择 DOCX 文件</p>
                 {uploadFile && (
-                  <p className="mt-2 text-blue-600 font-medium">{uploadFile.name}</p>
+                  <p className="mt-2 text-[#1a2e1f] font-medium">{uploadFile.name}</p>
                 )}
               </label>
             </div>
@@ -383,7 +383,7 @@ function HistoryDataPage() {
             <button
               onClick={handleFileUpload}
               disabled={!uploadFile || loading}
-              className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              className="w-full py-3 bg-[#1a2e1f] text-white rounded-lg hover:bg-[#0f1c13] disabled:bg-gray-300 disabled:cursor-not-allowed"
             >
               {loading ? '解析中...' : '解析试卷'}
             </button>
@@ -405,7 +405,7 @@ function HistoryDataPage() {
                 value={uploadForm.name}
                 onChange={(e) => setUploadForm({...uploadForm, name: e.target.value})}
                 placeholder="如: 2024年高三一模"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
               />
             </div>
             <div>
@@ -413,7 +413,7 @@ function HistoryDataPage() {
               <select
                 value={uploadForm.grade}
                 onChange={(e) => setUploadForm({...uploadForm, grade: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
               >
                 <option value="高一">高一</option>
                 <option value="高二">高二</option>
@@ -426,7 +426,7 @@ function HistoryDataPage() {
                 type="number"
                 value={uploadForm.totalScore}
                 onChange={(e) => setUploadForm({...uploadForm, totalScore: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
               />
             </div>
             <div>
@@ -435,7 +435,7 @@ function HistoryDataPage() {
                 type="date"
                 value={uploadForm.examDate}
                 onChange={(e) => setUploadForm({...uploadForm, examDate: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
               />
             </div>
             <div>
@@ -445,7 +445,7 @@ function HistoryDataPage() {
                 value={uploadForm.studentCount}
                 onChange={(e) => setUploadForm({...uploadForm, studentCount: e.target.value})}
                 placeholder="可选"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
               />
             </div>
           </div>
@@ -476,7 +476,7 @@ function HistoryDataPage() {
                         min="0"
                         value={q.question_score}
                         onChange={(e) => handleScoreChange(idx, 'question_score', e.target.value)}
-                        className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                        className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#c8f0d4]"
                       />
                     </td>
                     <td className="px-4 py-2">
@@ -486,7 +486,7 @@ function HistoryDataPage() {
                         min="0"
                         value={q.actual_average}
                         onChange={(e) => handleScoreChange(idx, 'actual_average', e.target.value)}
-                        className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                        className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#c8f0d4]"
                       />
                     </td>
                   </tr>
@@ -505,7 +505,7 @@ function HistoryDataPage() {
             <button
               onClick={handleSubmitHistory}
               disabled={loading}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
+              className="px-6 py-2 bg-[#1a2e1f] text-white rounded-lg hover:bg-[#0f1c13] disabled:bg-gray-300"
             >
               {loading ? '提交中...' : '提交数据'}
             </button>
@@ -524,16 +524,16 @@ function HistoryDataPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold mb-4">历史数据统计</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-blue-600">{stats.exam_history?.total_exams || 0}</div>
+              <div className="bg-[#e8f8ee] p-4 rounded-lg">
+                <div className="text-2xl font-bold text-[#1a2e1f]">{stats.exam_history?.total_exams || 0}</div>
                 <div className="text-sm text-gray-600">历史试卷数</div>
               </div>
               <div className="bg-green-50 p-4 rounded-lg">
                 <div className="text-2xl font-bold text-green-600">{stats.exam_history?.total_questions || 0}</div>
                 <div className="text-sm text-gray-600">总题目数</div>
               </div>
-              <div className="bg-purple-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-purple-600">{stats.mapping_coverage?.total_mappings || 0}</div>
+              <div className="bg-[#e8f8ee] p-4 rounded-lg">
+                <div className="text-2xl font-bold text-[#1a2e1f]">{stats.mapping_coverage?.total_mappings || 0}</div>
                 <div className="text-sm text-gray-600">映射规则数</div>
               </div>
               <div className="bg-orange-50 p-4 rounded-lg">
@@ -656,7 +656,7 @@ function HistoryDataPage() {
               onClick={() => setActiveTab(tab.key)}
               className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center ${
                 activeTab === tab.key
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-[#2d5a3d] text-[#1a2e1f]'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
@@ -676,7 +676,7 @@ function HistoryDataPage() {
       {loading && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 shadow-xl">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#1a2e1f] mx-auto"></div>
             <p className="mt-2 text-gray-600">处理中...</p>
           </div>
         </div>

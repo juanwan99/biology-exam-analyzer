@@ -112,7 +112,7 @@ function ExercisePage() {
       <div className="mt-3 space-y-2">
         {Object.entries(options).map(([key, value]) => (
           <div key={key} className="flex">
-            <span className="font-medium text-blue-600 mr-2">{key}.</span>
+            <span className="font-medium text-[#1a2e1f] mr-2">{key}.</span>
             <span>{value}</span>
           </div>
         ))}
@@ -149,7 +149,7 @@ function ExercisePage() {
         {tags.slice(0, 5).map((tag, idx) => (
           <span
             key={idx}
-            className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded"
+            className="px-2 py-0.5 bg-[#c8f0d4] text-[#0f1c13] text-xs rounded"
           >
             {tag}
           </span>
@@ -169,7 +169,7 @@ function ExercisePage() {
       {statistics && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-lg shadow p-4">
-            <div className="text-3xl font-bold text-blue-600">
+            <div className="text-3xl font-bold text-[#1a2e1f]">
               {statistics.total_count}
             </div>
             <div className="text-gray-500 text-sm">题目总数</div>
@@ -181,7 +181,7 @@ function ExercisePage() {
             <div className="text-gray-500 text-sm">试卷来源</div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
-            <div className="text-2xl font-bold text-purple-600">
+            <div className="text-2xl font-bold text-[#1a2e1f]">
               {Object.keys(statistics.type_distribution || {}).length}
             </div>
             <div className="text-gray-500 text-sm">题型分类</div>
@@ -250,7 +250,7 @@ function ExercisePage() {
 
           <div className="flex gap-2">
             <button
-              className="flex-1 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              className="flex-1 bg-[#2d5a3d] text-white px-4 py-2 rounded hover:bg-[#2d5a3d]"
               onClick={handleSearch}
             >
               搜索
@@ -292,7 +292,7 @@ function ExercisePage() {
                   <div className="flex-1">
                     {/* 题目头部信息 */}
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="px-2 py-0.5 bg-blue-500 text-white text-xs rounded">
+                      <span className="px-2 py-0.5 bg-[#2d5a3d] text-white text-xs rounded">
                         {ex.question_type}
                       </span>
                       {ex.year && (
@@ -301,7 +301,7 @@ function ExercisePage() {
                         </span>
                       )}
                       {ex.exam_source && (
-                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">
+                        <span className="px-2 py-0.5 bg-[#c8f0d4] text-[#0f1c13] text-xs rounded">
                           {ex.exam_source}
                         </span>
                       )}
@@ -378,7 +378,7 @@ function ExercisePage() {
           >
             <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <span className="px-2 py-1 bg-blue-500 text-white text-sm rounded">
+                <span className="px-2 py-1 bg-[#2d5a3d] text-white text-sm rounded">
                   {selectedExercise.question_type}
                 </span>
                 {selectedExercise.year && (
@@ -420,9 +420,9 @@ function ExercisePage() {
 
               {/* 解析 */}
               {selectedExercise.explanation && (
-                <div className="mb-6 p-4 bg-blue-50 rounded-lg">
-                  <h3 className="text-sm font-medium text-blue-700 mb-2">解析</h3>
-                  <div className="text-blue-800 whitespace-pre-wrap">
+                <div className="mb-6 p-4 bg-[#e8f8ee] rounded-lg">
+                  <h3 className="text-sm font-medium text-[#0f1c13] mb-2">解析</h3>
+                  <div className="text-[#0a120c] whitespace-pre-wrap">
                     {selectedExercise.explanation}
                   </div>
                 </div>

@@ -106,7 +106,7 @@ function AdminPage() {
           />
           <button
             onClick={handleLogin}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700"
+            className="w-full bg-[#1a2e1f] text-white py-2 px-4 rounded-lg hover:bg-[#0f1c13]"
           >
             登录
           </button>
@@ -122,7 +122,7 @@ function AdminPage() {
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600">
             {user?.display_name || user?.username}
-            {user?.role === 'admin' && <span className="ml-1 text-blue-600">(管理员)</span>}
+            {user?.role === 'admin' && <span className="ml-1 text-[#1a2e1f]">(管理员)</span>}
           </span>
           <button
             onClick={handleLogout}
@@ -148,7 +148,7 @@ function AdminPage() {
               onClick={() => setActiveTab(tab.key)}
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === tab.key
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-[#2d5a3d] text-[#1a2e1f]'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >

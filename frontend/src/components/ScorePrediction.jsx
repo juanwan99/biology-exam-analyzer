@@ -46,13 +46,13 @@ function ScorePrediction({ prediction }) {
   })) || []
 
   return (
-    <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl p-6 border border-purple-100">
+    <div className="bg-gradient-to-br from-[#f3f0ff] to-[#e8f8ee] rounded-xl p-6 border border-[#e2e8e4]">
       {/* 标题 */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
           <span className="text-2xl mr-2">🎯</span>
           <h3 className="text-lg font-semibold text-gray-800">预估分数</h3>
-          <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-600 text-xs rounded-full">Beta</span>
+          <span className="ml-2 px-2 py-0.5 bg-[#ede9fe] text-[#2d5a3d] text-xs rounded-full">Beta</span>
         </div>
         {grade && (
           <span className="text-sm text-gray-500">适用年级: {grade}</span>
@@ -64,7 +64,7 @@ function ScorePrediction({ prediction }) {
         {/* 预估均分 */}
         <div className="bg-white rounded-lg p-4 shadow-sm">
           <div className="text-center">
-            <div className="text-3xl font-bold text-purple-600">
+            <div className="text-3xl font-bold text-[#2d5a3d]">
               {predicted_average?.toFixed(1)}
             </div>
             <div className="text-sm text-gray-500 mt-1">预估均分</div>
@@ -129,14 +129,14 @@ function ScorePrediction({ prediction }) {
       <div className="flex space-x-4">
         <button
           onClick={() => setShowDetails(!showDetails)}
-          className="flex items-center text-sm text-purple-600 hover:text-purple-800"
+          className="flex items-center text-sm text-[#2d5a3d] hover:text-[#0f1c13]"
         >
           <span className="mr-1">{showDetails ? '▼' : '▶'}</span>
           各题预估详情
         </button>
         <button
           onClick={() => setShowChart(!showChart)}
-          className="flex items-center text-sm text-purple-600 hover:text-purple-800"
+          className="flex items-center text-sm text-[#2d5a3d] hover:text-[#0f1c13]"
         >
           <span className="mr-1">{showChart ? '▼' : '▶'}</span>
           难度-得分率散点图

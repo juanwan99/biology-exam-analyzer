@@ -89,7 +89,7 @@ function LogsTab({ token, getHeaders }) {
                     <span className={`px-1.5 py-0.5 rounded text-xs ${
                       log.operation === 'delete' || log.operation === 'batch_delete' ? 'bg-red-100 text-red-800' :
                       log.operation === 'create' ? 'bg-green-100 text-green-800' :
-                      log.operation === 'update' ? 'bg-blue-100 text-blue-800' :
+                      log.operation === 'update' ? 'bg-[#c8f0d4] text-[#0a120c]' :
                       'bg-gray-100 text-gray-800'
                     }`}>
                       {formatOperation(log.operation)}

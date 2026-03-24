@@ -270,7 +270,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
               <Typography color="text.secondary" gutterBottom>
                 平均难度系数
               </Typography>
-              <Typography variant="h3" component="div" className="text-blue-600 font-bold">
+              <Typography variant="h3" component="div" className="text-[#1a2e1f] font-bold">
                 {avg_difficulty !== undefined ? avg_difficulty.toFixed(2) : 'N/A'}
               </Typography>
               <Typography variant="body1" color="text.secondary" className="mt-2">
@@ -286,7 +286,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
               <Typography color="text.secondary" gutterBottom>
                 平均认知层级
               </Typography>
-              <Typography variant="h3" component="div" className="text-purple-600 font-bold">
+              <Typography variant="h3" component="div" className="text-[#2d5a3d] font-bold">
                 {avg_cognitive_level !== undefined ? avg_cognitive_level.toFixed(2) : 'N/A'}
               </Typography>
               <Typography variant="body1" color="text.secondary" className="mt-2">
@@ -376,7 +376,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-                <Box className="mt-4 p-3 bg-blue-50 rounded">
+                <Box className="mt-4 p-3 bg-[#e8f8ee] rounded">
                   <Typography variant="body1" color="text.secondary">
                     <strong>理想比例：</strong>简单 30% • 中等 50% • 困难 20%
                   </Typography>
@@ -420,7 +420,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                     <Tooltip />
                   </PieChart>
                 </ResponsiveContainer>
-                <Box className="mt-4 p-3 bg-purple-50 rounded">
+                <Box className="mt-4 p-3 bg-[#f3f0ff] rounded">
                   <Typography variant="body1" color="text.secondary">
                     <strong>专业提示：</strong>高阶思维（分析/综合/评价）占比建议 ≥ 50%
                   </Typography>
@@ -641,7 +641,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
               })}
             </Box>
 
-            <Box className="mt-4 p-3 bg-blue-50 rounded">
+            <Box className="mt-4 p-3 bg-[#e8f8ee] rounded">
               <Typography variant="body1" color="text.secondary">
                 <strong>说明：</strong>知识点已自动映射到对应教材章节，帮助教师全面把握试卷在五本教材中的分布情况，
                 确保知识点覆盖的均衡性和全面性。

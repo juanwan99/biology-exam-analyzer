@@ -168,8 +168,8 @@ function TextbookTab({ token, getHeaders }) {
             // 根据book_id确定颜色
             const colorMap = {
               'bx1': { bg: 'bg-green-50', border: 'border-green-400', text: 'text-green-700', selected: 'ring-green-500' },
-              'bx2': { bg: 'bg-blue-50', border: 'border-blue-400', text: 'text-blue-700', selected: 'ring-blue-500' },
-              'xxbx1': { bg: 'bg-purple-50', border: 'border-purple-400', text: 'text-purple-700', selected: 'ring-purple-500' },
+              'bx2': { bg: 'bg-[#e8f8ee]', border: 'border-[#5a9a6d]', text: 'text-[#0f1c13]', selected: 'ring-[#c8f0d4]' },
+              'xxbx1': { bg: 'bg-[#e8f8ee]', border: 'border-[#2d5a3d]', text: 'text-[#0f1c13]', selected: 'ring-[#c8f0d4]' },
               'xxbx2': { bg: 'bg-orange-50', border: 'border-orange-400', text: 'text-orange-700', selected: 'ring-orange-500' },
               'xxbx3': { bg: 'bg-pink-50', border: 'border-pink-400', text: 'text-pink-700', selected: 'ring-pink-500' },
             }
@@ -209,7 +209,7 @@ function TextbookTab({ token, getHeaders }) {
             <div className="bg-white shadow rounded-lg p-4">
               <div className="flex gap-4 items-center flex-wrap">
                 <div className="text-sm text-gray-600">
-                  当前教材: <span className="font-medium text-blue-600">{books.find(b => b.book_id === chunkFilters.book_id)?.book_name}</span>
+                  当前教材: <span className="font-medium text-[#1a2e1f]">{books.find(b => b.book_id === chunkFilters.book_id)?.book_name}</span>
                 </div>
                 <input
                   type="text"
@@ -221,7 +221,7 @@ function TextbookTab({ token, getHeaders }) {
                 />
                 <button
                   onClick={() => loadTextbookChunks(1)}
-                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                  className="bg-[#2d5a3d] text-white px-4 py-2 rounded hover:bg-[#1a2e1f]"
                 >
                   搜索
                 </button>
@@ -265,7 +265,7 @@ function TextbookTab({ token, getHeaders }) {
                         <div className="flex gap-1 flex-shrink-0">
                           <button
                             onClick={() => setEditingChunk(chunk)}
-                            className="text-blue-600 text-xs px-2 py-1 hover:bg-blue-100 rounded"
+                            className="text-[#1a2e1f] text-xs px-2 py-1 hover:bg-[#c8f0d4] rounded"
                           >
                             编辑
                           </button>
@@ -356,7 +356,7 @@ function TextbookTab({ token, getHeaders }) {
               </div>
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button onClick={() => setEditingChapter(null)} className="px-4 py-2 border rounded hover:bg-gray-100">取消</button>
-                <button onClick={saveChapter} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">保存</button>
+                <button onClick={saveChapter} className="px-4 py-2 bg-[#2d5a3d] text-white rounded hover:bg-[#1a2e1f]">保存</button>
               </div>
             </div>
           </div>
@@ -416,7 +416,7 @@ function TextbookTab({ token, getHeaders }) {
               </div>
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button onClick={() => setEditingKP(null)} className="px-4 py-2 border rounded hover:bg-gray-100">取消</button>
-                <button onClick={saveKnowledgePoint} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">保存</button>
+                <button onClick={saveKnowledgePoint} className="px-4 py-2 bg-[#2d5a3d] text-white rounded hover:bg-[#1a2e1f]">保存</button>
               </div>
             </div>
           </div>
@@ -434,7 +434,7 @@ function TextbookTab({ token, getHeaders }) {
             <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
               {/* 切片信息 */}
               <div className="text-sm bg-gray-50 px-3 py-2 rounded space-y-1">
-                <div>教材: <span className="text-blue-600">{editingChunk.book_name}</span></div>
+                <div>教材: <span className="text-[#1a2e1f]">{editingChunk.book_name}</span></div>
                 <div>页码: <span className="text-gray-600">P{editingChunk.page_num}</span></div>
                 {editingChunk.chapter_info?.chapter && (
                   <div>章节: <span className="text-green-600">{editingChunk.chapter_info.chapter}</span></div>
@@ -456,7 +456,7 @@ function TextbookTab({ token, getHeaders }) {
               </div>
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button onClick={() => setEditingChunk(null)} className="px-4 py-2 border rounded hover:bg-gray-100">取消</button>
-                <button onClick={saveChunk} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">保存</button>
+                <button onClick={saveChunk} className="px-4 py-2 bg-[#2d5a3d] text-white rounded hover:bg-[#1a2e1f]">保存</button>
               </div>
             </div>
           </div>

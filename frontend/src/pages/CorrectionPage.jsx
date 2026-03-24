@@ -209,17 +209,17 @@ function CorrectionPage() {
       {/* 题目列表 */}
       <div className="space-y-4 mb-8">
         {questions.map((question, index) => (
-          <div key={question.id} className="bg-white shadow rounded-lg p-6 border-l-4 border-blue-500">
+          <div key={question.id} className="bg-white shadow rounded-lg p-6 border-l-4 border-[#2d5a3d]">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center space-x-3">
-                <span className="text-2xl font-bold text-blue-600">题目 {question.id}</span>
+                <span className="text-2xl font-bold text-[#1a2e1f]">题目 {question.id}</span>
                 {question.confidence && (
                   <span className={`px-2 py-1 rounded text-xs font-medium ${getConfidenceBadge(question.confidence)}`}>
                     置信度 {(question.confidence * 100).toFixed(0)}%
                   </span>
                 )}
                 {question.has_options && (
-                  <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-medium">
+                  <span className="px-2 py-1 bg-[#c8f0d4] text-[#0a120c] rounded text-xs font-medium">
                     选择题
                   </span>
                 )}
@@ -232,7 +232,7 @@ function CorrectionPage() {
               <div className="flex space-x-2">
                 <button
                   onClick={() => handleEdit(question)}
-                  className="px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm"
+                  className="px-3 py-1 bg-[#c8f0d4] text-[#0f1c13] rounded hover:bg-[#b8d1bf] text-sm"
                 >
                   ✏️ 编辑
                 </button>
@@ -270,7 +270,7 @@ function CorrectionPage() {
                 <div className="mt-3 flex space-x-2">
                   <button
                     onClick={() => handleSaveEdit(question.id)}
-                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    className="px-4 py-2 bg-[#1a2e1f] text-white rounded hover:bg-[#0f1c13]"
                   >
                     保存
                   </button>
@@ -323,7 +323,7 @@ function CorrectionPage() {
                     value="deep"
                     checked={mode === 'deep'}
                     onChange={() => setMode('deep')}
-                    className="h-4 w-4 text-blue-600"
+                    className="h-4 w-4 text-[#1a2e1f]"
                   />
                   <span className="ml-2 text-sm">🔬 深度模式</span>
                 </label>
@@ -340,7 +340,7 @@ function CorrectionPage() {
                   type="checkbox"
                   checked={generateReport}
                   onChange={(e) => setGenerateReport(e.target.checked)}
-                  className="h-4 w-4 text-blue-600 rounded"
+                  className="h-4 w-4 text-[#1a2e1f] rounded"
                 />
                 <span className="ml-2 text-sm">📄 生成PDF报告</span>
               </label>
@@ -351,7 +351,7 @@ function CorrectionPage() {
           <button
             onClick={handleConfirm}
             disabled={loading || questions.length === 0}
-            className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
+            className="px-8 py-3 bg-[#1a2e1f] text-white rounded-lg hover:bg-[#0f1c13] disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
           >
             {loading ? '分析中...' : '✅ 确认并继续分析'}
           </button>
@@ -359,7 +359,7 @@ function CorrectionPage() {
 
         {loading && (
           <div className="mt-4 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#1a2e1f]"></div>
             <p className="mt-2 text-sm text-gray-600">
               正在进行深度分析，请稍候...
               {mode === 'fast' && <span className="block text-xs mt-1">预计需要 75 秒</span>}

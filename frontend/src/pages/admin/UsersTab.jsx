@@ -67,7 +67,7 @@ function UsersTab({ token, getHeaders, user }) {
                 <td className="px-3 py-2 text-xs text-gray-500">{u.display_name}</td>
                 <td className="px-3 py-2 text-xs">
                   <span className={`px-1.5 py-0.5 rounded text-xs ${
-                    u.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
+                    u.role === 'admin' ? 'bg-[#ede9fe] text-[#0f1c13]' : 'bg-gray-100 text-gray-800'
                   }`}>
                     {u.role === 'admin' ? '管理员' : '编辑'}
                   </span>
@@ -83,7 +83,7 @@ function UsersTab({ token, getHeaders, user }) {
                 <td className="px-3 py-2 text-xs space-x-1">
                   <button
                     onClick={() => resetUserPassword(u.id)}
-                    className="text-blue-600 hover:underline"
+                    className="text-[#1a2e1f] hover:underline"
                   >
                     重置密码
                   </button>
