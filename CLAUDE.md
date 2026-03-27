@@ -8,23 +8,28 @@
 
 - Claude Code API 是专用 API，仅限于 Claude Code CLI 工具内部使用
 - 在 Python、JavaScript 或任何其他代码中直接调用此 API 会导致账号被封禁
-- 如需在代码中使用 AI 能力，请使用其他已配置的 API（如本项目中的 Gemini API）
+- 如需在代码中使用 AI 能力，请使用已配置的 API（AIProxy 中转）
 
 ### 当前项目 AI 配置
 
-本项目使用两个 AI API：
+本项目通过 `llm_config.py` 统一管理模型，环境变量 `MODEL_PROVIDER` 一键切换：
 
-**Gemini API（题目分析）：**
-- API 端点: `GEMINI_API_BASE` (环境变量配置)
-- API 密钥: `GEMINI_API_KEY` (环境变量配置)
-- 分析模型: gemini-2.5-pro
-- 快速评估模型: gemini-2.5-flash
+**Claude（默认，MODEL_PROVIDER=claude）：**
+- API 端点: AIProxy Anthropic Messages API (`aiproxy.superaichao.xin`)
+- API 密钥: `CLAUDE_API_KEY` (环境变量)
+- 模型: `claude-sonnet-4-5-20250929`
+- max_output_tokens: 8192
+- 用途: 题目拆分与分析（gemini_analyzer.py）、7 维特征提取（feature_extractor.py）、报告 LLM 分析（report_insights.py）
 
-**Claude API（难度评估特征提取）：**
-- API 端点: `CLAUDE_API_BASE` (环境变量配置，AIProxy)
-- API 密钥: `CLAUDE_API_KEY` (环境变量配置)
-- 模型: claude-sonnet-4-20250514
-- 用途: 6 维特征提取（feature_extractor.py）
+**GPT（MODEL_PROVIDER=gpt）：**
+- API 端点: AIProxy OpenAI Responses API (`aiproxy.superaichao.xin`)
+- API 密钥: `AIPROXY_OAI_KEY` (环境变量)
+- 模型: `gpt-5.4`
+- max_output_tokens: 16384
+
+> **注意**: `gemini_analyzer.py` 类名历史遗留，实际已全面切换为 Claude Sonnet API。
+> 所有 LLM 调用统一走 `claude_client.py` 的 `send_message_gpt()` 或 `gemini_analyzer.py` 的内部 httpx 客户端，
+> 模型名由 `llm_config.get_model()` 决定，禁止在业务代码硬编码 model 字符串。
 
 ---
 
@@ -33,60 +38,94 @@
 ```
 biology-exam-analyzer/
 ├── backend/
-│   ├── main.py              # 入口（170 行）— 初始化 + 路由注册 + 全局异常处理
+│   ├── main.py              # 入口（208 行）— 初始化 + 路由注册 + 全局异常处理
 │   ├── config.py            # 路径配置（UPLOAD_DIR, LOG_DIR 等）
 │   ├── database.py          # AsyncEngine + 连接池（pool_size=10）
-│   ├── models.py            # 20 张表的 ORM 定义
+│   ├── models.py            # 15 张表的 ORM 定义
 │   ├── deps.py              # 惰性单例工厂（9 个服务对象）
 │   ├── middleware.py         # RequestId 中间件
 │   ├── exceptions.py        # 自定义异常
 │   ├── logger.py            # 日志配置
+│   ├── llm_config.py        # LLM 配置中枢（MODEL_PROVIDER 切换 Claude/GPT）
 │   │
 │   │   # === 路由模块（8 个） ===
 │   ├── admin_router.py      # 管理后台（prompt/日志/报告/静态资源）
-│   ├── analysis_router.py   # 核心分析（上传→拆分→AI分析→统计）
+│   ├── analysis_router.py   # 核心分析（上传→拆分→AI分析→统计）— 1172 行
 │   ├── auth_router.py       # 认证（bcrypt + 限流 + token）
-│   ├── exercise_router.py   # 题库 CRUD + 搜索
+│   ├── exercise_router.py   # 题库 CRUD + 搜索 — 778 行
 │   ├── knowledge_router.py  # 知识库查询
 │   ├── prediction_router.py # 成绩预测
 │   ├── quiz_router.py       # 组卷
-│   ├── textbook_router.py   # 教材管理（最大，含向量处理）
+│   ├── textbook_router.py   # 教材管理（最大，1672 行，含向量处理）
 │   │
 │   │   # === AI/ML 服务 ===
-│   ├── gemini_analyzer.py   # Gemini 多模态分析（Semaphore=5）
-│   ├── claude_client.py     # Claude API 客户端（Semaphore=3）
-│   ├── feature_extractor.py # 6 维特征提取（LLM prompt）
-│   ├── rule_scorer.py       # 非线性规则评分（2-10 分）
+│   ├── gemini_analyzer.py   # LLM 多模态分析（实际用 Claude Sonnet，Semaphore=3）— 471 行
+│   ├── claude_client.py     # 统一 LLM 客户端（Claude Anthropic / GPT Responses 双路由）
+│   ├── feature_extractor.py # 7 维特征提取（通过 claude_client 调用 LLM）
+│   ├── rule_scorer.py       # 非线性规则评分 v2（7 维 + 条件化题型修正, 2-10 分）
 │   ├── difficulty_pipeline.py # 难度评估编排
+│   ├── difficulty_mapper.py # 难度映射（573 行）
 │   ├── calibration.py       # Isotonic Regression 校准（未集成）
 │   ├── competency_analyzer.py # 素养分析
-│   ├── knowledge_mapper.py  # 知识点映射
+│   ├── knowledge_mapper.py  # 知识点映射（501 行）
+│   ├── vision_processor.py  # Gemini Flash 视觉提取 PDF→Markdown（556 行）
 │   │
 │   │   # === 文档处理 ===
-│   ├── document_processor.py # PDF/DOCX→图片
-│   ├── rule_splitter.py     # 规则拆题
+│   ├── document_processor.py # PDF/DOCX→图片（602 行）
+│   ├── rule_splitter.py     # 规则拆题（963 行）
 │   ├── pdf_splitter.py      # PDF 拆分
+│   ├── pdf_parser.py        # PDF 解析
 │   ├── word_splitter.py     # DOCX 拆分
-│   ├── report_generator.py  # PDF 报告生成
+│   ├── word_parser_v2.py    # Word 精确解析器 v2（图文关联）
+│   │
+│   │   # === 报告生成 ===
+│   ├── report_generator.py  # PDF 报告渲染（967 行）
+│   ├── report_data.py       # 报告数据聚合层（纯数据转换，无 LLM）
+│   ├── report_insights.py   # 报告 LLM 分析层（GPT 5.4 生成综合分析文本）
 │   │
 │   │   # === 业务服务 ===
 │   ├── session_manager.py   # 内存 Session（30min TTL）
+│   ├── credits_service.py   # 积分服务（对接 momowan.xyz 主站 zhixue-server）
+│   ├── chapter_locator.py   # 章节定位服务（页码→章节）
 │   ├── task_registry.py     # 异步任务状态（未集成）
-│   ├── textbook_service.py  # 教材服务层
-│   ├── prediction_service.py # 预测服务层
+│   ├── textbook_service.py  # 教材服务层（801 行）
+│   ├── textbook_processor.py # 教材智能处理（Gemini 分析教材内容）
+│   ├── textbook_parser_v2.py # 教材解析器 v2
+│   ├── prediction_service.py # 预测服务层（530 行）
 │   ├── quiz_service.py      # 组卷服务层
-│   ├── vector_service.py    # pgvector 向量搜索
+│   ├── vector_service.py    # pgvector 向量搜索（450 行）
+│   ├── gaokao_extractor.py  # 高考真题提取器 v1
+│   ├── gaokao_extractor_v2.py # 高考真题提取器 v2
 │   ├── utils.py             # 题型推断
 │   │
 │   ├── archived/            # 归档（simulated_student, irt_estimator）
-│   ├── scripts/             # 一次性脚本（批量导入/处理）
-│   └── test_feature_difficulty.py # 单元测试（14 个）
+│   ├── scripts/             # 一次性脚本（14 个：批量导入/处理/诊断/向量化）
+│   ├── test_core_modules.py      # 单元测试（37 个：utils/session/calibration/feature/scorer）
+│   ├── test_feature_difficulty.py # 单元测试（28 个：特征提取+难度评分）
+│   ├── test_report_data.py       # 单元测试（5 个：报告数据聚合）
+│   ├── test_report_insights.py   # 单元测试（3 个：报告 LLM 分析）
+│   ├── test_report_render.py     # 单元测试（14 个：报告渲染）
+│   └── test_weighted_statistics.py # 单元测试（14 个：加权统计）
 │
 ├── frontend/src/
 │   ├── App.jsx              # 路由 + 导航 + ErrorBoundary
+│   ├── main.jsx             # 入口
 │   ├── api/axios.js         # HTTP 客户端（token 注入 + 错误拦截）
 │   ├── pages/               # 7 个页面组件
-│   └── components/          # ErrorBoundary + 统计图表 + 结果展示
+│   │   ├── AnalyzerPage.jsx       # 主页：试卷上传+分析
+│   │   ├── ExercisePage.jsx       # 题库浏览
+│   │   ├── QuizGeneratorPage.jsx  # 组卷
+│   │   ├── TextbookPage.jsx       # 教材管理
+│   │   ├── HistoryDataPage.jsx    # 历史数据
+│   │   ├── CorrectionPage.jsx     # 纠错
+│   │   └── AdminPage.jsx          # 管理后台（含 5 个 Tab 子组件）
+│   │       └── admin/ (PromptsTab, UsersTab, ExercisesTab, LogsTab, TextbookTab)
+│   └── components/          # 5 个复用组件
+│       ├── ErrorBoundary.jsx
+│       ├── ResultDisplay.jsx
+│       ├── ExamStatistics.jsx
+│       ├── ExamStatisticsEnhanced.jsx
+│       └── ScorePrediction.jsx
 ├── database/init/           # PostgreSQL 初始化脚本
 ├── prompts/                 # AI 提示词模板
 ├── docker-compose.yml
@@ -97,13 +136,13 @@ biology-exam-analyzer/
 ## 开发环境
 
 - 后端: Python 3.x + FastAPI + uvicorn
-- 前端: React 18 + Vite + Tailwind CSS + MUI
+- 前端: React 18 + Vite + Tailwind CSS + Lucide React
 - 数据库: PostgreSQL 16 + pgvector (Docker)
 - 部署: Docker Compose
-- 端口:
-  - 前端: 3000
-  - 后端: 8000
-  - PostgreSQL: 5432
+- 端口（宿主机映射）:
+  - 前端: 127.0.0.1:**3001** → 容器 80 (nginx)
+  - 后端: 127.0.0.1:**8001** → 容器 8000 (uvicorn)
+  - PostgreSQL: **5432** (直接暴露)
 
 ## 常用命令
 
@@ -132,6 +171,13 @@ docker-compose up -d --build backend
 - 数据库: biology_edu
 - 连接串: postgresql://biology:biology123@localhost:5432/biology_edu
 
+### 表清单（15 张）
+
+TextbookVersion, TextbookChapter, TextbookContent, KnowledgePoint,
+ExerciseSource, ExerciseBank, AdminUser, OperationLog, Resource,
+TextbookPage, TextbookChunk, ExamHistory, QuestionPerformance,
+DifficultyMapping, ScorePrediction
+
 ---
 
 ## 开发规范
@@ -143,6 +189,7 @@ docker-compose up -d --build backend
 - **新增 API**: 创建独立的 `xxx_router.py`，在 `main.py` 中通过 `app.include_router()` 注册
 - **业务逻辑**: 不要写在路由函数里，抽到独立的 service 层或工具模块
 - **避免 main.py 膨胀**: main.py 只负责应用初始化和路由注册，业务逻辑放到对应模块
+- **LLM 调用**: 统一通过 `claude_client.send_message_gpt()` 或 `gemini_analyzer` 实例，模型由 `llm_config.py` 决定
 
 #### 接口设计
 - 统一使用 `/api/` 前缀
@@ -153,6 +200,19 @@ docker-compose up -d --build backend
   {"success": true, "data": {...}}
   {"success": false, "error": "错误描述", "detail": "..."}
   ```
+
+#### 路由前缀
+
+| Router | 前缀 |
+|--------|------|
+| analysis_router | `/api/` (手动) |
+| admin_router | `/api/` (手动) |
+| auth_router | `/api/auth` |
+| exercise_router | `/api/exercises` |
+| knowledge_router | `/api/knowledge` |
+| prediction_router | `/api/prediction` |
+| quiz_router | `/api/quiz` |
+| textbook_router | `/api/textbook` |
 
 #### 错误处理
 - 区分业务异常和系统异常，不要用裸 `except Exception` 吞掉所有错误
@@ -206,9 +266,11 @@ docker-compose up -d --build backend
 
 ### 5. 已知技术债
 
-- ~~main.py 臃肿~~ → **已完成**（170 行，8 router 拆分）
+- ~~main.py 臃肿~~ → **已完成**（208 行，8 router 拆分）
 - ~~P0 安全~~ → **已完成**（路径穿越/认证/限流/输入校验/异常脱敏）
 - **document_processor.py 阻塞事件循环** — `convert_from_path()` 等同步调用需包装 `run_in_executor`
 - **Session 内存管理** — auth_router 的 active_tokens 无定期清理
 - **文档处理器重复** — word_parser_v2/word_splitter/pdf_parser/pdf_splitter/rule_splitter 需统一
 - **calibration.py/task_registry.py 未集成** — 代码完整但无调用方
+- **gemini_analyzer.py 命名误导** — 类名仍为 GeminiAnalyzer 但实际使用 Claude API
+- **frontend/src/src/ 重复** — 存在一层多余的 src/src/ 副本目录
