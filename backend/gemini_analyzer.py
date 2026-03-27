@@ -1,46 +1,21 @@
-from openai import AsyncOpenAI
-from typing import List, Dict, Any
 import json
 import re
 import base64
 import time
-import asyncio
 from logger import get_logger
 from config import PROMPT_DIR
+from llm_client import llm_call
 
 logger = get_logger()
 
+
 class GeminiAnalyzer:
-    """Gemini API封装：题目拆分和分析（使用OpenAI兼容接口）"""
+    """LLM 分析器：题目拆分和分析（统一 fallback 客户端）"""
 
-    def __init__(self, api_key: str, api_base: str = None):
-        """
-        初始化Gemini分析器（OpenAI兼容模式）
-
-        Args:
-            api_key: API密钥（sk-开头）
-            api_base: API端点（默认 https://www.chataiapi.com/v1）
-        """
-        self.api_key = api_key
-        self.api_base = api_base or "https://www.chataiapi.com/v1"
-
-        # 初始化OpenAI客户端
-        self.client = AsyncOpenAI(
-            api_key=self.api_key,
-            base_url=self.api_base
-        )
-
-        # 模型选择：分析阶段用Pro，其他阶段用Flash
-        self.analysis_model = "gemini-2.5-pro"  # Stage 2: 分析（需要高质量）
-        self.flash_model = "gemini-2.5-flash-preview-05-20-nothinking"  # Stage 3 & 4: 难度和素养（快速）
-
-        # 并发控制
-        self._semaphore = asyncio.Semaphore(5)
-
-        logger.info(f"Gemini分析器初始化完成 ⚡（OpenAI兼容模式）")
-        logger.info(f"API端点: {self.api_base}")
-        logger.info(f"分析模型（Stage 2）: {self.analysis_model}（高质量分析）")
-        logger.info(f"Flash模型（Stage 3 & 4）: {self.flash_model}（快速评估）")
+    def __init__(self, api_key: str = None, api_base: str = None):
+        """初始化分析器。api_key/api_base 参数保留兼容性，实际不使用。"""
+        self.logger = get_logger()
+        self.logger.info("LLM 分析器初始化完成（统一 fallback 客户端）")
 
     @staticmethod
     def extract_json(text: str) -> str:
@@ -73,25 +48,7 @@ class GeminiAnalyzer:
             logger.debug("[JSON提取] 已清理控制字符")
             return cleaned
 
-    async def _call_with_retry(self, **kwargs):
-        """带 Semaphore + 指数退避的 API 调用。"""
-        async with self._semaphore:
-            last_error = None
-            for attempt in range(3):
-                try:
-                    return await self.client.chat.completions.create(**kwargs)
-                except Exception as e:
-                    last_error = e
-                    err_str = str(e).lower()
-                    if "rate" in err_str or "429" in err_str:
-                        wait = 2 ** attempt
-                        logger.warning(f"API 限流，等待 {wait}s 后重试 (attempt {attempt+1}/3)")
-                        await asyncio.sleep(wait)
-                    else:
-                        raise
-            raise last_error
-
-    async def split_questions(self, image_bytes: List[bytes], extracted_text: str = None) -> List[Dict[str, Any]]:
+    async def split_questions(self, image_bytes: list, extracted_text: str = None) -> list:
         """
         第一次调用：拆分试卷为单独题目
 
@@ -108,7 +65,7 @@ class GeminiAnalyzer:
                 }
             ]
         """
-        logger.info(f"[拆分] 开始调用Gemini，图片数量: {len(image_bytes)}")
+        logger.info(f"[拆分] 开始调用LLM，图片数量: {len(image_bytes)}")
 
         # 加载拆分Prompt
         prompt_path = str(PROMPT_DIR / "split_prompt.txt")
@@ -151,25 +108,17 @@ class GeminiAnalyzer:
             logger.debug(f"[拆分] 已添加图片 {idx + 1}/{len(image_bytes)}")
 
         try:
-            # 调用OpenAI兼容接口（拆分阶段使用Flash模型）
-            logger.debug(f"[拆分] 准备调用API - Model: {self.flash_model}, Base URL: {self.client.base_url}")
-            logger.debug(f"[拆分] 请求参数 - max_tokens: 16384, temperature: 0")
+            logger.debug("[拆分] 准备调用 llm_call（统一 fallback 客户端）")
+            logger.debug("[拆分] 请求参数 - max_tokens: 8192, temperature: 0")
 
-            response = await self._call_with_retry(
-                model=self.flash_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": message_content
-                    }
-                ],
-                max_tokens=16384,  # 增加到16K，避免题目拆分被截断
-                temperature=0,  # 完全消除随机性，确保输出稳定
-                timeout=60  # 60秒超时（拆分阶段应该更快）
+            response_text = await llm_call(
+                messages=[{"role": "user", "content": message_content}],
+                max_tokens=8192,
+                temperature=0,
+                timeout=120.0,
             )
+            finish_reason = "stop"  # fallback 客户端已处理截断重试
 
-            response_text = response.choices[0].message.content
-            finish_reason = response.choices[0].finish_reason
             logger.info(f"[拆分] API响应长度: {len(response_text) if response_text else 0}")
             logger.debug(f"[拆分] 完成原因: {finish_reason}")
             logger.debug(f"[拆分] 原始返回:\n{response_text}")
@@ -182,7 +131,7 @@ class GeminiAnalyzer:
 
             # 检查返回是否为空
             if not response_text or response_text.strip() == "":
-                logger.error(f"[拆分] API返回为空！完整响应: {response}")
+                logger.error("[拆分] API返回为空！")
                 raise ValueError("API返回内容为空")
 
             # 提取并解析JSON
@@ -201,11 +150,11 @@ class GeminiAnalyzer:
     async def analyze_question(
         self,
         question_text: str,
-        question_images: List[bytes],
+        question_images: list,
         question_id: int,
         question_type: str = "unknown",
         section_header: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict:
         """
         第二次调用：分析单道题目
 
@@ -260,27 +209,20 @@ class GeminiAnalyzer:
                 })
 
         try:
-            logger.debug(f"[分析] 准备调用API分析题目{question_id}（使用{self.flash_model}）")
+            logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")
             logger.debug(f"[分析] 请求包含 {len(question_images)} 张图片")
             if question_images:
                 total_img_size = sum(len(img) for img in question_images)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
-            response = await self._call_with_retry(
-                model=self.flash_model,  # 优化：改用Flash模型提速（原Pro模型太慢）
-                messages=[
-                    {
-                        "role": "user",
-                        "content": message_content
-                    }
-                ],
-                max_tokens=16384,  # 增加到16K，避免分析内容被截断
-                temperature=0,  # 完全消除随机性，确保输出稳定
-                timeout=90  # 降低到90秒（Flash模型更快）
+            response_text = await llm_call(
+                messages=[{"role": "user", "content": message_content}],
+                max_tokens=8192,
+                temperature=0,
+                timeout=120.0,
             )
+            finish_reason = "stop"  # fallback 客户端已处理截断重试
 
-            response_text = response.choices[0].message.content
-            finish_reason = response.choices[0].finish_reason
             response_length = len(response_text) if response_text else 0
             logger.info(f"[分析] 题目{question_id} API响应长度: {response_length}")
             logger.debug(f"[分析] 题目{question_id} 完成原因: {finish_reason}")
@@ -294,11 +236,19 @@ class GeminiAnalyzer:
 
             # 检查返回是否为空
             if not response_text or response_text.strip() == "":
-                logger.error(f"[分析] 题目{question_id} API返回为空！完整响应: {response}")
+                logger.error(f"[分析] 题目{question_id} API返回为空！")
                 raise ValueError(f"题目{question_id} API返回内容为空")
 
-            # 提取并解析JSON
+            # 提取并解析JSON（兜底：找最外层 { ... }）
             json_text = self.extract_json(response_text)
+            if not json_text.startswith('{'):
+                start = json_text.find('{')
+                if start != -1:
+                    json_text = json_text[start:]
+            if not json_text.endswith('}'):
+                end = json_text.rfind('}')
+                if end != -1:
+                    json_text = json_text[:end + 1]
             logger.debug(f"[分析] 题目{question_id} 提取的JSON前500字符:\n{json_text[:500]}")
 
             try:
