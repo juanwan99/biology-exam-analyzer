@@ -12,24 +12,20 @@
 
 ### 当前项目 AI 配置
 
-本项目通过 `llm_config.py` 统一管理模型，环境变量 `MODEL_PROVIDER` 一键切换：
+本项目通过 `llm_client.py` 统一管理 LLM 调用，内置三级 fallback 链：
 
-**Claude（默认，MODEL_PROVIDER=claude）：**
-- API 端点: AIProxy Anthropic Messages API (`aiproxy.superaichao.xin`)
-- API 密钥: `CLAUDE_API_KEY` (环境变量)
-- 模型: `claude-sonnet-4-5-20250929`
-- max_output_tokens: 8192
-- 用途: 题目拆分与分析（gemini_analyzer.py）、7 维特征提取（feature_extractor.py）、报告 LLM 分析（report_insights.py）
+| 优先级 | Provider | 模型 | API 格式 | 中转 |
+|--------|----------|------|----------|------|
+| 1（首选） | claude-opus | `claude-opus-4-6` | Anthropic Messages | AIProxy Kiro |
+| 2（次选） | gpt | `gpt-5.4` | OpenAI Responses | AIProxy CodeX |
+| 3（兜底） | gemini-vecto | `gemini-3-pro-preview` | OpenAI Chat | Vecto |
 
-**GPT（MODEL_PROVIDER=gpt）：**
-- API 端点: AIProxy OpenAI Responses API (`aiproxy.superaichao.xin`)
-- API 密钥: `AIPROXY_OAI_KEY` (环境变量)
-- 模型: `gpt-5.4`
-- max_output_tokens: 16384
+**统一入口**: `llm_client.llm_call(messages, max_tokens, temperature)`
+**配置中枢**: `llm_config.py` 定义 Provider 列表 + `get_providers()` 过滤已配置 key
+**兼容垫片**: `claude_client.py` 保留旧 import 路径，内部重导出 llm_client
 
-> **注意**: `gemini_analyzer.py` 类名历史遗留，实际已全面切换为 Claude Sonnet API。
-> 所有 LLM 调用统一走 `claude_client.py` 的 `send_message_gpt()` 或 `gemini_analyzer.py` 的内部 httpx 客户端，
-> 模型名由 `llm_config.get_model()` 决定，禁止在业务代码硬编码 model 字符串。
+> 每次 LLM 调用独立 fallback。题 A 用 Opus 成功，题 B Opus 超时自动降级 GPT——逐调用粒度，不是整卷切换。
+> 400 Bad Request 不 fallback（prompt 问题），403 会 fallback（可能是模型 ID 过期）。
 
 ---
 
@@ -59,8 +55,9 @@ biology-exam-analyzer/
 │   ├── textbook_router.py   # 教材管理（最大，1672 行，含向量处理）
 │   │
 │   │   # === AI/ML 服务 ===
-│   ├── gemini_analyzer.py   # LLM 多模态分析（实际用 Claude Sonnet，Semaphore=3）— 471 行
-│   ├── claude_client.py     # 统一 LLM 客户端（Claude Anthropic / GPT Responses 双路由）
+│   ├── gemini_analyzer.py   # LLM 多模态分析（通过 llm_client fallback 链）
+│   ├── llm_client.py        # 统一 LLM 客户端（三级 fallback: Opus→GPT→Gemini）
+│   ├── claude_client.py     # 兼容垫片（重导出 llm_client）
 │   ├── feature_extractor.py # 7 维特征提取（通过 claude_client 调用 LLM）
 │   ├── rule_scorer.py       # 非线性规则评分 v2（7 维 + 条件化题型修正, 2-10 分）
 │   ├── difficulty_pipeline.py # 难度评估编排
@@ -102,6 +99,7 @@ biology-exam-analyzer/
 │   ├── scripts/             # 一次性脚本（14 个：批量导入/处理/诊断/向量化）
 │   ├── test_core_modules.py      # 单元测试（37 个：utils/session/calibration/feature/scorer）
 │   ├── test_feature_difficulty.py # 单元测试（28 个：特征提取+难度评分）
+│   ├── test_llm_client.py         # 单元测试（14 个：fallback 链 + 格式转换）
 │   ├── test_report_data.py       # 单元测试（5 个：报告数据聚合）
 │   ├── test_report_insights.py   # 单元测试（3 个：报告 LLM 分析）
 │   ├── test_report_render.py     # 单元测试（14 个：报告渲染）
@@ -189,7 +187,7 @@ DifficultyMapping, ScorePrediction
 - **新增 API**: 创建独立的 `xxx_router.py`，在 `main.py` 中通过 `app.include_router()` 注册
 - **业务逻辑**: 不要写在路由函数里，抽到独立的 service 层或工具模块
 - **避免 main.py 膨胀**: main.py 只负责应用初始化和路由注册，业务逻辑放到对应模块
-- **LLM 调用**: 统一通过 `claude_client.send_message_gpt()` 或 `gemini_analyzer` 实例，模型由 `llm_config.py` 决定
+- **LLM 调用**: 统一通过 `llm_client.llm_call()` 调用，fallback 链自动处理；`claude_client` 为兼容垫片
 
 #### 接口设计
 - 统一使用 `/api/` 前缀
@@ -272,5 +270,4 @@ DifficultyMapping, ScorePrediction
 - **Session 内存管理** — auth_router 的 active_tokens 无定期清理
 - **文档处理器重复** — word_parser_v2/word_splitter/pdf_parser/pdf_splitter/rule_splitter 需统一
 - **calibration.py/task_registry.py 未集成** — 代码完整但无调用方
-- **gemini_analyzer.py 命名误导** — 类名仍为 GeminiAnalyzer 但实际使用 Claude API
 - **frontend/src/src/ 重复** — 存在一层多余的 src/src/ 副本目录
