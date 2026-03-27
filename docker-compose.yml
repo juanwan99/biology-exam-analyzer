@@ -23,7 +23,7 @@ services:
     build: ./backend
     container_name: biology_backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8001:8000"
     volumes:
       - ./backend:/app  # Python代码实时同步，修改后只需重启容器
       - ./logs:/app/logs
@@ -39,6 +39,10 @@ services:
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
       - CLAUDE_API_BASE=${CLAUDE_API_BASE:-https://aiproxy.superaichao.xin/api/v1/anthropic}
+      - AIPROXY_OAI_KEY=${AIPROXY_OAI_KEY}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      - VECTO_API_KEY=${VECTO_API_KEY}
+      - VECTO_API_BASE=${VECTO_API_BASE:-https://api.vectorengine.ai/v1/chat/completions}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,7 +52,7 @@ services:
     build: ./frontend
     container_name: biology_frontend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3001:80"
     depends_on:
       - backend
     restart: unless-stopped
