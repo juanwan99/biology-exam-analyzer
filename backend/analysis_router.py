@@ -13,7 +13,7 @@
 - analyze_question_full      — 单题完整分析
 - generate_exam_statistics   — 整卷统计
 """
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -28,6 +28,7 @@ import base64
 
 from logger import get_logger
 from config import UPLOAD_DIR, REPORTS_DIR
+import credits_service
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
@@ -40,7 +41,6 @@ from deps import (
     get_doc_processor,
     get_word_splitter,
     get_pdf_splitter,
-    get_report_generator,
     MAX_WORKERS,
 )
 
@@ -165,38 +165,45 @@ async def analyze_question_full(
 
 def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) -> Dict:
     """
-    生成整卷统计分析（v3.1优化）
+    生成整卷统计分析（v4.0 分值加权）
 
     统计内容：
     1. 难度分布（简单/中等/困难的题目数量 + 分值分布）
     2. 难度曲线（按题号的难度趋势）
-    3. 认知层级分布
-    4. 知识点频率统计
-    5. 知识点教材分布（v3.1新增）
+    3. 认知层级分布（分值加权）
+    4. 知识点分值加权统计
+    5. 知识点教材分布（分值加权）
+    6. Bloom 认知层级分布（分值加权）
     """
     knowledge_mapper = get_knowledge_mapper()
+
+    BLOOM_LABELS = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
 
     try:
         # 难度分布统计（题目数量）
         difficulty_distribution = {"简单": 0, "中等": 0, "困难": 0}
-        # 新增：基于分值的难度分布
+        # 基于分值的难度分布
         difficulty_distribution_by_score = {
             "简单": {"total_score": 0.0, "count": 0},
             "中等": {"total_score": 0.0, "count": 0},
             "困难": {"total_score": 0.0, "count": 0}
         }
-        difficulty_curve = []  # 难度曲线数据
-        cognitive_levels = []  # 认知层级数据
-        knowledge_points_count = {}  # 知识点频率
-        all_knowledge_points = []  # 收集所有知识点用于映射
+        difficulty_curve = []          # 难度曲线数据（含 total_score）
+        cognitive_levels = []          # 认知层级数据 [{level, total_score}]
+        knowledge_points_weighted = {} # 知识点分值加权
+        kp_with_weights = []           # (kp, weight) 对，用于教材映射
+        bloom_score_accum = {label: 0.0 for label in BLOOM_LABELS.values()}
 
         for q in questions:
+            total_score_val = q.get("total_score", q.get("analysis", {}).get("total_score", 0)) or 1  # fallback 等权
+
             # 1. 难度分布
             if "difficulty" in q and "final_difficulty" in q["difficulty"]:
                 diff_score = q["difficulty"]["final_difficulty"]
                 difficulty_curve.append({
                     "question_id": q.get("id"),
-                    "difficulty": diff_score
+                    "difficulty": diff_score,
+                    "total_score": total_score_val,
                 })
 
                 # 分类统计（题目数量）
@@ -207,28 +214,72 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 else:
                     difficulty_distribution["困难"] += 1
 
-                # 新增：聚合分值分布
+                # 聚合分值分布
                 if "score_distribution_by_difficulty" in q["difficulty"]:
                     score_dist = q["difficulty"]["score_distribution_by_difficulty"]
                     difficulty_distribution_by_score["简单"]["total_score"] += score_dist.get("简单", 0.0)
                     difficulty_distribution_by_score["中等"]["total_score"] += score_dist.get("中等", 0.0)
                     difficulty_distribution_by_score["困难"]["total_score"] += score_dist.get("困难", 0.0)
 
-                # 2. 认知层级
+                # 2. 认知层级（带分值）
                 if "cognitive_level" in q["difficulty"]:
-                    cognitive_levels.append(q["difficulty"]["cognitive_level"])
+                    cognitive_levels.append({
+                        "level": q["difficulty"]["cognitive_level"],
+                        "total_score": total_score_val,
+                    })
 
-            # 3. 知识点统计
+                # 3. Bloom 分值累计（优先使用 bloom_distribution 细粒度分布）
+                features = q.get("difficulty", {}).get("features", {})
+                bloom_dist = features.get("bloom_distribution")
+                if bloom_dist and total_score_val > 0:
+                    dist_total = sum(bloom_dist.values())
+                    if dist_total > 0:
+                        dist_detail = []
+                        for label, count in bloom_dist.items():
+                            if label in bloom_score_accum and count > 0:
+                                bloom_score_accum[label] += total_score_val * (count / dist_total)
+                                dist_detail.append(f"{label}:{count}")
+                        logger.info(f"[Bloom诊断] 题目{q.get('id')}: 分布={{{','.join(dist_detail)}}}, 分值={total_score_val}")
+                    else:
+                        # bloom_distribution 全零，fallback 到单值
+                        bloom_val = features.get("bloom")
+                        if bloom_val is not None:
+                            bloom_label = BLOOM_LABELS.get(int(round(bloom_val)))
+                            if bloom_label:
+                                bloom_score_accum[bloom_label] += total_score_val
+                                logger.info(f"[Bloom诊断] 题目{q.get('id')}: bloom={bloom_val} ({bloom_label}), 分值={total_score_val}")
+                else:
+                    # 无 bloom_distribution，使用单值 bloom
+                    bloom_val = features.get("bloom")
+                    if bloom_val is not None and total_score_val > 0:
+                        bloom_label = BLOOM_LABELS.get(int(round(bloom_val)))
+                        if bloom_label:
+                            bloom_score_accum[bloom_label] += total_score_val
+                            logger.info(f"[Bloom诊断] 题目{q.get('id')}: bloom={bloom_val} ({bloom_label}), 分值={total_score_val}")
+                    else:
+                        logger.warning(f"[Bloom诊断] 题目{q.get('id')}: bloom缺失或分值为0")
+
+            # 4. 知识点分值加权
             if "analysis" in q and "knowledge_points" in q["analysis"]:
-                for kp in q["analysis"]["knowledge_points"]:
-                    knowledge_points_count[kp] = knowledge_points_count.get(kp, 0) + 1
-                    all_knowledge_points.append(kp)
+                kp_list = q["analysis"]["knowledge_points"]
+                kp_weight = total_score_val / len(kp_list) if kp_list else 0
+                for kp in kp_list:
+                    knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + kp_weight
+                    kp_with_weights.append((kp, kp_weight))
 
-        # 计算平均难度
-        avg_difficulty = sum(item["difficulty"] for item in difficulty_curve) / len(difficulty_curve) if difficulty_curve else 0
+        # 分值加权平均难度
+        total_weight = sum(item["total_score"] for item in difficulty_curve)
+        if total_weight > 0:
+            avg_difficulty = sum(item["difficulty"] * item["total_score"] for item in difficulty_curve) / total_weight
+        else:
+            avg_difficulty = 0
 
-        # 计算平均认知层级
-        avg_cognitive = sum(cognitive_levels) / len(cognitive_levels) if cognitive_levels else 0
+        # 分值加权平均认知层级
+        cog_weight = sum(item["total_score"] for item in cognitive_levels)
+        if cog_weight > 0:
+            avg_cognitive = sum(item["level"] * item["total_score"] for item in cognitive_levels) / cog_weight
+        else:
+            avg_cognitive = 0
 
         # 计算分值分布的百分比
         total_score = sum(item["total_score"] for item in difficulty_distribution_by_score.values())
@@ -238,65 +289,83 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 if total_score > 0 else 0
             )
 
-        # v3.1新增：知识点教材映射
+        # Bloom 分布归一化
+        bloom_total = sum(bloom_score_accum.values())
+        bloom_distribution = {
+            k: round(v / bloom_total, 3) if bloom_total > 0 else 0
+            for k, v in bloom_score_accum.items()
+        }
+
+        # 知识点教材映射（分值加权）
+        all_knowledge_points = [kp for kp, _ in kp_with_weights]
+        kp_weight_list = [w for _, w in kp_with_weights]
         logger.info(f"[知识点映射] 开始映射 {len(all_knowledge_points)} 个知识点到教材")
         mapped_points = knowledge_mapper.map_knowledge_points(all_knowledge_points)
 
-        # 按教材聚合
         textbook_distribution = {
-            "必修1": {"count": 0, "chapters": {}},
-            "必修2": {"count": 0, "chapters": {}},
-            "选择性必修1": {"count": 0, "chapters": {}},
-            "选择性必修2": {"count": 0, "chapters": {}},
-            "选择性必修3": {"count": 0, "chapters": {}}
+            tb: {"weighted_score": 0.0, "chapters": {}}
+            for tb in ["必修1", "必修2", "选择性必修1", "选择性必修2", "选择性必修3"]
         }
 
-        for mapped in mapped_points:
+        for i, mapped in enumerate(mapped_points):
             if mapped["mapped"]:
                 textbook = mapped["textbook"]
                 chapter = mapped["chapter"]
-                textbook_distribution[textbook]["count"] += 1
+                weight = kp_weight_list[i]
+                textbook_distribution[textbook]["weighted_score"] += weight
 
                 if chapter not in textbook_distribution[textbook]["chapters"]:
                     textbook_distribution[textbook]["chapters"][chapter] = {
                         "name": mapped["chapter_name"],
-                        "count": 0
+                        "weighted_score": 0.0,
                     }
-                textbook_distribution[textbook]["chapters"][chapter]["count"] += 1
+                textbook_distribution[textbook]["chapters"][chapter]["weighted_score"] += weight
 
         # 计算教材占比
-        total_mapped = sum(item["count"] for item in textbook_distribution.values())
+        total_mapped_weight = sum(item["weighted_score"] for item in textbook_distribution.values())
         for textbook in textbook_distribution:
             textbook_distribution[textbook]["percentage"] = (
-                round((textbook_distribution[textbook]["count"] / total_mapped * 100), 1)
-                if total_mapped > 0 else 0
+                round((textbook_distribution[textbook]["weighted_score"] / total_mapped_weight * 100), 1)
+                if total_mapped_weight > 0 else 0
             )
 
-        logger.info(f"[知识点映射] 完成映射，成功映射 {total_mapped}/{len(all_knowledge_points)} 个知识点")
+        logger.info(f"[知识点映射] 完成映射，加权总分 {total_mapped_weight:.1f}")
 
-        # 知识点排序（前10）
+        # 知识点排序（前10，按分值加权）
         top_knowledge_points = sorted(
-            knowledge_points_count.items(),
+            knowledge_points_weighted.items(),
             key=lambda x: x[1],
             reverse=True
         )[:10]
 
         return {
-            "difficulty_distribution": difficulty_distribution,  # 保留向后兼容
-            "difficulty_distribution_by_score": difficulty_distribution_by_score,  # 新增字段
+            "difficulty_distribution": difficulty_distribution,
+            "difficulty_distribution_by_score": difficulty_distribution_by_score,
             "difficulty_curve": difficulty_curve,
             "avg_difficulty": round(avg_difficulty, 2),
             "avg_cognitive_level": round(avg_cognitive, 2),
             "top_knowledge_points": [
-                {"name": kp, "count": count} for kp, count in top_knowledge_points
+                {"name": kp, "weighted_score": round(score, 1)} for kp, score in top_knowledge_points
             ],
-            "knowledge_textbook_distribution": textbook_distribution,  # v3.1新增
-            "competency_distribution": competency_summary  # 直接引用素养分布
+            "knowledge_textbook_distribution": textbook_distribution,
+            "competency_distribution": competency_summary,
+            "bloom_distribution": bloom_distribution,
         }
 
     except Exception as e:
         logger.error(f"[整卷统计] 失败: {str(e)}", exc_info=True)
         return {"error": str(e)}
+
+
+def _build_competency_list(questions):
+    """构建带 _total_score 的素养列表，供分值加权聚合"""
+    result = []
+    for q in questions:
+        if "error" not in q.get("competency", {}):
+            comp = dict(q.get("competency", {}))
+            comp["_total_score"] = q.get("total_score", q.get("analysis", {}).get("total_score", 0)) or 1  # fallback 等权
+            result.append(comp)
+    return result
 
 
 # ============ 核心 API ============
@@ -305,7 +374,8 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
 async def analyze_document(
     file: UploadFile = File(...),
     mode: AnalysisMode = Form(AnalysisMode.FAST),
-    generate_report: bool = Form(False)
+    generate_report: bool = Form(False),
+    report_mode: str = Form("full"),
 ):
     """
     主接口：上传文档并完成完整分析流程
@@ -329,7 +399,6 @@ async def analyze_document(
     doc_processor = get_doc_processor()
     difficulty_engine = get_difficulty_engine()
     competency_analyzer = get_competency_analyzer()
-    report_generator = get_report_generator()
 
     start_time = datetime.now()
     logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
@@ -373,7 +442,7 @@ async def analyze_document(
         # 3. Gemini拆分题目（传递提取的文字）
         if not gemini_analyzer:
             raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
-        questions = gemini_analyzer.split_questions(image_bytes, extracted_text=extracted_text)
+        questions = await gemini_analyzer.split_questions(image_bytes, extracted_text=extracted_text)
         logger.info(f"题目拆分完成，共{len(questions)}道题")
 
         # 【调试】打印第一道题的内容，检查是否包含选项
@@ -488,40 +557,47 @@ async def analyze_document(
                 logger.error(f"题目{question.get('id')}素养分析失败: {str(e)}")
                 question["competency"] = {"error": str(e)}
 
-        # 7. 聚合素养统计
+        # 7. 聚合素养统计（分值加权）
         try:
-            competency_list = [q.get("competency", {}) for q in questions if "error" not in q.get("competency", {})]
+            competency_list = _build_competency_list(questions)
             competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
             logger.info(f"素养聚合完成，主要素养: {competency_summary.get('primary_competency', 'N/A')}")
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {"error": str(e)}
 
-        # 8. 生成PDF报告（可选）
+        # 8. 计算整卷统计（新增，原来此 endpoint 没有）
+        try:
+            exam_statistics = generate_exam_statistics(questions, competency_summary)
+        except Exception as e:
+            logger.error(f"整卷统计失败: {str(e)}")
+            exam_statistics = {}
+
+        # 9. 生成PDF报告（可选）
         report_url = None
+        report_error = None
         if generate_report:
             try:
+                from report_data import aggregate_report_data
+                from report_insights import generate_insights
+                from report_generator import generate_pdf_report as gen_pdf
+
                 logger.info("开始生成PDF报告")
                 exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
                 pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
 
-                report_generator.generate_pdf_report(
-                    questions_analysis=questions,
-                    competency_summary=competency_summary,
-                    exam_info={
-                        "name": file.filename,
-                        "total": len(questions),
-                        "mode": mode,
-                        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    },
-                    output_path=str(pdf_path)
+                rdata = aggregate_report_data(
+                    questions, competency_summary, exam_statistics,
+                    {"name": file.filename, "total": len(questions), "mode": mode},
                 )
+                insights = await generate_insights(rdata, mode=report_mode)
+                gen_pdf(rdata, insights, mode=report_mode, output_path=str(pdf_path))
 
                 report_url = f"/api/reports/{exam_id}.pdf"
-                logger.info(f"报告生成成功: {report_url}")
+                logger.info(f"PDF报告生成成功: {report_url}")
             except Exception as e:
-                logger.error(f"报告生成失败: {str(e)}", exc_info=True)
-                report_url = f"error: {str(e)}"
+                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
+                report_error = f"报告生成失败: {str(e)}"
 
         # 清理上传文件（节省空间）
         file_path.unlink()
@@ -537,7 +613,9 @@ async def analyze_document(
             "total_count": len(questions),
             "processing_time": elapsed,
             "competency_summary": competency_summary,
+            "exam_statistics": exam_statistics,
             "report_url": report_url,
+            "report_error": report_error,
             "mode": mode
         }
 
@@ -546,13 +624,34 @@ async def analyze_document(
         raise HTTPException(500, detail="服务器内部错误")
 
 
+# ============ 积分查询 ============
+
+@router.get("/api/credits/balance")
+async def get_credits_balance(authorization: Optional[str] = Header(None)):
+    """查询当前用户积分余额。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="请先登录")
+    token = authorization[7:]
+    try:
+        user_info = await credits_service.verify_token(token)
+        balance = await credits_service.get_balance(user_info["id"])
+        return {"success": True, "data": {"balance": balance, "analysis_cost": credits_service.ANALYSIS_COST}}
+    except credits_service.InvalidTokenError as e:
+        raise HTTPException(401, detail=str(e))
+    except Exception as e:
+        logger.error(f"[积分] 余额查询失败: {e}")
+        raise HTTPException(500, detail="查询失败")
+
+
 # ============ 规则拆分 + 自动分析 API（v3.3支持PDF）============
 
 @router.post("/api/analyze_auto")
 async def analyze_auto(
     file: UploadFile = File(...),
     mode: AnalysisMode = Form(AnalysisMode.DEEP),
-    generate_report: bool = Form(False)
+    generate_report: bool = Form(False),
+    report_mode: str = Form("full"),
+    authorization: Optional[str] = Header(None),
 ):
     """
     新接口：使用规则拆分 + 自动完整分析（不显示校准页面）
@@ -562,14 +661,35 @@ async def analyze_auto(
     - 使用统一的 analyze_question_full 函数
     - 真正的并发处理（分析+难度+素养一次完成）
     """
+    # === 积分校验 ===
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="请先登录")
+    token = authorization[7:]
+    try:
+        user_info = await credits_service.verify_token(token)
+        user_id = user_info["id"]
+        logger.info(f"[积分] 用户 {user_id} ({user_info.get('email')}) 请求分析")
+    except credits_service.InvalidTokenError as e:
+        raise HTTPException(401, detail=str(e))
+    except Exception as e:
+        logger.error(f"[积分] 认证失败: {e}")
+        raise HTTPException(401, detail="认证失败，请重新登录")
+
+    try:
+        await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题-{file.filename}")
+    except credits_service.InsufficientCreditsError as e:
+        raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+    except Exception as e:
+        logger.error(f"[积分] 扣费失败: {e}")
+        raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+
     doc_processor = get_doc_processor()
     word_splitter = get_word_splitter()
     pdf_splitter = get_pdf_splitter()
     competency_analyzer = get_competency_analyzer()
-    report_generator = get_report_generator()
 
     start_time = datetime.now()
-    logger.info(f"[自动分析] 收到文件: {file.filename}")
+    logger.info(f"[自动分析] 收到文件: {file.filename} (用户 {user_id}, 已扣 {credits_service.ANALYSIS_COST} 积分)")
 
     file_path = None
     file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
@@ -624,43 +744,45 @@ async def analyze_auto(
 
         logger.info(f"所有题目分析完成")
 
-        # 6. 聚合统计数据
+        # 6. 聚合统计数据（分值加权）
         try:
-            competency_list = [q.get("competency", {}) for q in questions if "error" not in q.get("competency", {})]
+            competency_list = _build_competency_list(questions)
             competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {}
 
-        # 7. 生成PDF报告（可选）
-        report_url = None
-        if generate_report:
-            try:
-                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
-
-                report_generator.generate_pdf_report(
-                    questions_analysis=questions,
-                    competency_summary=competency_summary,
-                    exam_info={
-                        "name": file.filename,
-                        "total": len(questions),
-                        "mode": mode
-                    },
-                    output_path=str(pdf_path)
-                )
-
-                report_url = f"/api/reports/{exam_id}.pdf"
-                logger.info(f"PDF报告生成成功: {report_url}")
-            except Exception as e:
-                logger.error(f"PDF生成失败: {str(e)}")
-
-        # 8. 计算整卷统计
+        # 7. 计算整卷统计（移到 PDF 生成之前）
         try:
             exam_statistics = generate_exam_statistics(questions, competency_summary)
         except Exception as e:
             logger.error(f"整卷统计失败: {str(e)}")
             exam_statistics = {}
+
+        # 8. 生成PDF报告（可选）
+        report_url = None
+        report_error = None
+        if generate_report:
+            try:
+                from report_data import aggregate_report_data
+                from report_insights import generate_insights
+                from report_generator import generate_pdf_report as gen_pdf
+
+                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
+
+                rdata = aggregate_report_data(
+                    questions, competency_summary, exam_statistics,
+                    {"name": file.filename, "total": len(questions), "mode": mode},
+                )
+                insights = await generate_insights(rdata, mode=report_mode)
+                gen_pdf(rdata, insights, mode=report_mode, output_path=str(pdf_path))
+
+                report_url = f"/api/reports/{exam_id}.pdf"
+                logger.info(f"PDF报告生成成功: {report_url}")
+            except Exception as e:
+                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
+                report_error = f"报告生成失败: {str(e)}"
 
         # 8.5 分数预估（如果数据库可用）
         score_prediction = None
@@ -717,7 +839,8 @@ async def analyze_auto(
             "mode": mode,
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
-            "report_url": report_url
+            "report_url": report_url,
+            "report_error": report_error,
         }
 
         # 添加分数预估（如果有）
@@ -862,7 +985,8 @@ async def confirm_split(
     session_id: str = Form(...),
     corrected_questions: str = Form(...),  # JSON字符串
     mode: AnalysisMode = Form(AnalysisMode.FAST),
-    generate_report: bool = Form(False)
+    generate_report: bool = Form(False),
+    report_mode: str = Form("full"),
 ):
     """
     第二阶段：确认拆分结果（人工修正后）并继续分析（v3.0：使用Word媒体数据）
@@ -877,7 +1001,6 @@ async def confirm_split(
         完整分析结果（同/api/analyze）
     """
     competency_analyzer = get_competency_analyzer()
-    report_generator = get_report_generator()
 
     start_time = datetime.now()
     logger.info(f"[确认拆分] session_id={session_id}, mode={mode}")
@@ -980,49 +1103,53 @@ async def confirm_split(
 
         logger.info("[确认拆分] 所有题目分析完成")
 
-        # 6. 聚合素养统计
+        # 6. 聚合素养统计（分值加权）
         try:
-            competency_list = [q.get("competency", {}) for q in questions_with_media if "error" not in q.get("competency", {})]
+            competency_list = _build_competency_list(questions_with_media)
             competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {"error": str(e)}
 
-        # 7. 生成PDF报告（可选）
+        # 7. 计算整卷统计（移到 PDF 生成之前）
+        logger.info("[确认拆分] 开始生成整卷统计分析")
+        try:
+            exam_statistics = generate_exam_statistics(questions_with_media, competency_summary)
+        except Exception as e:
+            logger.error(f"整卷统计失败: {str(e)}")
+            exam_statistics = {}
+
+        # 8. 生成PDF报告（可选）
         report_url = None
+        report_error = None
         if generate_report:
             try:
+                from report_data import aggregate_report_data
+                from report_insights import generate_insights
+                from report_generator import generate_pdf_report as gen_pdf
+
                 logger.info("[确认拆分] 开始生成PDF报告")
                 exam_id = session_id
                 pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
 
-                report_generator.generate_pdf_report(
-                    questions_analysis=questions_with_media,
-                    competency_summary=competency_summary,
-                    exam_info={
-                        "name": session_data["filename"],
-                        "total": len(questions_with_media),
-                        "mode": mode,
-                        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    },
-                    output_path=str(pdf_path)
+                rdata = aggregate_report_data(
+                    questions_with_media, competency_summary, exam_statistics,
+                    {"name": session_data["filename"], "total": len(questions_with_media), "mode": mode},
                 )
+                insights = await generate_insights(rdata, mode=report_mode)
+                gen_pdf(rdata, insights, mode=report_mode, output_path=str(pdf_path))
 
                 report_url = f"/api/reports/{exam_id}.pdf"
                 logger.info(f"报告生成成功: {report_url}")
             except Exception as e:
                 logger.error(f"报告生成失败: {str(e)}", exc_info=True)
-                report_url = f"error: {str(e)}"
+                report_error = f"报告生成失败: {str(e)}"
 
-        # 8. 清理临时文件
+        # 9. 清理临时文件
         file_path = Path(session_data["file_path"])
         if file_path.exists():
             file_path.unlink()
             logger.debug(f"已删除临时文件: {file_path}")
-
-        # 9. 生成整卷统计分析
-        logger.info("[确认拆分] 开始生成整卷统计分析")
-        exam_statistics = generate_exam_statistics(questions_with_media, competency_summary)
 
         # 10. 计算耗时
         elapsed = (datetime.now() - start_time).total_seconds()
@@ -1034,8 +1161,9 @@ async def confirm_split(
             "total_count": len(questions_with_media),
             "processing_time": elapsed,
             "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,  # v3.0新增：整卷统计
+            "exam_statistics": exam_statistics,
             "report_url": report_url,
+            "report_error": report_error,
             "mode": mode
         }
 

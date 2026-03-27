@@ -13,7 +13,6 @@ logger = get_logger()
 
 # ============ 环境变量 ============
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_BASE = os.getenv("GEMINI_API_BASE")
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "21"))
 
 # ============ 惰性单例 ============
@@ -31,11 +30,12 @@ _report_generator = None
 def get_gemini_analyzer():
     global _gemini_analyzer
     if _gemini_analyzer is None:
-        if not GEMINI_API_KEY:
-            logger.warning("未配置GEMINI_API_KEY，AI 分析功能不可用")
+        from llm_config import get_providers
+        if not get_providers():
+            logger.warning("无可用 LLM provider（请检查 API key 配置），AI 分析功能不可用")
             return None
         from gemini_analyzer import GeminiAnalyzer
-        _gemini_analyzer = GeminiAnalyzer(GEMINI_API_KEY, api_base=GEMINI_API_BASE)
+        _gemini_analyzer = GeminiAnalyzer()
     return _gemini_analyzer
 
 
@@ -97,6 +97,7 @@ def get_pdf_splitter():
 
 
 def get_report_generator():
+    """Deprecated: 使用 report_generator.generate_pdf_report() 模块函数。"""
     global _report_generator
     if _report_generator is None:
         from report_generator import ReportGenerator
