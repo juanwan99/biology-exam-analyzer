@@ -380,6 +380,21 @@ def parse_big_question_features(raw: str) -> dict | None:
                         except json.JSONDecodeError:
                             pass
                         break
+    # 策略 4: 截断修复（与 parse_features 一致）
+    if data is None and raw.count('{') > raw.count('}'):
+        logger.warning(f"[大题解析] 疑似截断：{{ 数={raw.count('{')}, }} 数={raw.count('}')}, 原始长度={len(raw)}")
+        last_brace = raw.rfind('}')
+        if last_brace > 0:
+            try:
+                candidate = raw[:last_brace + 1]
+                candidate = re.sub(r',\s*"[^"]*":\s*"?[^"{}]*$', '', candidate)
+                if not candidate.endswith('}'):
+                    candidate += '}'
+                data = json.loads(candidate)
+                logger.info(f"[大题解析] 截断修复成功，恢复了 {len(data)} 个字段")
+            except (json.JSONDecodeError, Exception):
+                pass
+
     if not isinstance(data, dict):
         logger.warning(f"[大题解析] JSON 解析失败，原始长度={len(raw)}")
         return None
@@ -413,6 +428,7 @@ def parse_big_question_features(raw: str) -> dict | None:
     # dependencies
     deps_raw = data.get("dependencies", [])
     dependencies = []
+    dropped_deps = 0
     valid_ids = {sq["id"] for sq in subquestions}
     if isinstance(deps_raw, list):
         for dep in deps_raw:
@@ -425,6 +441,13 @@ def parse_big_question_features(raw: str) -> dict | None:
                     "from": fr, "to": to, "strength": strength,
                     "reason": str(dep.get("reason", ""))[:30],
                 })
+            else:
+                dropped_deps += 1
+    if dropped_deps > 0:
+        logger.warning(f"[大题解析] 丢弃 {dropped_deps} 条无效依赖（ID 不存在或 strength 非法）")
+        if dropped_deps >= len(deps_raw) and len(deps_raw) > 0:
+            logger.warning("[大题解析] 所有依赖均无效，视为依赖图矛盾，触发 fallback")
+            return None
 
     # global_features
     gf_raw = data.get("global_features", {})

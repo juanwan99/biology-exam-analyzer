@@ -536,12 +536,25 @@ class TestBigQuestionPipeline:
             )
         assert result["features"] is not None
         assert "big_question_fallback" not in (result.get("flags") or [])
+        assert "_big_question" not in result["features"], "选择题不应有 _big_question 元数据"
 
     def test_boundary_score_8_triggers_big(self):
         """total_score = 8 → 触发大题路径。"""
-        structured = self._q21_structured_features()
+        structured_8 = {
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 4,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "strong", "reason": "前问结论"},
+            ],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "report": {"bloom": 4},
+        }
         with patch("difficulty_pipeline.extract_big_question_features",
-                   new_callable=AsyncMock, return_value=structured):
+                   new_callable=AsyncMock, return_value=structured_8):
             pipeline = DifficultyPipeline()
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
@@ -550,6 +563,7 @@ class TestBigQuestionPipeline:
                 })
             )
         assert result["features"] is not None
+        assert "_big_question" in result["features"], "total_score=8 应走大题路径"
 
     def test_boundary_score_7_stays_v3(self):
         """total_score = 7 → 不触发大题路径。"""
@@ -568,6 +582,7 @@ class TestBigQuestionPipeline:
                 })
             )
         assert result["features"] is not None
+        assert "_big_question" not in result["features"], "total_score=7 不应走大题路径"
 
     def test_fallback_on_parse_failure(self):
         """结构化解析失败 → fallback 到 v3 原路径。"""
@@ -666,6 +681,8 @@ class TestBigQuestionPipeline:
                 })
             )
         assert "big_question_fallback" in result.get("flags", [])
+        assert "_big_question" not in result["features"], "points 偏差 fallback 后不应有 _big_question"
+        assert result["confidence"] < 0.7, f"fallback 后 confidence 应 <0.7，实际 {result['confidence']}"
 
 
 

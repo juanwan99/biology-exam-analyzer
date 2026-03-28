@@ -386,12 +386,13 @@ class TestCriticalPath:
         assert path_steps == 4
 
     def test_cycle_returns_single_node(self):
-        """环依赖 -> 退化为单节点（不崩溃）。A-001"""
+        """环依赖 -> 退化为最大 steps 的单节点。A-001"""
         sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
         deps = [self._dep(1, 2), self._dep(2, 3), self._dep(3, 1)]  # cycle
         path_nodes, path_steps = self.find(sqs, deps)
-        assert len(path_nodes) >= 1
-        assert path_steps > 0
+        assert len(path_nodes) == 1, f"环应退化为单节点，实际 {len(path_nodes)} 个"
+        assert path_nodes[0]["id"] == 3, f"应选最大 steps 节点(id=3,steps=5)，实际 id={path_nodes[0]['id']}"
+        assert path_steps == 5, f"步数应为 5，实际 {path_steps}"
 
     def test_self_loop_ignored(self):
         """自环 -> 忽略自环边。A-001"""
