@@ -7,6 +7,7 @@ import json
 from typing import Dict, List, Any
 from logger import get_logger
 from config import RULES_DIR, PROMPT_DIR
+from llm_client import llm_call
 
 logger = get_logger()
 
@@ -24,16 +25,14 @@ class CompetencyAnalyzer:
 
         Args:
             library_path: 素养库JSON文件路径（默认使用config中的路径）
-            gemini_analyzer: Gemini分析器实例（必需，用于LLM分析）
+            gemini_analyzer: 保留兼容性，实际不使用（LLM 调用已迁移到 llm_client）
         """
         self.library_path = library_path or str(RULES_DIR / "competency_library.json")
         self.library = self._load_library()
+        # gemini_analyzer 保留用于 extract_json
         self.gemini_analyzer = gemini_analyzer
 
-        if not self.gemini_analyzer:
-            logger.warning("核心素养分析器未配置Gemini，功能受限")
-        else:
-            logger.info("核心素养分析器初始化完成")
+        logger.info("核心素养分析器初始化完成")
 
     def _load_library(self) -> Dict:
         """加载素养库"""
@@ -63,12 +62,7 @@ class CompetencyAnalyzer:
         Returns:
             {
                 "question_id": 7,
-                "生命观念": {
-                    "涉及": true,
-                    "具体维度": ["进化与适应观"],
-                    "权重": 0.2,
-                    "分析说明": "..."
-                },
+                "生命观念": {...},
                 "科学思维": {...},
                 "科学探究": {...},
                 "社会责任": {...},
@@ -76,10 +70,6 @@ class CompetencyAnalyzer:
                 "competency_level": "高"
             }
         """
-        if not self.gemini_analyzer:
-            logger.error("[素养分析] 未配置Gemini分析器，无法进行分析")
-            return self._get_default_result(question.get("id"))
-
         logger.info(f"[素养分析] 开始分析题目 {question.get('id')}")
 
         try:
@@ -98,25 +88,26 @@ class CompetencyAnalyzer:
                 knowledge_points=", ".join(question.get("knowledge_points", []))
             )
 
-            # 调用Gemini API（使用Flash模型，快速评估）
-            logger.debug(f"[素养分析] 调用API分析题目 {question.get('id')}")
-            response = await self.gemini_analyzer._call_with_retry(
-                model=self.gemini_analyzer.flash_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
+            # 通过统一 LLM 客户端调用（自动 fallback）
+            logger.debug(f"[素养分析] 调用LLM分析题目 {question.get('id')}")
+            response_text = await llm_call(
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
-                temperature=0.1
+                temperature=0.1,
             )
+            logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
 
-            response_text = response.choices[0].message.content
-            logger.debug(f"[素养分析] API响应: {response_text[:200]}...")
+            # 解析JSON — 优先用 gemini_analyzer.extract_json，否则直接解析
+            if self.gemini_analyzer:
+                json_text = self.gemini_analyzer.extract_json(response_text)
+            else:
+                # fallback: 尝试直接从响应中提取 JSON
+                json_text = response_text
+                if "```json" in json_text:
+                    json_text = json_text.split("```json")[1].split("```")[0]
+                elif "```" in json_text:
+                    json_text = json_text.split("```")[1].split("```")[0]
 
-            # 解析JSON
-            json_text = self.gemini_analyzer.extract_json(response_text)
             result = json.loads(json_text)
 
             # 添加题目ID
@@ -155,37 +146,14 @@ class CompetencyAnalyzer:
     def aggregate_exam_competencies(self, questions_competencies: List[Dict]) -> Dict:
         """
         聚合整份试卷的素养覆盖情况
-
-        Args:
-            questions_competencies: 所有题目的素养分析结果列表
-
-        Returns:
-            {
-                "生命观念": {
-                    "题目数": 12,
-                    "总权重": 4.8,
-                    "占比": 0.32,
-                    "细分": {
-                        "结构与功能观": 5,
-                        "稳态与平衡观": 4,
-                        ...
-                    }
-                },
-                "科学思维": {...},
-                "科学探究": {...},
-                "社会责任": {...},
-                "primary_distribution": {
-                    "生命观念": 8,
-                    "科学思维": 12,
-                    "科学探究": 3,
-                    "社会责任": 2
-                }
-            }
         """
         logger.info(f"[素养聚合] 开始聚合 {len(questions_competencies)} 道题目的素养数据")
 
         competencies = ["生命观念", "科学思维", "科学探究", "社会责任"]
         aggregated = {}
+
+        # V1: 分值加权 — 从 _total_score 字段读取（无则 fallback 等权=1）
+        exam_total = sum(q.get("_total_score", 1) for q in questions_competencies)
 
         for comp in competencies:
             # 统计涉及该素养的题目
@@ -194,10 +162,13 @@ class CompetencyAnalyzer:
                 if q.get(comp, {}).get("涉及", False)
             ]
 
-            # 计算总权重
-            total_weight = sum(q.get(comp, {}).get("权重", 0) for q in questions_competencies)
+            # 分值加权总权重: Σ(权重 × 分值)
+            weighted_sum = sum(
+                q.get(comp, {}).get("权重", 0) * q.get("_total_score", 1)
+                for q in questions_competencies
+            )
 
-            # 统计细分维度
+            # 统计细分维度（保留题目数统计，V2 再改加权）
             sub_dimensions = {}
             for q in involved_questions:
                 dims = q.get(comp, {}).get("具体维度", [])
@@ -206,9 +177,9 @@ class CompetencyAnalyzer:
 
             aggregated[comp] = {
                 "题目数": len(involved_questions),
-                "总权重": round(total_weight, 2),
-                "占比": round(total_weight / len(questions_competencies), 3) if questions_competencies else 0,
-                "细分": sub_dimensions
+                "总权重": round(weighted_sum, 2),
+                "占比": round(weighted_sum / exam_total, 3) if exam_total > 0 else 0,
+                "细分": sub_dimensions,
             }
 
         # 统计主要素养分布
@@ -225,6 +196,4 @@ class CompetencyAnalyzer:
 
 # 测试代码
 if __name__ == "__main__":
-    # 需要Gemini分析器才能测试
     print("核心素养分析器模块加载成功")
-    print("使用时需配合Gemini分析器")
