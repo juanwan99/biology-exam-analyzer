@@ -1,0 +1,64 @@
+# Subject: cz-geography
+# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析
+# Source: backend/feature_extractor.py::build_big_question_prompt()
+# Variables: {question_block}, {qtype_hint}
+你是一名资深初中地理命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{{
+  "subquestions": [
+    {{
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }}
+  ],
+  "dependencies": [
+    {{
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }}
+  ],
+  "global_features": {{
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享地图/材料 3=围绕复杂区域多角度深入分析），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分新区域/新情境 3=核心方法超出初中课标要求），
+    "method_novelty_reason": "<=20字"
+  }},
+  "bloom": 1-6, "bloom_distribution": {{}}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}}
+
+**subquestion 类型判例（初中地理）：**
+- 读图填空题：从地图/图表中读取信息填写地名、数据
+- 区域分析题：分析某区域的自然或人文地理特征
+- 原因分析题：解释某一地理现象的成因（以简单因果为主）
+- 比较题：比较两个区域的地理特征异同
+- 方案建议题：针对环境问题提出合理建议（初中以简单建议为主）
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的定位/判读是后一问的前提。不知道前问答案就无法做后问。
+  例：第1问要求读图判断某地的地形类型，第2问要求分析该地形对气候的影响——必须先判断地形才能分析影响。
+- "weak"：前一问的信息有助于后问理解，但不知道前问答案也能部分作答。
+  例：第1问考查某区域的气温特征，第2问考查该区域的降水特征——虽然同一区域但可独立判读。
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有方法在初中教材中有明确介绍（如读地图、分析气温降水图）
+- 2：部分方法需要迁移应用（如运用课内学到的读图方法分析陌生区域）
+- 3：核心方法超出初中课标要求（如要求运用 GIS 概念或复杂的地理建模思维）

@@ -1,0 +1,64 @@
+# Subject: cz-chinese
+# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析
+# Source: backend/feature_extractor.py::build_big_question_prompt()
+# Variables: {question_block}, {qtype_hint}
+你是一名资深初中语文命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{{
+  "subquestions": [
+    {{
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }}
+  ],
+  "dependencies": [
+    {{
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }}
+  ],
+  "global_features": {{
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享阅读材料 3=围绕复杂文本多角度深入分析），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分新文本/新视角 3=核心方法要求课外阅读素养），
+    "method_novelty_reason": "<=20字"
+  }},
+  "bloom": 1-6, "bloom_distribution": {{}}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}}
+
+**subquestion 类型判例（初中语文）：**
+- 默写填空题：根据提示补写名篇名句
+- 文言文阅读题：实词解释、句子翻译、内容理解
+- 现代文阅读题：概括内容、理解词句含义、分析写作手法、把握情感主旨
+- 名著阅读题：人物分析、情节概括、阅读感悟
+- 作文题：审题立意→选材组织→语言表达（整体为一个 subquestion）
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的理解是后一问的前提。不知道前问答案就无法做后问。
+  例：第1问要求概括文章主要内容，第2问要求分析作者通过这些内容表达的情感——必须先概括才能分析情感。
+- "weak"：前一问的理解有助于后问，但不知道前问答案也能部分作答。
+  例：第1问解释文中某个词语含义，第2问赏析某个句子——词语理解有助于句子赏析但非必须。
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有方法在初中教材中有明确介绍（如概括段意、分析修辞）
+- 2：部分方法需要迁移应用（如运用课内学到的赏析方法分析课外文本）
+- 3：核心方法在教材中完全没有（如文学批评视角、比较文学方法）
