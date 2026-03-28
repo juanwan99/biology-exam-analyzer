@@ -124,6 +124,23 @@ class TestCriticalPath:
         assert len(path_nodes) == 1
         assert path_steps == 4
 
+    def test_cycle_returns_single_node(self):
+        """环依赖 -> 退化为单节点（不崩溃）。"""
+        sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
+        deps = [self._dep(1, 2), self._dep(2, 3), self._dep(3, 1)]  # cycle
+        path_nodes, path_steps = self.find(sqs, deps)
+        assert len(path_nodes) >= 1
+        assert path_steps > 0
+
+    def test_self_loop_ignored(self):
+        """自环 -> 忽略自环边。"""
+        sqs = [self._sq(1, 3), self._sq(2, 4)]
+        deps = [self._dep(1, 1), self._dep(1, 2)]  # self-loop on 1
+        path_nodes, path_steps = self.find(sqs, deps)
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2]
+        assert path_steps == 7
+
 
 class TestAggregation:
     """aggregate_big_question 特征聚合测试。"""
@@ -226,7 +243,8 @@ def find_critical_path(subquestions: list, dependencies: list) -> tuple:
     ids = [sq["id"] for sq in subquestions]
 
     # 只保留 strong 依赖
-    strong_edges = [(d["from"], d["to"]) for d in dependencies if d.get("strength") == "strong"]
+    strong_edges = [(d["from"], d["to"]) for d in dependencies
+                   if d.get("strength") == "strong" and d["from"] != d["to"]]
     if not strong_edges:
         best = max(subquestions, key=lambda s: s["reasoning_steps"])
         return [best], best["reasoning_steps"]
@@ -250,6 +268,11 @@ def find_critical_path(subquestions: list, dependencies: list) -> tuple:
             in_degree[nxt] -= 1
             if in_degree[nxt] == 0:
                 queue.append(nxt)
+
+    # Cycle detection
+    if len(topo_order) < len(ids):
+        best = max(subquestions, key=lambda s: s["reasoning_steps"])
+        return [best], best["reasoning_steps"]
 
     # DP 最长路径（权重 = reasoning_steps）
     dist = {i: sq_map[i]["reasoning_steps"] for i in ids}

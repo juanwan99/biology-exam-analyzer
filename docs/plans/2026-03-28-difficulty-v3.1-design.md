@@ -270,7 +270,7 @@ v3.1 评分（代入 compute_difficulty）：
 
 大题结构化提取失败时（JSON 解析失败 / subquestions 缺失 / 依赖图矛盾）：
 1. fallback 到 v3 原路径（整题扁平特征 → compute_difficulty）
-2. 在 features 中标记 `"big_question_fallback": true`
+2. 在 flags 列表中追加 `"big_question_fallback"`
 3. confidence 额外扣 0.15
 
 ## §10 未来扩展（v3.2 方向，本次不做）
