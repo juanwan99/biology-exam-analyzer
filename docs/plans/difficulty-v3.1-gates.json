@@ -1,0 +1,18 @@
+{
+  "topic": "difficulty-v3.1",
+  "plan_file": "docs/plans/2026-03-28-difficulty-v3.1-plan.md",
+  "design_file": "docs/plans/2026-03-28-difficulty-v3.1-design.md",
+  "gates": [
+    {
+      "gate": "plan_review",
+      "required": true,
+      "status": "pass",
+      "reviewer": "gpt",
+      "timestamp": "2026-03-28 11:42:05",
+      "report": "docs/plans/2026-03-28-difficulty-v3.1-plan-review.md",
+      "subject_ref": "docs/plans/2026-03-28-difficulty-v3.1-plan.md",
+      "notes": "FAIL -> 6 findings processed -> all HIGH/MED addressed via plan amendments",
+      "subject_hash": "063f19dd77e207f1757f12b330097e4108bf27c2294346a8675686e59a2ea071"
+    }
+  ]
+}
