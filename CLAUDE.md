@@ -58,9 +58,9 @@ biology-exam-analyzer/
 │   ├── gemini_analyzer.py   # LLM 多模态分析（通过 llm_client fallback 链）
 │   ├── llm_client.py        # 统一 LLM 客户端（三级 fallback: Opus→GPT→Gemini）
 │   ├── claude_client.py     # 兼容垫片（重导出 llm_client）
-│   ├── feature_extractor.py # 7 维特征提取（通过 claude_client 调用 LLM）
-│   ├── rule_scorer.py       # 非线性规则评分 v2（7 维 + 条件化题型修正, 2-10 分）
-│   ├── difficulty_pipeline.py # 难度评估编排
+│   ├── feature_extractor.py # 特征提取（v3 扁平 + v3.1 大题结构化）
+│   ├── rule_scorer.py       # 规则评分 v3 + v3.1 大题聚合（关键路径模型）
+│   ├── difficulty_pipeline.py # 难度评估编排（v3.1 大题分流）
 │   ├── difficulty_mapper.py # 难度映射（573 行）
 │   ├── calibration.py       # Isotonic Regression 校准（未集成）
 │   ├── competency_analyzer.py # 素养分析

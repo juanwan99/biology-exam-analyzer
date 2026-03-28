@@ -666,3 +666,81 @@ class TestBigQuestionPipeline:
                 })
             )
         assert "big_question_fallback" in result.get("flags", [])
+
+
+
+class TestQ21EndToEnd:
+    """Q21 端到端验证：v3.1 修正低估。"""
+
+    def test_q21_score_at_least_9(self):
+        """Q21（14分番茄红素 PSY 融合蛋白）评分应 >= 9.0。"""
+        structured = {
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 3, "points": 6, "working_memory": 4, "reasoning_steps": 4,
+                 "trap_density": 3, "novelty": 3, "knowledge_breadth": 2},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "weak", "reason": "背景知识"},
+                {"from": 2, "to": 3, "strength": "strong", "reason": "改造方案"},
+            ],
+            "global_features": {"shared_context_load": 2, "global_method_novelty": 3},
+            "report": {"bloom": 5, "info_density": 3, "representation_complexity": 2},
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "番茄红素PSY融合蛋白实验...",
+                    "question_type": "实验题",
+                    "correct_answer": "见解析",
+                    "total_score": 14,
+                })
+            )
+        score = result["final_difficulty"]
+        assert score >= 9.0, f"Q21 v3.1 应 >=9.0（修正 v3 的 8.2），实际 {score}"
+        assert score <= 10.0
+        assert "_big_question" in result["features"]
+        assert len(result["features"]["_big_question"]["subquestions"]) == 3
+
+    def test_parallel_big_question_not_overscored(self):
+        """A-005: 并列大题不应被过度提升。
+
+        入口: pipeline.evaluate_with_refinement(parallel_question)
+        反例: 错误实现可能对并列大题也应用关键路径加成——本测试验证无 strong 依赖时不过度提升
+        边界: 全并列 / 混合 strong+weak / 单小问大题
+        回归: 防止 v3.1 引入并列大题系统性高估
+        命令: docker-compose exec -T backend python -m pytest test_feature_difficulty.py::TestQ21EndToEnd::test_parallel_big_question_not_overscored -v
+        """
+        structured = {
+            "subquestions": [
+                {"id": 1, "points": 3, "working_memory": 3, "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 3, "working_memory": 3, "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 3, "points": 3, "working_memory": 3, "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 4, "points": 3, "working_memory": 3, "reasoning_steps": 2,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "report": {"bloom": 3, "info_density": 2, "representation_complexity": 1},
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "并列简答题...",
+                    "question_type": "简答题",
+                    "correct_answer": "",
+                    "total_score": 12,
+                })
+            )
+        score = result["final_difficulty"]
+        assert score < 7.0, f"全并列简单大题不应超 7.0，实际 {score}"
