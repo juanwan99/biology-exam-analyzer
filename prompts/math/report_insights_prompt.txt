@@ -18,7 +18,7 @@
 - Top10 知识点: {top_points}
 
 ## 6维特征均值
-{feature_avg}
+{avg_per_dimension}
 - 对难度贡献最大的3个维度: {top_difficulty_factors}
 
 ## 素养分布

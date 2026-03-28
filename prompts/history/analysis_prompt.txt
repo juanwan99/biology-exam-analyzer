@@ -1,8 +1,9 @@
 **分节信息**：{section_header}
+**题型**：{question_type}
 
 请深入分析这道高中历史题目，返回纯JSON格式（不要markdown代码块）：
 
-{{
+{
     "knowledge_points": ["知识点1", "知识点2", "知识点3"],
     "detailed_analysis": "解题分析（严格控制在100字以内）",
     "difficulty": "简单/中等/困难",
@@ -16,13 +17,13 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
-        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
     ],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
     ]
-}}
+}
 
 **分析要求**：
 
@@ -97,16 +98,16 @@
    - 示例（材料分析题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中反映的经济现象：商品经济发展、城市繁荣"}},
-         {{"sub_id": 2, "difficulty_score": 6.5, "answer": "原因：政治统一、交通发达、手工业进步、对外贸易"}},
-         {{"sub_id": 3, "difficulty_score": 8.0, "answer": "评价：促进社会转型但受封建制度制约，与同期西方比较"}}
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中反映的经济现象：商品经济发展、城市繁荣"},
+         {"sub_id": 2, "difficulty_score": 6.5, "answer": "原因：政治统一、交通发达、手工业进步、对外贸易"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "评价：促进社会转型但受封建制度制约，与同期西方比较"}
      ]
      ```
 
    - 示例（论述题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 9.0, "answer": "自拟论题并用史实论证，要求论题明确、史实准确、论证充分、逻辑清晰"}}
+         {"sub_id": 1, "difficulty_score": 9.0, "answer": "自拟论题并用史实论证，要求论题明确、史实准确、论证充分、逻辑清晰"}
      ]
      ```
 
@@ -132,7 +133,7 @@
 
 **示例输出（选择题 - 古代史）**：
 
-{{
+{
     "knowledge_points": ["科举制", "隋唐政治制度", "选官制度演变"],
     "detailed_analysis": "核心考点：科举制的特点与影响。解题关键：区分科举制与察举制、九品中正制的本质差异——以考试成绩为标准。思维难点：混淆科举制"公平性"与"局限性"的关系。",
     "difficulty": "中等",
@@ -146,17 +147,17 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了察举制的特征"}},
-        {{"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""}},
-        {{"option": "C", "difficulty_score": 5.5, "is_correct": false, "error_reason": "夸大了科举制的社会流动效果"}},
-        {{"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "明显的时间错误"}}
+        {"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了察举制的特征"},
+        {"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 5.5, "is_correct": false, "error_reason": "夸大了科举制的社会流动效果"},
+        {"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "明显的时间错误"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（选择题 - 近代史）**：
 
-{{
+{
     "knowledge_points": ["洋务运动", "近代化探索", "中体西用"],
     "detailed_analysis": "核心考点：洋务运动的目的与局限。解题关键：理解'中体西用'的实质——维护封建统治而非推动社会转型。思维难点：不能因洋务运动引进技术就认为其是资产阶级改革。",
     "difficulty": "中等",
@@ -170,17 +171,17 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了维新派的主张"}},
-        {{"option": "B", "difficulty_score": 4.5, "is_correct": false, "error_reason": "忽略了阶级局限性"}},
-        {{"option": "C", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""}},
-        {{"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "时间错位，属于清末新政内容"}}
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了维新派的主张"},
+        {"option": "B", "difficulty_score": 4.5, "is_correct": false, "error_reason": "忽略了阶级局限性"},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "时间错位，属于清末新政内容"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（材料分析题 - 有子题）**：
 
-{{
+{
     "knowledge_points": ["明清经济", "商品经济发展", "资本主义萌芽", "海禁政策"],
     "detailed_analysis": "核心考点：明清商品经济发展与资本主义萌芽。解题关键：①从材料提取经济现象；②联系封建制度分析制约因素；③中西对比视角。思维难点：区分商品经济发展与资本主义萌芽的本质差异。",
     "difficulty": "困难",
@@ -195,11 +196,11 @@
     "num_options": 0,
     "option_difficulty_breakdown": [],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中明清商品经济发展的表现"}},
-        {{"sub_id": 2, "difficulty_score": 6.5, "answer": "分析制约资本主义萌芽发展的因素"}},
-        {{"sub_id": 3, "difficulty_score": 8.5, "answer": "与同期西方比较，评价中国经济发展的特点与局限"}}
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中明清商品经济发展的表现"},
+        {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析制约资本主义萌芽发展的因素"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "与同期西方比较，评价中国经济发展的特点与局限"}
     ]
-}}
+}
 
 **注意事项**：
 - ⚠️ detailed_analysis必须严格控制在100字以内

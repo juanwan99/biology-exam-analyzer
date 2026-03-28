@@ -6,7 +6,7 @@
 
 请分析这道英语题目，返回纯JSON格式（不要markdown代码块）：
 
-{{
+{
     "knowledge_points": ["知识点1", "知识点2", "知识点3"],
     "detailed_analysis": "解题分析（严格控制在100字以内）",
     "difficulty": "简单/中等/困难",
@@ -20,13 +20,13 @@
     "total_score": 2,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
-        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
     ],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
     ]
-}}
+}
 
 **分析要求**：
 
@@ -106,18 +106,18 @@
    - 示例（语法填空）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 3.0, "answer": "was built（一般过去时被动语态）"}},
-         {{"sub_id": 2, "difficulty_score": 5.5, "answer": "which（非限制性定语从句）"}},
-         {{"sub_id": 3, "difficulty_score": 7.0, "answer": "to promote（不定式作目的状语）"}}
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "was built（一般过去时被动语态）"},
+         {"sub_id": 2, "difficulty_score": 5.5, "answer": "which（非限制性定语从句）"},
+         {"sub_id": 3, "difficulty_score": 7.0, "answer": "to promote（不定式作目的状语）"}
      ]
      ```
 
    - 示例（写作题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 6.0, "answer": "内容完整：包含所有要点（邀请/时间/地点/活动）"}},
-         {{"sub_id": 2, "difficulty_score": 7.0, "answer": "语言质量：语法正确+词汇丰富+句式多样"}},
-         {{"sub_id": 3, "difficulty_score": 5.0, "answer": "格式规范：书信格式+字数80-100词"}}
+         {"sub_id": 1, "difficulty_score": 6.0, "answer": "内容完整：包含所有要点（邀请/时间/地点/活动）"},
+         {"sub_id": 2, "difficulty_score": 7.0, "answer": "语言质量：语法正确+词汇丰富+句式多样"},
+         {"sub_id": 3, "difficulty_score": 5.0, "answer": "格式规范：书信格式+字数80-100词"}
      ]
      ```
 
@@ -142,7 +142,7 @@
 
 **示例输出（阅读理解题）**：
 
-{{
+{
     "knowledge_points": ["推理判断", "篇章逻辑", "观点态度", "细节理解"],
     "detailed_analysis": "核心考点：推断作者对科技发展的态度。解题关键：抓住文中关键态度词(however/unfortunately)和论证逻辑（先肯定后转折）。思维难点：区分作者态度与文中引用人物观点。",
     "difficulty": "困难",
@@ -156,17 +156,17 @@
     "total_score": 2.5,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了文中引用专家的观点与作者态度"}},
-        {{"option": "B", "difficulty_score": 6.5, "is_correct": false, "error_reason": "只关注了正面论述，忽略了转折"}},
-        {{"option": "C", "difficulty_score": 7.0, "is_correct": true, "error_reason": ""}},
-        {{"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "态度过于极端，文中无依据"}}
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了文中引用专家的观点与作者态度"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": false, "error_reason": "只关注了正面论述，忽略了转折"},
+        {"option": "C", "difficulty_score": 7.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "态度过于极端，文中无依据"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（完形填空 - 单空）**：
 
-{{
+{
     "knowledge_points": ["词义辨析", "上下文语境", "固定搭配"],
     "detailed_analysis": "核心考点：近义词在特定语境中的辨析。解题关键：根据下文'with great care'推断此处需要表达'小心翼翼地处理'之意。思维难点：四个动词都有'处理'之意但语义侧重不同。",
     "difficulty": "中等",
@@ -180,17 +180,17 @@
     "total_score": 1,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "语义接近但搭配不当"}},
-        {{"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""}},
-        {{"option": "C", "difficulty_score": 4.5, "is_correct": false, "error_reason": "中式思维首选但语域不符"}},
-        {{"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "词义明显不符"}}
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "语义接近但搭配不当"},
+        {"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 4.5, "is_correct": false, "error_reason": "中式思维首选但语域不符"},
+        {"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "词义明显不符"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（读后续写 - 有子题）**：
 
-{{
+{
     "knowledge_points": ["读后续写", "叙事结构", "情感表达", "语言衔接", "高级表达"],
     "detailed_analysis": "核心考点：基于已有语篇的创意续写能力。解题关键：①准确把握原文情节走向和人物性格；②续写内容与原文在逻辑、情感、语言风格上保持一致。思维难点：在创意发挥与原文一致性之间取得平衡。",
     "difficulty": "困难",
@@ -205,10 +205,10 @@
     "num_options": 0,
     "option_difficulty_breakdown": [],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 8.0, "answer": "第一段续写：承接上文，推动情节发展，包含转折或冲突"}},
-        {{"sub_id": 2, "difficulty_score": 8.5, "answer": "第二段续写：情节高潮或解决，情感升华，与全文主题呼应"}}
+        {"sub_id": 1, "difficulty_score": 8.0, "answer": "第一段续写：承接上文，推动情节发展，包含转折或冲突"},
+        {"sub_id": 2, "difficulty_score": 8.5, "answer": "第二段续写：情节高潮或解决，情感升华，与全文主题呼应"}
     ]
-}}
+}
 
 **注意事项**：
 - ⚠️ detailed_analysis必须严格控制在100字以内

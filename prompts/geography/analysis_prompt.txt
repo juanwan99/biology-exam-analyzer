@@ -6,7 +6,7 @@
 
 请分析这道地理题目，返回纯JSON格式（不要markdown代码块）：
 
-{{
+{
     "knowledge_points": ["知识点1", "知识点2", "知识点3"],
     "detailed_analysis": "解题分析（严格控制在100字以内）",
     "difficulty": "简单/中等/困难",
@@ -20,13 +20,13 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
-        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
     ],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
     ]
-}}
+}
 
 **分析要求**：
 
@@ -101,18 +101,18 @@
    - 示例（区域分析题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 4.0, "answer": "描述该区域地形特征：西高东低，以山地丘陵为主"}},
-         {{"sub_id": 2, "difficulty_score": 6.5, "answer": "分析河流水文特征成因：降水集中+地形坡度大→流量大+含沙量高"}},
-         {{"sub_id": 3, "difficulty_score": 8.0, "answer": "评价该区域农业发展的条件及可持续发展建议"}}
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "描述该区域地形特征：西高东低，以山地丘陵为主"},
+         {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析河流水文特征成因：降水集中+地形坡度大→流量大+含沙量高"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "评价该区域农业发展的条件及可持续发展建议"}
      ]
      ```
 
    - 示例（气候分析题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 3.5, "answer": "判断气候类型：温带季风气候"}},
-         {{"sub_id": 2, "difficulty_score": 5.5, "answer": "分析气候成因：海陆热力性质差异+纬度位置"}},
-         {{"sub_id": 3, "difficulty_score": 7.5, "answer": "比较两地气候差异及对农业生产的影响"}}
+         {"sub_id": 1, "difficulty_score": 3.5, "answer": "判断气候类型：温带季风气候"},
+         {"sub_id": 2, "difficulty_score": 5.5, "answer": "分析气候成因：海陆热力性质差异+纬度位置"},
+         {"sub_id": 3, "difficulty_score": 7.5, "answer": "比较两地气候差异及对农业生产的影响"}
      ]
      ```
 
@@ -139,7 +139,7 @@
 
 **示例输出（等高线选择题）**：
 
-{{
+{
     "knowledge_points": ["等高线判读", "地形特征分析", "河流流向判断"],
     "detailed_analysis": "核心考点：等高线地形图的综合判读。解题关键：根据等高线弯曲方向判断山脊与山谷，确定河流流向。思维难点：等高线弯曲方向与地势高低的对应关系易混淆。",
     "difficulty": "中等",
@@ -153,17 +153,17 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了山脊与山谷的等高线弯曲方向"}},
-        {{"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""}},
-        {{"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "河流流向判断反向"}},
-        {{"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "坡度判断忽略了等高距"}}
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了山脊与山谷的等高线弯曲方向"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "河流流向判断反向"},
+        {"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "坡度判断忽略了等高距"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（综合题 - 有子题）**：
 
-{{
+{
     "knowledge_points": ["河流水文特征", "流域开发", "水资源利用", "可持续发展"],
     "detailed_analysis": "核心考点：流域综合开发与水资源可持续利用。解题关键：①从地形+气候推断水文特征；②结合区域条件分析开发利弊；③从生态+经济+社会三维度评价。思维难点：开发与保护的辩证关系。",
     "difficulty": "困难",
@@ -178,11 +178,11 @@
     "num_options": 0,
     "option_difficulty_breakdown": [],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.5, "answer": "描述河流水文特征：流量、水位、含沙量、结冰期等"}},
-        {{"sub_id": 2, "difficulty_score": 6.5, "answer": "分析流域开发的有利条件和不利因素"}},
-        {{"sub_id": 3, "difficulty_score": 8.5, "answer": "提出流域可持续发展的具体建议（生态+经济+社会）"}}
+        {"sub_id": 1, "difficulty_score": 4.5, "answer": "描述河流水文特征：流量、水位、含沙量、结冰期等"},
+        {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析流域开发的有利条件和不利因素"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "提出流域可持续发展的具体建议（生态+经济+社会）"}
     ]
-}}
+}
 
 **注意事项**：
 - ⚠️ detailed_analysis必须严格控制在100字以内

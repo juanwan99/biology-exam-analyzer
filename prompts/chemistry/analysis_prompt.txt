@@ -1,4 +1,5 @@
 **分节信息**：{section_header}
+**题型**：{question_type}
 
 请深入分析这道高中化学题目，返回纯JSON格式（不要markdown代码块）：
 

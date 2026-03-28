@@ -6,7 +6,7 @@
 
 请分析这道思想政治题目，返回纯JSON格式（不要markdown代码块）：
 
-{{
+{
     "knowledge_points": ["知识点1", "知识点2", "知识点3"],
     "detailed_analysis": "解题分析（严格控制在100字以内）",
     "difficulty": "简单/中等/困难",
@@ -20,13 +20,13 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
-        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
     ],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
     ]
-}}
+}
 
 **分析要求**：
 
@@ -102,16 +102,16 @@
    - 示例（经济生活材料分析题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 5.0, "answer": "材料体现的经济学原理：供给侧结构性改革、市场调节与宏观调控结合"}},
-         {{"sub_id": 2, "difficulty_score": 7.0, "answer": "企业应对措施：技术创新+品牌建设+结构调整+国际化战略"}},
-         {{"sub_id": 3, "difficulty_score": 8.0, "answer": "从国家角度分析如何推动经济高质量发展"}}
+         {"sub_id": 1, "difficulty_score": 5.0, "answer": "材料体现的经济学原理：供给侧结构性改革、市场调节与宏观调控结合"},
+         {"sub_id": 2, "difficulty_score": 7.0, "answer": "企业应对措施：技术创新+品牌建设+结构调整+国际化战略"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "从国家角度分析如何推动经济高质量发展"}
      ]
      ```
 
    - 示例（哲学辨析题）：
      ```json
      "sub_questions": [
-         {{"sub_id": 1, "difficulty_score": 8.5, "answer": "辨析观点的合理性（用联系的普遍性说明）和局限性（用矛盾的特殊性反驳），综合评价"}}
+         {"sub_id": 1, "difficulty_score": 8.5, "answer": "辨析观点的合理性（用联系的普遍性说明）和局限性（用矛盾的特殊性反驳），综合评价"}
      ]
      ```
 
@@ -137,7 +137,7 @@
 
 **示例输出（经济生活选择题）**：
 
-{{
+{
     "knowledge_points": ["供求关系", "价格变动的影响", "互补品与替代品"],
     "detailed_analysis": "核心考点：价格变动对需求量和相关商品的影响。解题关键：区分互补品和替代品在价格变动时的需求变化方向。思维难点：材料涉及多个商品的价格联动，需厘清传导链条。",
     "difficulty": "中等",
@@ -151,17 +151,17 @@
     "total_score": 4,
     "num_options": 4,
     "option_difficulty_breakdown": [
-        {{"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了互补品和替代品的关系"}},
-        {{"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""}},
-        {{"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "价格传导方向判断错误"}},
-        {{"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "概念理解有明显偏差"}}
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了互补品和替代品的关系"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "价格传导方向判断错误"},
+        {"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "概念理解有明显偏差"}
     ],
     "sub_questions": []
-}}
+}
 
 **示例输出（材料分析题 - 有子题）**：
 
-{{
+{
     "knowledge_points": ["社会主义市场经济", "宏观调控", "供给侧结构性改革", "新发展理念"],
     "detailed_analysis": "核心考点：运用经济生活知识分析国家经济政策。解题关键：①从材料提取政策措施并对应经济学原理；②多角度分析政策意义；③从国家和企业双主体提出建议。思维难点：原理与材料精准对接。",
     "difficulty": "困难",
@@ -176,11 +176,11 @@
     "num_options": 0,
     "option_difficulty_breakdown": [],
     "sub_questions": [
-        {{"sub_id": 1, "difficulty_score": 5.5, "answer": "材料体现的经济学原理：市场调节与宏观调控、供给侧改革"}},
-        {{"sub_id": 2, "difficulty_score": 7.0, "answer": "分析该政策的经济意义（多角度：产业/创新/民生/绿色发展）"}},
-        {{"sub_id": 3, "difficulty_score": 8.5, "answer": "从国家和企业角度提出推动高质量发展的具体建议"}}
+        {"sub_id": 1, "difficulty_score": 5.5, "answer": "材料体现的经济学原理：市场调节与宏观调控、供给侧改革"},
+        {"sub_id": 2, "difficulty_score": 7.0, "answer": "分析该政策的经济意义（多角度：产业/创新/民生/绿色发展）"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "从国家和企业角度提出推动高质量发展的具体建议"}
     ]
-}}
+}
 
 **注意事项**：
 - ⚠️ detailed_analysis必须严格控制在100字以内

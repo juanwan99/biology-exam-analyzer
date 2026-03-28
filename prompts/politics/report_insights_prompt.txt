@@ -32,17 +32,17 @@
 {competency_distribution}
 
 请输出严格 JSON（不要多余解释）：
-{{
+{
   "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
   "recommendations": [
-    {{"category": "类别", "content": "具体建议", "priority": "high|medium|low"}},
+    {"category": "类别", "content": "具体建议", "priority": "high|medium|low"},
     ...5-8条
   ],
   "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
   "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
   "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
   "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
-}}
+}
 
 **思想政治学科专项分析维度**：
 
