@@ -318,3 +318,160 @@ class TestRuleScorerExtended:
             scores.append(self.compute(f))
         for i in range(len(scores) - 1):
             assert scores[i] <= scores[i + 1], f"wm {i+1}→{i+2}: {scores[i]} > {scores[i+1]}"
+# ============ rule_scorer.py — 大题聚合 v3.1 ============
+
+class TestCriticalPath:
+    """find_critical_path 关键路径算法测试。"""
+
+    def setup_method(self):
+        from rule_scorer import find_critical_path
+        self.find = find_critical_path
+
+    def _sq(self, id, steps, points=4, wm=3, trap=2, novelty=2, breadth=2):
+        return {"id": id, "points": points, "working_memory": wm,
+                "reasoning_steps": steps, "trap_density": trap,
+                "novelty": novelty, "knowledge_breadth": breadth}
+
+    def _dep(self, fr, to, strength="strong"):
+        return {"from": fr, "to": to, "strength": strength}
+
+    def test_linear_chain(self):
+        """1→2→3 线性链，关键路径 = [1,2,3]。"""
+        sqs = [self._sq(1, 3), self._sq(2, 3), self._sq(3, 4)]
+        deps = [self._dep(1, 2), self._dep(2, 3)]
+        path_nodes, path_steps = self.find(sqs, deps)
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2, 3]
+        assert path_steps == 10  # 3+3+4
+
+    def test_no_dependencies(self):
+        """无依赖 → 关键路径 = 最大 steps 的单节点。"""
+        sqs = [self._sq(1, 2), self._sq(2, 5), self._sq(3, 3)]
+        path_nodes, path_steps = self.find(sqs, [])
+        assert len(path_nodes) == 1
+        assert path_nodes[0]["id"] == 2
+        assert path_steps == 5
+
+    def test_weak_deps_ignored(self):
+        """weak 依赖不构成路径。"""
+        sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
+        deps = [self._dep(1, 2, "weak"), self._dep(2, 3, "weak")]
+        path_nodes, path_steps = self.find(sqs, deps)
+        assert len(path_nodes) == 1  # 退化为单节点
+        assert path_nodes[0]["id"] == 3  # 最大 steps
+
+    def test_partial_strong(self):
+        """1→2(strong), 2→3(weak) → 关键路径 = [1,2]。"""
+        sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
+        deps = [self._dep(1, 2, "strong"), self._dep(2, 3, "weak")]
+        path_nodes, path_steps = self.find(sqs, deps)
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2]
+        assert path_steps == 7
+
+    def test_diamond_dag(self):
+        """菱形: 1→2, 1→3, 2→4, 3→4 → 选最长路径。"""
+        sqs = [self._sq(1, 2), self._sq(2, 5), self._sq(3, 3), self._sq(4, 2)]
+        deps = [self._dep(1, 2), self._dep(1, 3), self._dep(2, 4), self._dep(3, 4)]
+        path_nodes, path_steps = self.find(sqs, deps)
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2, 4]  # 2+5+2=9 > 2+3+2=7
+        assert path_steps == 9
+
+    def test_single_subquestion(self):
+        """单小问 → 路径就是它自己。"""
+        sqs = [self._sq(1, 4)]
+        path_nodes, path_steps = self.find(sqs, [])
+        assert len(path_nodes) == 1
+        assert path_steps == 4
+
+    def test_cycle_returns_single_node(self):
+        """环依赖 -> 退化为单节点（不崩溃）。A-001"""
+        sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
+        deps = [self._dep(1, 2), self._dep(2, 3), self._dep(3, 1)]  # cycle
+        path_nodes, path_steps = self.find(sqs, deps)
+        assert len(path_nodes) >= 1
+        assert path_steps > 0
+
+    def test_self_loop_ignored(self):
+        """自环 -> 忽略自环边。A-001"""
+        sqs = [self._sq(1, 3), self._sq(2, 4)]
+        deps = [self._dep(1, 1), self._dep(1, 2)]  # self-loop on 1
+        path_nodes, path_steps = self.find(sqs, deps)
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2]
+        assert path_steps == 7
+
+
+class TestAggregation:
+    """aggregate_big_question 特征聚合测试。"""
+
+    def setup_method(self):
+        from rule_scorer import aggregate_big_question
+        self.aggregate = aggregate_big_question
+
+    def _sq(self, id, steps, points=4, wm=3, trap=2, novelty=2, breadth=2):
+        return {"id": id, "points": points, "working_memory": wm,
+                "reasoning_steps": steps, "trap_density": trap,
+                "novelty": novelty, "knowledge_breadth": breadth}
+
+    def _dep(self, fr, to, strength="strong"):
+        return {"from": fr, "to": to, "strength": strength}
+
+    def test_q21_aggregation(self):
+        """Q21 验算：设计文档 §5 端到端。"""
+        sqs = [
+            self._sq(1, 3, points=4, wm=3, trap=1, novelty=2, breadth=2),
+            self._sq(2, 3, points=4, wm=4, trap=2, novelty=2, breadth=2),
+            self._sq(3, 4, points=6, wm=4, trap=3, novelty=3, breadth=2),
+        ]
+        deps = [
+            self._dep(1, 2, "weak"),
+            self._dep(2, 3, "strong"),
+        ]
+        global_features = {"shared_context_load": 2, "global_method_novelty": 3}
+        result = self.aggregate(sqs, deps, global_features)
+
+        # effective_steps: critical_path=[2,3], steps=3+4=7, total=10, eff=7+0.35*3=8.05
+        assert abs(result["effective_steps"] - 8.05) < 0.01
+        # wm: max(4,4)=4, path_len=2, ctx=2 → 4+0.4+0.6=5.0
+        assert result["working_memory"] == 5
+        # trap: max on path = max(2,3) = 3
+        assert result["trap_density"] == 3
+        # novelty: max(3, weighted_avg) = 3
+        assert result["novelty"] == 3
+        # breadth: max(2,2,2) = 2
+        assert result["knowledge_breadth"] == 2
+        # chain_coupling: path_points=10, total=14, share=0.71 → 3
+        assert result["chain_coupling"] == 3
+
+    def test_parallel_subquestions(self):
+        """全并列小问（无 strong 依赖）→ effective_steps 低于总和。"""
+        sqs = [self._sq(1, 3), self._sq(2, 3), self._sq(3, 3)]
+        global_features = {"shared_context_load": 1, "global_method_novelty": 1}
+        result = self.aggregate(sqs, [], global_features)
+        # critical_path = 单节点(3), total=9, eff = 3 + 0.35*6 = 5.1
+        assert abs(result["effective_steps"] - 5.1) < 0.01
+
+    def test_single_subquestion_passthrough(self):
+        """单小问 → 特征原样传递（无聚合变换效果）。"""
+        sqs = [self._sq(1, 5, wm=4, trap=2, novelty=2, breadth=3)]
+        global_features = {"shared_context_load": 1, "global_method_novelty": 1}
+        result = self.aggregate(sqs, [], global_features)
+        assert result["working_memory"] == 4
+        assert abs(result["effective_steps"] - 5.0) < 0.01
+        assert result["trap_density"] == 2
+        assert result["novelty"] == 2
+        assert result["knowledge_breadth"] == 3
+
+    def test_wm_clamped_to_5(self):
+        """wm 聚合结果不超过 5。"""
+        sqs = [
+            self._sq(1, 3, wm=5, trap=1, novelty=1, breadth=1),
+            self._sq(2, 3, wm=5, trap=1, novelty=1, breadth=1),
+            self._sq(3, 3, wm=5, trap=1, novelty=1, breadth=1),
+        ]
+        deps = [self._dep(1, 2), self._dep(2, 3)]
+        global_features = {"shared_context_load": 3, "global_method_novelty": 1}
+        result = self.aggregate(sqs, deps, global_features)
+        assert result["working_memory"] == 5  # clamped
