@@ -341,3 +341,138 @@ class TestNoAnswerEvaluation:
             )
         assert result["difficulty_label"] != "未评估"
         assert result["features"] is not None
+
+
+class TestParseBigQuestion:
+    """大题结构化 JSON 解析测试。"""
+
+    def setup_method(self):
+        from feature_extractor import parse_big_question_features
+        self.parse = parse_big_question_features
+
+    def _valid_input(self):
+        return json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "基础"},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "分析"},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "strong", "reason": "依赖前问结论"}
+            ],
+            "global_features": {
+                "shared_context_load": 2, "global_method_novelty": 3,
+            },
+            "bloom": 4, "bloom_reason": "分析",
+            "info_density": 2, "representation_complexity": 2,
+            "quality_score": 4,
+            "quality_scientific": "准确",
+            "quality_normative": "规范",
+            "quality_language": "清晰",
+            "quality_context": "合理",
+            "quality_sensitivity": "无风险",
+            "teacher_comment": "考查能力综合。",
+        })
+
+    def test_valid_parse(self):
+        result = self.parse(self._valid_input())
+        assert result is not None
+        assert len(result["subquestions"]) == 2
+        assert result["subquestions"][0]["working_memory"] == 3
+        assert len(result["dependencies"]) == 1
+        assert result["global_features"]["global_method_novelty"] == 3
+        assert result["report"]["bloom"] == 4
+
+    def test_subquestion_range_clipped(self):
+        """小问特征越界被裁剪。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 10, "reasoning_steps": 0,
+                 "trap_density": 5, "novelty": -1, "knowledge_breadth": 99, "brief": "x"},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw)
+        sq = result["subquestions"][0]
+        assert sq["working_memory"] == 5
+        assert sq["reasoning_steps"] == 1
+        assert sq["trap_density"] == 3
+        assert sq["novelty"] == 1
+        assert sq["knowledge_breadth"] == 3
+
+    def test_empty_subquestions_returns_none(self):
+        """空 subquestions → 返回 None（触发 fallback）。"""
+        raw = json.dumps({
+            "subquestions": [],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        assert self.parse(raw) is None
+
+    def test_missing_dependencies_defaults_empty(self):
+        """缺失 dependencies → 视为空。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 6, "working_memory": 3, "reasoning_steps": 4,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+            ],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw)
+        assert result["dependencies"] == []
+
+    def test_missing_global_features_defaults(self):
+        """缺失 global_features → 用默认值。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 6, "working_memory": 3, "reasoning_steps": 4,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+            ],
+            "dependencies": [],
+            "bloom": 3,
+        })
+        result = self.parse(raw)
+        assert result["global_features"]["shared_context_load"] == 1
+        assert result["global_features"]["global_method_novelty"] == 1
+
+    def test_unparseable_returns_none(self):
+        """不可解析文本 → 返回 None。"""
+        assert self.parse("这是一道很难的题") is None
+
+    def test_report_fields_preserved(self):
+        """报告字段（bloom/quality/teacher_comment）正确保留。"""
+        result = self.parse(self._valid_input())
+        assert "bloom" in result["report"]
+        assert "quality_scientific" in result["report"]
+        assert "teacher_comment" in result["report"]
+
+
+class TestBuildBigQuestionPrompt:
+    """大题专用 prompt 构建测试。"""
+
+    def setup_method(self):
+        from feature_extractor import build_big_question_prompt
+        self.build = build_big_question_prompt
+
+    def test_contains_subquestions_instruction(self):
+        prompt = self.build("某大题内容", question_type="实验题")
+        assert "subquestions" in prompt
+        assert "dependencies" in prompt
+        assert "global_features" in prompt
+        assert "shared_context_load" in prompt
+        assert "global_method_novelty" in prompt
+
+    def test_contains_strength_values(self):
+        prompt = self.build("某大题内容")
+        assert "weak" in prompt
+        assert "strong" in prompt
+
+    def test_contains_question_text(self):
+        prompt = self.build("番茄红素PSY融合蛋白实验", correct_answer="见解析")
+        assert "番茄红素PSY融合蛋白实验" in prompt
+        assert "见解析" in prompt

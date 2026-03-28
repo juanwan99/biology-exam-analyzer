@@ -266,3 +266,238 @@ async def extract_features(question_text: str, options: str = "",
     except Exception as e:
         logger.error(f"特征提取 API 调用失败: {e}")
         return dict(DEFAULT_FEATURES)
+
+
+# ── 大题结构化特征提取 v3.1 ────────────────────────────────────
+
+def build_big_question_prompt(question_text: str, options: str = "",
+                              correct_answer: str = "",
+                              question_type: str = "") -> str:
+    """构建大题结构化特征提取 prompt（v3.1）。"""
+    parts = [question_text]
+    if options:
+        parts.append(f"选项：{options}")
+    if correct_answer:
+        parts.append(f"正确答案/参考答案：{correct_answer}")
+    question_block = "\n".join(parts)
+    qtype_hint = f"\n题型：{question_type}" if question_type else ""
+
+    return f"""你是一名资深高中生物命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{{
+  "subquestions": [
+    {{
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }}
+  ],
+  "dependencies": [
+    {{
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }}
+  ],
+  "global_features": {{
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享背景 3=围绕复杂系统），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分外 3=核心方法外），
+    "method_novelty_reason": "<=20字"
+  }},
+  "bloom": 1-6, "bloom_distribution": {{}}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}}
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的结论/产物是后一问的前提。不知道前问答案就无法做后问。
+- "weak"：前一问的背景知识有助于后问理解，但不知道前问答案也能部分作答
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有方法在高中教材中有明确介绍
+- 2：部分方法需要迁移应用
+- 3：核心方法在教材中完全没有（如 In-Fusion 克隆、CRISPR）
+"""
+
+
+_SQ_RANGES = {
+    "working_memory": (1, 5),
+    "reasoning_steps": (1, 10),
+    "trap_density": (1, 3),
+    "novelty": (1, 3),
+    "knowledge_breadth": (1, 3),
+}
+
+
+def parse_big_question_features(raw: str) -> dict | None:
+    """解析大题结构化 JSON。返回 None 表示解析失败（触发 fallback）。"""
+    if not isinstance(raw, str):
+        return None
+
+    data = None
+    # 策略 1: 直接解析
+    try:
+        data = json.loads(raw.strip())
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # 策略 2: code block
+    if data is None:
+        m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+        if m:
+            try:
+                data = json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+    # 策略 3: 嵌套提取
+    if data is None:
+        depth = 0
+        start = raw.find('{')
+        if start >= 0:
+            for i in range(start, len(raw)):
+                if raw[i] == '{':
+                    depth += 1
+                elif raw[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(raw[start:i + 1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    if not isinstance(data, dict):
+        logger.warning(f"[大题解析] JSON 解析失败，原始长度={len(raw)}")
+        return None
+
+    # subquestions
+    sqs_raw = data.get("subquestions", [])
+    if not isinstance(sqs_raw, list) or len(sqs_raw) == 0:
+        logger.warning("[大题解析] subquestions 缺失或为空")
+        return None
+
+    subquestions = []
+    for sq in sqs_raw:
+        if not isinstance(sq, dict):
+            continue
+        cleaned = {
+            "id": sq.get("id", len(subquestions) + 1),
+            "points": max(1, int(sq.get("points", 2))),
+            "brief": str(sq.get("brief", ""))[:20],
+        }
+        for key, (lo, hi) in _SQ_RANGES.items():
+            val = sq.get(key, 2)
+            try:
+                val = int(val)
+            except (ValueError, TypeError):
+                val = 2
+            cleaned[key] = max(lo, min(hi, val))
+        subquestions.append(cleaned)
+    if not subquestions:
+        return None
+
+    # dependencies
+    deps_raw = data.get("dependencies", [])
+    dependencies = []
+    valid_ids = {sq["id"] for sq in subquestions}
+    if isinstance(deps_raw, list):
+        for dep in deps_raw:
+            if not isinstance(dep, dict):
+                continue
+            fr, to = dep.get("from"), dep.get("to")
+            strength = dep.get("strength", "weak")
+            if fr in valid_ids and to in valid_ids and strength in ("weak", "strong"):
+                dependencies.append({
+                    "from": fr, "to": to, "strength": strength,
+                    "reason": str(dep.get("reason", ""))[:30],
+                })
+
+    # global_features
+    gf_raw = data.get("global_features", {})
+    if isinstance(gf_raw, dict):
+        try:
+            scl = max(1, min(3, int(gf_raw.get("shared_context_load", 1))))
+        except (ValueError, TypeError):
+            scl = 1
+        try:
+            gmn = max(1, min(3, int(gf_raw.get("global_method_novelty", 1))))
+        except (ValueError, TypeError):
+            gmn = 1
+    else:
+        scl, gmn = 1, 1
+    global_features = {"shared_context_load": scl, "global_method_novelty": gmn}
+
+    # report fields
+    report = {}
+    for key in ["bloom", "info_density", "representation_complexity"]:
+        val = data.get(key)
+        if val is not None:
+            lo, hi = REPORT_RANGES.get(key, (1, 6))
+            try:
+                report[key] = max(lo, min(hi, int(val)))
+            except (ValueError, TypeError):
+                pass
+    for reason_key in _REASON_KEYS:
+        if reason_key in data:
+            report[reason_key] = str(data[reason_key])[:50]
+    bloom_dist = data.get("bloom_distribution")
+    if isinstance(bloom_dist, dict):
+        cleaned_bd = {}
+        for label, count in bloom_dist.items():
+            if label in _BLOOM_LABELS:
+                try:
+                    cleaned_bd[label] = max(0, int(count))
+                except (ValueError, TypeError):
+                    pass
+        if sum(cleaned_bd.values()) > 0:
+            report["bloom_distribution"] = cleaned_bd
+    qs = data.get("quality_score")
+    if qs is not None:
+        try:
+            report["quality_score"] = max(1, min(5, int(qs)))
+        except (ValueError, TypeError):
+            pass
+    for qkey in _QUALITY_KEYS:
+        if qkey in data:
+            limit = 200 if qkey == "teacher_comment" else 80
+            report[qkey] = str(data[qkey])[:limit]
+
+    return {
+        "subquestions": subquestions,
+        "dependencies": dependencies,
+        "global_features": global_features,
+        "report": report,
+    }
+
+
+async def extract_big_question_features(question_text: str, options: str = "",
+                                        correct_answer: str = "",
+                                        question_type: str = "") -> dict | None:
+    """调用 LLM 提取大题结构化特征。返回 None 表示失败。"""
+    prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
+    try:
+        raw = await send_message_gpt(prompt, max_tokens=2000, temperature=0)
+        result = parse_big_question_features(raw)
+        if result is None:
+            logger.warning(f"[大题提取] 结构化解析失败，原始长度={len(raw)}")
+        else:
+            logger.info(f"[大题提取] 成功: {len(result['subquestions'])}小问, "
+                        f"{len(result['dependencies'])}依赖")
+        return result
+    except Exception as e:
+        logger.error(f"[大题提取] API 调用失败: {e}")
+        return None
