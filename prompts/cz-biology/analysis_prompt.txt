@@ -1,0 +1,195 @@
+# Subject: cz-biology
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请分析这道初中生物题目，返回纯JSON格式（不要markdown代码块）：
+
+注意：这是**初中生物**试题，知识范围限于义务教育阶段（7-8年级）。
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的生物学术语
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接应用（如识别细胞结构、判断生物分类）
+   - 中等：需要理解和简单推理（如分析生理过程、简单实验分析）
+   - 困难：需要综合分析或复杂推理（如实验设计、多系统综合分析、遗传推理）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：2分
+     * 填空题：每空1-2分
+     * 实验设计/资料分析大题：6-10分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个填空/多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接记忆、基础概念、简单识别
+       - 4-7分：需要理解推理、中等难度分析
+       - 7-10分：需要综合分析、实验设计、复杂推理
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（人体消化系统填空题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 2.5, "answer": "口腔"},
+         {"sub_id": 2, "difficulty_score": 4.0, "answer": "小肠（面积大、有绒毛、有多种消化液）"},
+         {"sub_id": 3, "difficulty_score": 5.5, "answer": "蛋白质在胃中初步消化，在小肠中最终分解为氨基酸"},
+         {"sub_id": 4, "difficulty_score": 6.5, "answer": "吸收后通过血液循环运输到全身各组织细胞"}
+     ]
+     ```
+
+   - 示例（实验设计题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "光照对种子萌发有影响吗"},
+         {"sub_id": 2, "difficulty_score": 5.0, "answer": "光照有/无不影响种子萌发"},
+         {"sub_id": 3, "difficulty_score": 7.0, "answer": "甲组给予光照，乙组遮光，其余条件相同（温度、水分、空气）"},
+         {"sub_id": 4, "difficulty_score": 6.0, "answer": "若两组萌发率无显著差异，则假设成立"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、示意图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/曲线图
+     * `table`：数据表格
+     * `diagram`：生物结构示意图（细胞/器官/系统）
+     * `ecosystem`：生态系统/食物链/食物网示意图
+     * `experiment`：实验装置图/实验流程图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理
+     * `true`：解题必须依赖表征信息（如从细胞图识别结构、从食物网分析能量流动）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单示意图/单个结构图，读图即可获取信息
+     * 3：复杂食物网/多系统联动图/资料分析多图联读，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+
+**示例输出（光合作用选择题）**：
+
+{
+    "knowledge_points": ["光合作用", "呼吸作用", "气体交换"],
+    "detailed_analysis": "核心考点：光合作用与呼吸作用的关系。解题关键：①明确光合作用吸收CO₂释放O₂，呼吸作用相反；②理解光照强度影响净光合量。思维难点：区分总光合量和净光合量的概念。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字概念题",
+    "common_mistakes": ["混淆光合作用和呼吸作用的气体变化", "忽略植物全天都在进行呼吸作用"],
+    "answer": "C",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.5, "is_correct": false, "error_reason": "忽略了植物晚上也进行呼吸作用"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了光合产物与呼吸消耗"},
+        {"option": "C", "difficulty_score": 5.5, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "对光合作用条件理解不准确"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（生态系统大题 - 有子题）**：
+
+{
+    "knowledge_points": ["生态系统", "食物链", "能量流动", "物质循环", "生物富集"],
+    "detailed_analysis": "核心考点：生态系统的结构和功能分析。解题关键：①从食物网中准确数出食物链条数；②理解能量沿食物链逐级递减。思维难点：营养级的确定和能量传递效率的应用。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "ecosystem",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 3,
+    "representation_reason": "食物网是分析食物链和能量流动的核心依据",
+    "common_mistakes": ["食物链数数遗漏", "营养级判断错误", "混淆分解者和消费者"],
+    "answer": "见各小问",
+    "total_score": 8,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 3.0, "answer": "生产者：草（绿色植物）"},
+        {"sub_id": 2, "difficulty_score": 5.0, "answer": "共有4条食物链"},
+        {"sub_id": 3, "difficulty_score": 6.0, "answer": "鹰，因为鹰处于最高营养级，有害物质沿食物链富集浓度最高"},
+        {"sub_id": 4, "difficulty_score": 7.0, "answer": "蛇的数量先增多后减少，因为食物增加导致增多，随后天敌增多导致减少"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记
+- 可以使用①②③、→等符号使结构清晰
+- 初中生物侧重概念理解和实验探究，不涉及复杂的分子机制
+- 重点是"思维含量"，不是"步骤完整性"

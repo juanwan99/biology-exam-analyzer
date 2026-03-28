@@ -1,0 +1,196 @@
+# Subject: cz-chemistry
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请深入分析这道初中化学题目，返回纯JSON格式（不要markdown代码块）：
+
+注意：这是**初中化学**试题，知识范围限于义务教育阶段（9年级）。
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的化学术语（如"质量守恒定律"而非"守恒"、"金属活动性顺序"而非"活动性"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导计算过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接应用（如写化学式、判断物质分类）
+   - 中等：需要理解和简单推理（如化学方程式书写配平、简单推断）
+   - 困难：需要综合分析或复杂推理（如实验方案设计、多步推断、综合计算）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 填空题：写准确答案（化学方程式须配平）
+   - 计算题：写完整计算过程和结果
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：1-2分
+     * 填空/简答题：每空1-2分
+     * 实验探究题：6-8分
+     * 计算题：6-7分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接记忆、基础概念、简单书写
+       - 4-7分：需要理解推理、中等难度分析
+       - 7-10分：需要综合分析、深度推理、复杂计算
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（实验探究题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "检验装置气密性"},
+         {"sub_id": 2, "difficulty_score": 5.0, "answer": "2KMnO₄ →(加热) K₂MnO₄+MnO₂+O₂↑"},
+         {"sub_id": 3, "difficulty_score": 6.5, "answer": "排水集气法，因为O₂不易溶于水"},
+         {"sub_id": 4, "difficulty_score": 7.0, "answer": "将带火星的木条伸入集气瓶口，木条复燃说明已集满"}
+     ]
+     ```
+
+   - 示例（计算题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "CaCO₃+2HCl=CaCl₂+H₂O+CO₂↑"},
+         {"sub_id": 2, "difficulty_score": 6.0, "answer": "设CaCO₃质量为x，100/44=x/4.4g，x=10g"},
+         {"sub_id": 3, "difficulty_score": 7.0, "answer": "CaCO₃质量分数=10g/12.5g×100%=80%"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、实验装置图、微观示意图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/变化趋势图
+     * `table`：数据表格
+     * `device`：实验装置图/气体制备装置
+     * `micro`：微观粒子示意图（原子/分子模型）
+     * `flowchart`：推断题转化关系图/工艺流程图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理
+     * `true`：解题必须依赖表征信息（如从装置图选择收集方法、从微观图判断反应类型）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表/单个装置图，读图即可获取信息
+     * 3：复杂实验流程/微观动态变化图/多图联读，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+
+**示例输出（物质分类选择题）**：
+
+{
+    "knowledge_points": ["物质分类", "纯净物与混合物", "单质与化合物"],
+    "detailed_analysis": "核心考点：物质分类的层级判断。解题关键：先判断纯净物/混合物，再在纯净物中区分单质/化合物/氧化物。思维难点：冰水混合物是纯净物（同种分子H₂O），易被"混合"一词误导。",
+    "difficulty": "简单",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字概念题",
+    "common_mistakes": ["冰水混合物误判为混合物", "氧化物和含氧化合物混淆"],
+    "answer": "B",
+    "total_score": 1,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": false, "error_reason": "空气是混合物但选项表述正确"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 4.5, "is_correct": false, "error_reason": "冰水混合物的分类易混淆"},
+        {"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "对氧化物定义理解不准确"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（实验探究大题 - 有子题）**：
+
+{
+    "knowledge_points": ["氧气制备", "催化剂", "气体收集方法", "气密性检验"],
+    "detailed_analysis": "核心考点：实验室制取氧气的装置选择与操作规范。解题关键：①根据反应物状态和条件选择发生装置；②根据气体性质选择收集方法。思维难点：催化剂的定义和作用，与反应物的区别。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "device",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "实验装置图是选择和连接装置的基础",
+    "common_mistakes": ["装置连接顺序错误", "收集方法选择不当", "操作步骤先后搞错"],
+    "answer": "见各小问",
+    "total_score": 7,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 3.0, "answer": "检查装置气密性"},
+        {"sub_id": 2, "difficulty_score": 5.0, "answer": "2H₂O₂ →(MnO₂) 2H₂O+O₂↑"},
+        {"sub_id": 3, "difficulty_score": 5.5, "answer": "向上排空气法，因为O₂密度大于空气"},
+        {"sub_id": 4, "difficulty_score": 7.0, "answer": "MnO₂是催化剂，改变反应速率但自身质量和化学性质不变"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记
+- 可以使用①②③、→等符号使结构清晰
+- 化学方程式须配平，注明条件（如点燃、加热、催化剂）
+- 重点是"思维含量"，不是"步骤完整性"

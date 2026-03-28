@@ -1,0 +1,56 @@
+# Subject: cz-math
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深初中数学教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+注意：这是**初中数学**试卷，评价标准应基于义务教育阶段课程标准，不能用高中标准衡量。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点。关注初中数学特有的考查维度：计算能力、几何推理能力、函数思维、建模应用能力、统计概率意识的覆盖情况。",
+  "recommendations": [
+    {"category": "类别", "content": "具体建议", "priority": "high|medium|low"},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，200字内。关注：选择题与解答题难度梯度是否合理、压轴题难度是否过高或过低、是否存在区分度不足的区域。初中数学压轴题应在学生能力范围内有合理区分。",
+  "knowledge_analysis": "知识覆盖分析，200字内。对照初中数学四大模块：数与代数（有理数/代数式/方程/不等式/函数）、图形与几何（三角形/四边形/圆/变换）、统计与概率、综合与实践。指出薄弱章节和盲区。",
+  "competency_analysis": "素养覆盖分析，200字内。基于六大数学核心素养（数学抽象、逻辑推理、数学建模、直观想象、数学运算、数据分析），指出不足的素养维度和改进方向。",
+  "bloom_analysis": "认知层级分析，150字内。评价高阶思维（分析、评价、创造）占比是否充分，识记类题目是否偏多，是否有开放性探究题。初中数学应注重应用和分析层级。"
+}
+
+**category 参考值**：
+- 知识覆盖：某模块缺失或偏多（如几何占比过高、统计概率缺失）
+- 难度结构：梯度不合理、区分度不足
+- 素养培养：某素养维度覆盖不足（如建模能力缺失）
+- 题型设计：作图题/探究题/应用题配比
+- 情境创设：与实际生活的关联度
+- 命题规范：数学符号规范性、选项设计合理性
+- 教学建议：针对薄弱点的教学改进方向
