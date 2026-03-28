@@ -28,6 +28,7 @@ services:
       - ./backend:/app  # Python代码实时同步，修改后只需重启容器
       - ./logs:/app/logs
       - ./backend/prompts:/app/prompts
+      - ./prompts:/app/subject_prompts  # 多学科 prompt 模板
       - ./uploads:/app/uploads
       - ./backend/rules:/app/rules
       - ./reports:/app/reports
