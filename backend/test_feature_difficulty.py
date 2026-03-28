@@ -686,6 +686,35 @@ class TestBigQuestionPipeline:
 
 
 
+    def test_partial_invalid_deps_flagged(self):
+        """部分依赖无效时应标记 dep_partial_invalid flag。"""
+        structured = {
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "strong", "reason": "合法"},
+                {"from": 9, "to": 2, "strength": "strong", "reason": "非法ID"},
+            ],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "report": {"bloom": 3},
+            "_dropped_deps": 1,
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题内容...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 8,
+                })
+            )
+        assert "dep_partial_invalid" in result.get("flags", []), "部分无效依赖应标记 flag"
+
+
 class TestQ21EndToEnd:
     """Q21 端到端验证：v3.1 修正低估。"""
 

@@ -90,6 +90,8 @@ class DifficultyPipeline:
                     "global_features": structured["global_features"],
                     "effective_steps": aggregated["effective_steps"],
                 }
+                if structured.get("_dropped_deps", 0) > 0:
+                    logger.warning(f"[v3.1] {structured['_dropped_deps']} 条依赖因 ID 无效被丢弃")
             else:
                 if not big_question_fallback:
                     big_question_fallback = True
@@ -104,6 +106,8 @@ class DifficultyPipeline:
         flags = []
         if big_question_fallback:
             flags.append("big_question_fallback")
+        if not big_question_fallback and is_big_question and structured and structured.get("_dropped_deps", 0) > 0:
+            flags.append("dep_partial_invalid")
         analysis_result = kwargs.get("analysis_result") or {}
         features, flags = self._merge_representation(features, analysis_result, flags)
 

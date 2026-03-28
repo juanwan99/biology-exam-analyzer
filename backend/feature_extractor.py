@@ -499,12 +499,15 @@ def parse_big_question_features(raw: str) -> dict | None:
             limit = 200 if qkey == "teacher_comment" else 80
             report[qkey] = str(data[qkey])[:limit]
 
-    return {
+    result = {
         "subquestions": subquestions,
         "dependencies": dependencies,
         "global_features": global_features,
         "report": report,
     }
+    if dropped_deps > 0:
+        result["_dropped_deps"] = dropped_deps
+    return result
 
 
 async def extract_big_question_features(question_text: str, options: str = "",
