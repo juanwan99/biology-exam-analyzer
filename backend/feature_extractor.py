@@ -6,6 +6,7 @@ v3 核心变化：bloom 降为报告标签，新增 working_memory/chain_couplin
 import json
 import re
 from claude_client import send_message_gpt
+from prompt_loader import PromptLoader
 from logger import get_logger
 
 logger = get_logger()
@@ -235,9 +236,23 @@ def parse_features(raw: str) -> dict:
 
 async def extract_features(question_text: str, options: str = "",
                            correct_answer: str = "",
-                           question_type: str = "") -> dict:
+                           question_type: str = "",
+                           subject: str = "biology") -> dict:
     """调用 LLM 提取题目特征（v3: 难度预测维度 + 报告维度 + 质量审查）。"""
-    prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
+    # 尝试从 PromptLoader 加载学科专用 prompt
+    loader = PromptLoader(subject)
+    if loader.exists("feature_extractor"):
+        parts = [question_text]
+        if options:
+            parts.append(f"选项：{options}")
+        if correct_answer:
+            parts.append(f"正确答案：{correct_answer}")
+        question_block = "\n".join(parts)
+        qtype_hint = f"\n题型：{question_type}" if question_type else ""
+        prompt = loader.load("feature_extractor",
+                            question_block=question_block, qtype_hint=qtype_hint)
+    else:
+        prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
     try:
         raw = await send_message_gpt(
             prompt,
@@ -512,9 +527,22 @@ def parse_big_question_features(raw: str) -> dict | None:
 
 async def extract_big_question_features(question_text: str, options: str = "",
                                         correct_answer: str = "",
-                                        question_type: str = "") -> dict | None:
+                                        question_type: str = "",
+                                        subject: str = "biology") -> dict | None:
     """调用 LLM 提取大题结构化特征。返回 None 表示失败。"""
-    prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
+    loader = PromptLoader(subject)
+    if loader.exists("big_question_extractor"):
+        parts = [question_text]
+        if options:
+            parts.append(f"选项：{options}")
+        if correct_answer:
+            parts.append(f"正确答案/参考答案：{correct_answer}")
+        question_block = "\n".join(parts)
+        qtype_hint = f"\n题型：{question_type}" if question_type else ""
+        prompt = loader.load("big_question_extractor",
+                            question_block=question_block, qtype_hint=qtype_hint)
+    else:
+        prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
     try:
         raw = await send_message_gpt(prompt, max_tokens=2000, temperature=0)
         result = parse_big_question_features(raw)

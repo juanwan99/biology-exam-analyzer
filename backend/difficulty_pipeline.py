@@ -34,6 +34,7 @@ class DifficultyPipeline:
         total_score = float(question.get("total_score", 1))
         options = question.get("options", "")
         question_type = question.get("question_type", "")
+        subject = question.get("subject", "biology")
 
         if not question_text:
             logger.warning("题目内容为空，跳过难度评估")
@@ -59,7 +60,7 @@ class DifficultyPipeline:
         if is_big_question:
             logger.info(f"[v3.1] 大题模式 (total_score={total_score}): {question_text[:50]}...")
             structured = await extract_big_question_features(
-                full_text, "", correct_answer, question_type)
+                full_text, "", correct_answer, question_type, subject=subject)
 
             if structured is not None:
                 # A-003: points 总和校验
@@ -99,7 +100,7 @@ class DifficultyPipeline:
 
         if not is_big_question or big_question_fallback:
             logger.info(f"开始特征提取: {question_text[:50]}...")
-            features = await extract_features(full_text, "", correct_answer, question_type)
+            features = await extract_features(full_text, "", correct_answer, question_type, subject=subject)
             logger.info(f"特征提取完成: {features}")
 
         # Stage 2.5: 合并 Gemini representation
