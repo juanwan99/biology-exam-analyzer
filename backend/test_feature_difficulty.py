@@ -476,3 +476,193 @@ class TestBuildBigQuestionPrompt:
         prompt = self.build("番茄红素PSY融合蛋白实验", correct_answer="见解析")
         assert "番茄红素PSY融合蛋白实验" in prompt
         assert "见解析" in prompt
+
+
+
+class TestBigQuestionPipeline:
+    """大题 pipeline 分流 + fallback 测试。"""
+
+    def _q21_structured_features(self):
+        return {
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 3, "points": 6, "working_memory": 4, "reasoning_steps": 4,
+                 "trap_density": 3, "novelty": 3, "knowledge_breadth": 2},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "weak", "reason": "背景知识"},
+                {"from": 2, "to": 3, "strength": "strong", "reason": "改造方案"},
+            ],
+            "global_features": {"shared_context_load": 2, "global_method_novelty": 3},
+            "report": {"bloom": 5, "info_density": 3, "representation_complexity": 2,
+                       "quality_score": 4, "teacher_comment": "综合实验题"},
+        }
+
+    def test_big_question_routes_to_structured(self):
+        """total_score >= 8 → 走大题结构化路径。"""
+        structured = self._q21_structured_features()
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "番茄红素PSY融合蛋白...",
+                    "question_type": "实验题",
+                    "correct_answer": "见解析",
+                    "total_score": 14,
+                })
+            )
+        assert result["final_difficulty"] >= 9.0, f"Q21 应 >=9.0，实际 {result['final_difficulty']}"
+        assert "big_question_fallback" not in (result.get("flags") or [])
+
+    def test_small_question_uses_v3(self):
+        """total_score < 8 → 走 v3 原路径。"""
+        mock_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+        }
+        with patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "下列关于DNA...", "question_type": "选择题",
+                    "correct_answer": "A", "total_score": 2,
+                })
+            )
+        assert result["features"] is not None
+        assert "big_question_fallback" not in (result.get("flags") or [])
+
+    def test_boundary_score_8_triggers_big(self):
+        """total_score = 8 → 触发大题路径。"""
+        structured = self._q21_structured_features()
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 8,
+                })
+            )
+        assert result["features"] is not None
+
+    def test_boundary_score_7_stays_v3(self):
+        """total_score = 7 → 不触发大题路径。"""
+        mock_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 2,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+        }
+        with patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 7,
+                })
+            )
+        assert result["features"] is not None
+
+    def test_fallback_on_parse_failure(self):
+        """结构化解析失败 → fallback 到 v3 原路径。"""
+        mock_flat = {
+            "working_memory": 4, "reasoning_steps": 6, "chain_coupling": 2,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 4, "info_density": 2, "representation_complexity": 1,
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=None), \
+             patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_flat):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "实验题",
+                    "correct_answer": "", "total_score": 12,
+                })
+            )
+        assert result["features"] is not None
+        assert "big_question_fallback" in result.get("flags", [])
+        assert result["confidence"] < 0.7
+
+    def test_full_chain_with_raw_json(self):
+        """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""
+        raw_json = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "基础"},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "分析"},
+                {"id": 3, "points": 6, "working_memory": 4, "reasoning_steps": 4,
+                 "trap_density": 3, "novelty": 3, "knowledge_breadth": 2, "brief": "设计"},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "weak", "reason": "背景知识"},
+                {"from": 2, "to": 3, "strength": "strong", "reason": "改造方案"},
+            ],
+            "global_features": {
+                "shared_context_load": 2, "global_method_novelty": 3,
+                "shared_context_reason": "GFP融合", "method_novelty_reason": "In-Fusion",
+            },
+            "bloom": 5, "bloom_reason": "评价",
+            "info_density": 3, "density_reason": "多图",
+            "representation_complexity": 2, "representation_reason": "载体图",
+            "quality_score": 4,
+            "quality_scientific": "无明显问题",
+            "quality_normative": "合理",
+            "quality_language": "清晰",
+            "quality_context": "真实",
+            "quality_sensitivity": "无风险",
+            "teacher_comment": "综合实验题。",
+        })
+        with patch("feature_extractor.send_message_gpt",
+                   new_callable=AsyncMock, return_value=raw_json):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "番茄红素PSY融合蛋白...",
+                    "question_type": "实验题",
+                    "correct_answer": "见解析",
+                    "total_score": 14,
+                })
+            )
+        assert result["final_difficulty"] >= 9.0, f"全链路 Q21 应 >=9.0，实际 {result['final_difficulty']}"
+        assert "_big_question" in result["features"]
+
+    def test_points_sum_mismatch_triggers_fallback(self):
+        """A-003: points 总和与 total_score 偏差 >20% → fallback。"""
+        structured = {
+            "subquestions": [
+                {"id": 1, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "report": {"bloom": 3},
+        }
+        mock_flat = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 2,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+        }
+        # total_score=12, sum(points)=4, 偏差=67% > 20%
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured), \
+             patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_flat):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 12,
+                })
+            )
+        assert "big_question_fallback" in result.get("flags", [])

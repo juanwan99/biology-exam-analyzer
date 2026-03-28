@@ -1,18 +1,19 @@
 """难度量化 Pipeline 主控 — 特征分析评分。
 
 v2: 特征提取 + 规则评分 + Gemini representation 合并 + 动态 confidence
-设计文档: docs/plans/2026-03-24-difficulty-scoring-v2-design.md
+v3.1: 大题结构化拆分评估（total_score >= 8 → 结构化提取 → 聚合 → 评分）
+设计文档: docs/plans/2026-03-28-difficulty-v3.1-design.md
 """
 import asyncio
-from feature_extractor import extract_features, DEFAULT_FEATURES
-from rule_scorer import compute_difficulty, score_to_label
+from feature_extractor import extract_features, extract_big_question_features, DEFAULT_FEATURES
+from rule_scorer import compute_difficulty, score_to_label, aggregate_big_question
 from logger import get_logger
 
 logger = get_logger()
 
 
 class DifficultyPipeline:
-    """难度量化 Pipeline。v2: 特征分析 + Gemini 表征合并。"""
+    """难度量化 Pipeline。v3.1: 大题结构化拆分评估。"""
 
     def __init__(self, **kwargs):
         """初始化。接受 kwargs 以兼容旧调用方 DifficultyEngine(gemini_analyzer=...) 签名。"""
@@ -51,24 +52,79 @@ class DifficultyPipeline:
         if options_text:
             full_text = f"{question_text}\n{options_text}"
 
-        # Stage 2: LLM 特征提取（传 question_type）
-        logger.info(f"开始特征提取: {question_text[:50]}...")
-        features = await extract_features(full_text, "", correct_answer, question_type)
-        logger.info(f"特征提取完成: {features}")
+        # ── v3.1 大题分流 ──
+        is_big_question = total_score >= 8
+        big_question_fallback = False
+
+        if is_big_question:
+            logger.info(f"[v3.1] 大题模式 (total_score={total_score}): {question_text[:50]}...")
+            structured = await extract_big_question_features(
+                full_text, "", correct_answer, question_type)
+
+            if structured is not None:
+                # A-003: points 总和校验
+                sq_points_sum = sum(sq["points"] for sq in structured["subquestions"])
+                if total_score > 0 and abs(sq_points_sum - total_score) / total_score > 0.2:
+                    logger.warning(f"[v3.1] 小问分值和({sq_points_sum})与总分({total_score})偏差>20%，fallback")
+                    structured = None
+                    big_question_fallback = True
+
+            if structured is not None:
+                aggregated = aggregate_big_question(
+                    structured["subquestions"],
+                    structured["dependencies"],
+                    structured["global_features"],
+                )
+                features = {
+                    "working_memory": aggregated["working_memory"],
+                    "reasoning_steps": round(aggregated["effective_steps"]),
+                    "chain_coupling": aggregated["chain_coupling"],
+                    "trap_density": aggregated["trap_density"],
+                    "novelty": aggregated["novelty"],
+                    "knowledge_breadth": aggregated["knowledge_breadth"],
+                }
+                features.update(structured.get("report", {}))
+                features["_big_question"] = {
+                    "subquestions": structured["subquestions"],
+                    "dependencies": structured["dependencies"],
+                    "global_features": structured["global_features"],
+                    "effective_steps": aggregated["effective_steps"],
+                }
+            else:
+                if not big_question_fallback:
+                    big_question_fallback = True
+                logger.warning("[v3.1] 结构化解析失败，fallback 到 v3 原路径")
+
+        if not is_big_question or big_question_fallback:
+            logger.info(f"开始特征提取: {question_text[:50]}...")
+            features = await extract_features(full_text, "", correct_answer, question_type)
+            logger.info(f"特征提取完成: {features}")
 
         # Stage 2.5: 合并 Gemini representation
         flags = []
+        if big_question_fallback:
+            flags.append("big_question_fallback")
         analysis_result = kwargs.get("analysis_result") or {}
         features, flags = self._merge_representation(features, analysis_result, flags)
 
         # Stage 3: 规则评分
-        raw_score = compute_difficulty(features)
+        if is_big_question and not big_question_fallback:
+            score_features = dict(features)
+            score_features["reasoning_steps"] = features["_big_question"]["effective_steps"]
+            score_features["chain_coupling"] = 1  # 不让 coupling 再乘一次
+            raw_score = compute_difficulty(score_features)
+        else:
+            raw_score = compute_difficulty(features)
+
         from calibration import calibrate
         score = calibrate(raw_score)
         label = score_to_label(score)
-        logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})")
+        logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
+                    + (" [v3.1 大题]" if is_big_question and not big_question_fallback else ""))
 
         confidence = self._compute_confidence(features, flags)
+        if big_question_fallback:
+            confidence = max(0.2, confidence - 0.15)
 
         # bloom 1-6 → cognitive_level 0-10（向后兼容旧前端/报告/预测）
         bloom = features.get("bloom", 3)
