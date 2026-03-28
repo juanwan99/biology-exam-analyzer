@@ -1,18 +1,26 @@
-"""非线性评分引擎 — 分段映射 + 交互项。
+"""难度评分引擎 v3 — 难度预测模型（工作记忆 + 推理耦合 + 陷阱密度）。
 
-B1a 重写：替代线性加权，解决中等区域区分度不足。
-设计文档: docs/plans/2026-03-24-biology-exam-optimizer-design.md §3.3
+设计文档: docs/plans/2026-03-28-difficulty-v3-design.md §3
+v3 核心变化：bloom 不参与评分，新增 working_memory/chain_coupling/trap_density。
 """
 
+# ── 维度映射（0-1 归一化）────────────────────────────────────────
 
-_BLOOM_MAP = {1: 0.0, 2: 0.15, 3: 0.30, 4: 0.55, 5: 0.80, 6: 1.0}
-_STEPS_MAP = {1: 0.0, 2: 0.10, 3: 0.20, 4: 0.40, 5: 0.50, 6: 0.70, 7: 0.80, 8: 0.90, 9: 0.95, 10: 1.0}
-_BREADTH_MAP = {1: 0.10, 2: 0.45, 3: 0.90}
-_DENSITY_MAP = {1: 0.10, 2: 0.40, 3: 0.85}
-_NOVELTY_MAP = {1: 0.05, 2: 0.40, 3: 0.90}
-_QTYPE_MAP = {1: 0.05, 2: 0.30, 3: 0.60, 4: 0.90}
+_WM_MAP = {1: 0.05, 2: 0.15, 3: 0.35, 4: 0.65, 5: 1.00}
+_TRAP_MAP = {1: 0.10, 2: 0.45, 3: 0.90}
+_NOVELTY_MAP = {1: 0.05, 2: 0.35, 3: 0.85}
+_BREADTH_MAP = {1: 0.10, 2: 0.40, 3: 0.85}
+_COUPLING_MAP = {1: 1.0, 2: 1.3, 3: 1.6}
 
-_WEIGHTS = {"bloom": 0.25, "steps": 0.25, "breadth": 0.15, "density": 0.12, "novelty": 0.10, "qtype": 0.13}
+# ── 权重 ────────────────────────────────────────────────────────
+
+_WEIGHTS = {
+    "working_memory": 0.28,
+    "effective_steps": 0.28,
+    "trap_density": 0.18,
+    "novelty": 0.14,
+    "knowledge_breadth": 0.12,
+}
 
 
 def _interpolate(mapping: dict, value: float) -> float:
@@ -29,52 +37,57 @@ def _interpolate(mapping: dict, value: float) -> float:
     return mapping[keys[-1]]
 
 
-def _interaction_bonus(bloom, steps, breadth, novelty, qtype) -> float:
+def _interaction_bonus(wm, eff_steps, trap, novelty, breadth) -> float:
+    """交互项加分。"""
     bonus = 0.0
-    if bloom >= 4 and steps >= 5:
+    if wm >= 4 and eff_steps >= 8:      # 高负荷 + 长链
         bonus += 0.08
-    if breadth >= 2 and novelty >= 2:
-        bonus += 0.05
-    if bloom >= 5 and qtype >= 3:
+    if trap >= 2 and novelty >= 2:       # 有陷阱 + 不熟悉
         bonus += 0.06
+    if breadth >= 3 and wm >= 3:         # 跨模块 + 高负荷
+        bonus += 0.04
     return bonus
 
 
 def compute_difficulty(features: dict) -> float:
-    """6 维特征 → 2-10 难度分（非线性版本）。
+    """v3: 特征 → 2-10 难度分。
 
-    下限 2.0（最简单的纯识记单选也有基础难度），上限 10.0。
-    reasoning_steps 超过 8 封顶（超长推理链不额外加分）。
+    评分维度：working_memory, reasoning_steps × chain_coupling, trap_density, novelty, knowledge_breadth
+    bloom 不参与评分。
     """
-    bloom = features["bloom"]
-    steps = min(features["reasoning_steps"], 8)  # 封顶 8
-    breadth = features["knowledge_breadth"]
-    density = features["info_density"]
-    novelty = features["novelty"]
-    qtype = features["question_type_factor"]
+    wm = features.get("working_memory", 3)
+    steps = min(features.get("reasoning_steps", 4), 10)
+    coupling = features.get("chain_coupling", 2)
+    trap = features.get("trap_density", 2)
+    novelty = features.get("novelty", 2)
+    breadth = features.get("knowledge_breadth", 2)
 
+    # 有效推理链 = 步数 × 耦合系数
+    coupling_mult = _COUPLING_MAP.get(coupling, 1.0)
+    effective_steps = steps * coupling_mult
+
+    # 各维度归一化
     mapped = {
-        "bloom": _interpolate(_BLOOM_MAP, bloom),
-        "steps": _interpolate(_STEPS_MAP, steps),
-        "breadth": _interpolate(_BREADTH_MAP, breadth),
-        "density": _interpolate(_DENSITY_MAP, density),
+        "working_memory": _interpolate(_WM_MAP, wm),
+        "effective_steps": min(1.0, effective_steps / 12.0),  # 线性 clamp
+        "trap_density": _interpolate(_TRAP_MAP, trap),
         "novelty": _interpolate(_NOVELTY_MAP, novelty),
-        "qtype": _interpolate(_QTYPE_MAP, qtype),
+        "knowledge_breadth": _interpolate(_BREADTH_MAP, breadth),
     }
 
-    _FLOOR = 2.0
-    _RANGE = 8.0
     raw = sum(mapped[k] * _WEIGHTS[k] for k in _WEIGHTS)
-    raw += _interaction_bonus(bloom, steps, breadth, novelty, qtype)
-    return min(10.0, round(_FLOOR + raw * _RANGE, 1))
+    raw += _interaction_bonus(wm, effective_steps, trap, novelty, breadth)
+
+    score = 2.0 + raw * 8.0
+    return min(10.0, round(score, 1))
 
 
 def score_to_label(score: float) -> str:
-    if score <= 3.0:
+    if score <= 3.5:
         return "简单"
-    elif score <= 5.0:
+    elif score <= 5.5:
         return "中等偏易"
-    elif score <= 7.0:
+    elif score <= 7.5:
         return "中等偏难"
     else:
         return "困难"

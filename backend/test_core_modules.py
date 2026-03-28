@@ -177,14 +177,14 @@ class TestParseFeatures:
     def test_range_clipping_high(self):
         """超出上限被裁剪。"""
         raw = json.dumps({"bloom": 99, "reasoning_steps": 1, "knowledge_breadth": 1,
-                          "info_density": 1, "novelty": 1, "question_type_factor": 1})
+                          "trap_density": 1, "novelty": 1, "knowledge_breadth": 1})
         result = self.parse(raw)
         assert result["bloom"] == 6  # max for bloom
 
     def test_range_clipping_low(self):
         """低于下限被裁剪。"""
         raw = json.dumps({"bloom": -5, "reasoning_steps": 0, "knowledge_breadth": 1,
-                          "info_density": 1, "novelty": 1, "question_type_factor": 1})
+                          "trap_density": 1, "novelty": 1, "knowledge_breadth": 1})
         result = self.parse(raw)
         assert result["bloom"] == 1
         assert result["reasoning_steps"] == 1
@@ -201,7 +201,7 @@ class TestParseFeatures:
         raw = json.dumps({
             "bloom": 3, "bloom_reason": "需要理解概念",
             "reasoning_steps": 2, "knowledge_breadth": 1,
-            "info_density": 1, "novelty": 1, "question_type_factor": 1
+            "trap_density": 1, "novelty": 1, "knowledge_breadth": 1
         })
         result = self.parse(raw)
         assert result["bloom_reason"] == "需要理解概念"
@@ -211,7 +211,7 @@ class TestParseFeatures:
         raw = json.dumps({
             "bloom": 3, "bloom_reason": "x" * 100,
             "reasoning_steps": 2, "knowledge_breadth": 1,
-            "info_density": 1, "novelty": 1, "question_type_factor": 1
+            "trap_density": 1, "novelty": 1, "knowledge_breadth": 1
         })
         result = self.parse(raw)
         assert len(result["bloom_reason"]) == 50
@@ -219,7 +219,7 @@ class TestParseFeatures:
     def test_non_numeric_value_uses_default(self):
         """非数字值用默认值。"""
         raw = json.dumps({"bloom": "high", "reasoning_steps": 2, "knowledge_breadth": 1,
-                          "info_density": 1, "novelty": 1, "question_type_factor": 1})
+                          "trap_density": 1, "novelty": 1, "knowledge_breadth": 1})
         result = self.parse(raw)
         assert result["bloom"] == self.defaults["bloom"]
 
@@ -301,20 +301,20 @@ class TestRuleScorerExtended:
 
     def test_label_boundaries(self):
         """标签边界值。"""
-        assert self.label(3.0) == "简单"
-        assert self.label(3.1) == "中等偏易"
-        assert self.label(5.0) == "中等偏易"
-        assert self.label(5.1) == "中等偏难"
-        assert self.label(7.0) == "中等偏难"
-        assert self.label(7.1) == "困难"
+        assert self.label(3.5) == "简单"
+        assert self.label(3.6) == "中等偏易"
+        assert self.label(5.5) == "中等偏易"
+        assert self.label(5.6) == "中等偏难"
+        assert self.label(7.5) == "中等偏难"
+        assert self.label(7.6) == "困难"
 
     def test_monotonicity(self):
         """难度随特征值单调递增。"""
-        base = {"bloom": 1, "reasoning_steps": 1, "knowledge_breadth": 1,
-                "info_density": 1, "novelty": 1, "question_type_factor": 1}
+        base = {"working_memory": 1, "reasoning_steps": 1, "chain_coupling": 1,
+                "trap_density": 1, "novelty": 1, "knowledge_breadth": 1}
         scores = []
-        for bloom in [1, 2, 3, 4, 5]:
-            f = dict(base, bloom=bloom)
+        for wm in [1, 2, 3, 4, 5]:
+            f = dict(base, working_memory=wm)
             scores.append(self.compute(f))
         for i in range(len(scores) - 1):
-            assert scores[i] <= scores[i + 1], f"bloom {i+1}→{i+2}: {scores[i]} > {scores[i+1]}"
+            assert scores[i] <= scores[i + 1], f"wm {i+1}→{i+2}: {scores[i]} > {scores[i+1]}"
