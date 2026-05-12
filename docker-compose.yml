@@ -38,6 +38,7 @@ services:
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - GEMINI_RELAY_KEY=${GEMINI_RELAY_KEY}
     depends_on:
       postgres:
         condition: service_healthy
