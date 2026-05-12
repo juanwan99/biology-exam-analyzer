@@ -205,4 +205,4 @@ class AnalysisService:
             return result
 
         indices = question.get("image_indices", [])
-        return [image_bytes[i] for i in indices if i < len(image_bytes)]
+        return [image_bytes[i] for i in indices if 0 <= i < len(image_bytes)]

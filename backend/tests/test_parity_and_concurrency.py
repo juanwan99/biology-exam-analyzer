@@ -96,9 +96,9 @@ class TestAnalysisServiceParity:
         await svc.analyze_question(question, [b"other_image"], "deep")
 
         call_args = svc.analyzer.analyze_question.call_args
-        passed_images = call_args.kwargs.get("question_images", call_args[1] if len(call_args[1]) > 1 else [])
-        # The analyzer should receive the _media_for_ai image, not image_indices
-        assert svc.analyzer.analyze_question.called
+        passed_images = call_args.kwargs.get("question_images", [])
+        assert len(passed_images) == 1
+        assert passed_images[0] == img_data  # must be _media_for_ai content, not image_indices
 
 
 # ── F-005: Concurrent batch analysis ──────────────────────────────
