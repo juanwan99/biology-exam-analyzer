@@ -9,7 +9,7 @@ from llm_client import llm_call
 logger = get_logger()
 
 
-class GeminiAnalyzer:
+class QuestionAnalyzer:
     """LLM 分析器：题目拆分和分析（统一 fallback 客户端）。"""
 
     def __init__(self):
@@ -308,3 +308,7 @@ class GeminiAnalyzer:
     "common_mistakes": ["易错点1", "易错点2"],
     "answer": "标准答案"
 }"""
+
+
+# Backward compatibility
+GeminiAnalyzer = QuestionAnalyzer

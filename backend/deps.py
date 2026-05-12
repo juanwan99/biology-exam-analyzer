@@ -33,8 +33,8 @@ def get_gemini_analyzer():
         if not get_providers():
             logger.warning("无可用 LLM provider（请检查 API key 配置），AI 分析功能不可用")
             return None
-        from gemini_analyzer import GeminiAnalyzer
-        _gemini_analyzer = GeminiAnalyzer()
+        from question_analyzer import QuestionAnalyzer
+        _gemini_analyzer = QuestionAnalyzer()
     return _gemini_analyzer
 
 
@@ -120,3 +120,5 @@ def get_analysis_service():
             max_workers=MAX_WORKERS,
         )
     return _analysis_service
+
+get_question_analyzer = get_gemini_analyzer

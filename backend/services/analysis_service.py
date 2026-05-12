@@ -206,3 +206,111 @@ class AnalysisService:
 
         indices = question.get("image_indices", [])
         return [image_bytes[i] for i in indices if 0 <= i < len(image_bytes)]
+
+
+    # ── 完整端点编排（从 router 提取）────────────────────────
+
+    async def run_full_analysis(self, file_path: str, filename: str,
+                                 mode: str = "deep", generate_report: bool = False,
+                                 report_mode: str = "full", reports_dir: str = None,
+                                 exam_id: str = None) -> Dict:
+        """完整分析流程：文档→拆分→分析→统计→报告。对应 /api/analyze。"""
+        doc = await self.process_document(file_path, filename)
+        image_bytes = doc["image_bytes"]
+        extracted_text = doc["extracted_text"]
+        extracted_elements = doc["extracted_elements"]
+
+        questions = await self.split_questions_llm(image_bytes, extracted_text)
+
+        if extracted_elements and self.doc_processor:
+            self.doc_processor.match_elements_to_questions(questions, extracted_elements)
+
+        for q in questions:
+            q = await self.analyze_question(q, image_bytes, mode)
+
+        competency_summary = self.build_competency_summary(questions)
+        exam_statistics = self.aggregate_statistics(questions, competency_summary)
+
+        report_url = None
+        report_error = None
+        if generate_report and reports_dir:
+            try:
+                from pathlib import Path
+                pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
+                await self.generate_report(
+                    questions, competency_summary, exam_statistics,
+                    {"name": filename, "total": len(questions), "mode": mode},
+                    mode=report_mode, output_path=pdf_path,
+                )
+                report_url = f"/api/reports/{exam_id}.pdf"
+            except Exception as e:
+                report_error = f"报告生成失败: {e}"
+
+        return {
+            "questions": questions,
+            "competency_summary": competency_summary,
+            "exam_statistics": exam_statistics,
+            "report_url": report_url,
+            "report_error": report_error,
+        }
+
+    async def run_auto_analysis(self, file_path: str, filename: str,
+                                 file_bytes: bytes, mode: str = "deep",
+                                 subject: str = "biology",
+                                 generate_report: bool = False,
+                                 report_mode: str = "full",
+                                 reports_dir: str = None,
+                                 exam_id: str = None) -> Dict:
+        """规则拆分 + 自动分析。对应 /api/analyze_auto 的核心逻辑。"""
+        file_ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+        if file_ext == "docx":
+            loop = asyncio.get_event_loop()
+            split_result = await loop.run_in_executor(
+                None, self.word_splitter.split, file_path
+            )
+            questions = split_result.get("questions", [])
+            images = await loop.run_in_executor(
+                None, self.doc_processor.process_docx, file_path
+            )
+            image_bytes = (
+                await loop.run_in_executor(None, self.doc_processor.images_to_bytes, images)
+                if images else []
+            )
+        elif file_ext == "pdf":
+            loop = asyncio.get_event_loop()
+            split_result = await loop.run_in_executor(
+                None, self.pdf_splitter.split, file_path
+            )
+            questions = split_result.get("questions", [])
+            image_bytes = []
+        else:
+            raise ValueError(f"不支持的文件格式: {filename}")
+
+        analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
+        competency_summary = self.build_competency_summary(analyzed)
+        exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
+
+        report_url = None
+        report_error = None
+        if generate_report and reports_dir:
+            try:
+                from pathlib import Path
+                pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
+                await self.generate_report(
+                    analyzed, competency_summary, exam_statistics,
+                    {"name": filename, "total": len(analyzed), "mode": mode},
+                    mode=report_mode, output_path=pdf_path,
+                )
+                report_url = f"/api/reports/{exam_id}.pdf"
+            except Exception as e:
+                report_error = f"报告生成失败: {e}"
+
+        return {
+            "questions": analyzed,
+            "split_result": split_result,
+            "competency_summary": competency_summary,
+            "exam_statistics": exam_statistics,
+            "report_url": report_url,
+            "report_error": report_error,
+        }

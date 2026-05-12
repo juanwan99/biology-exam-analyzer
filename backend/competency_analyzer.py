@@ -96,7 +96,7 @@ class CompetencyAnalyzer:
             logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
 
             # 解析JSON
-            from gemini_analyzer import GeminiAnalyzer
+            from question_analyzer import QuestionAnalyzer
             json_text = GeminiAnalyzer.extract_json(response_text)
 
             result = json.loads(json_text)
