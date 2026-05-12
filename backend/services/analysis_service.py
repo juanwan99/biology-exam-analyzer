@@ -100,6 +100,10 @@ class AnalysisService:
                                       image_bytes: List[bytes],
                                       mode: str = "deep",
                                       subject: str = "biology") -> List[Dict]:
+        for idx, q in enumerate(questions):
+            if not q.get("id"):
+                q["id"] = idx + 1
+
         sem = asyncio.Semaphore(self.max_workers)
 
         async def _analyze_one(q):
@@ -112,7 +116,7 @@ class AnalysisService:
     # ── 统计聚合 ──────────────────────────────────────────────
 
     def aggregate_statistics(self, questions: List[Dict], competency_summary: Dict) -> Dict:
-        from analysis_router import generate_exam_statistics
+        from analysis_statistics import generate_exam_statistics
         return generate_exam_statistics(questions, competency_summary)
 
     def build_competency_summary(self, questions: List[Dict]) -> Dict:

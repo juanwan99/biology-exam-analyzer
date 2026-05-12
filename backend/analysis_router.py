@@ -33,6 +33,7 @@ import credits_service
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
 from utils import infer_question_type
+from analysis_statistics import generate_exam_statistics, _build_competency_list
 from deps import (
     get_analysis_service,
     get_gemini_analyzer,
@@ -325,6 +326,14 @@ async def analyze_document(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"分析参数错误: {e}")
+        raise HTTPException(400, detail=str(e))
+    except RuntimeError as e:
+        if "未配置" in str(e):
+            raise HTTPException(503, detail=str(e))
+        logger.error(f"分析运行时错误: {e}", exc_info=True)
+        raise HTTPException(500, detail="服务器内部错误")
     except Exception as e:
         logger.error(f"分析流程失败: {str(e)}", exc_info=True)
         raise HTTPException(500, detail="服务器内部错误")

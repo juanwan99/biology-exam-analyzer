@@ -1,3 +1,5 @@
+import html
+from datetime import datetime
 """报告 HTML 模板渲染函数。"""
 
 def _render_difficulty_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
