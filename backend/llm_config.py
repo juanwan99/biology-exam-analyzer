@@ -7,7 +7,7 @@ import os
 PROVIDERS = [
     {
         "name": "deepseek",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-pro",
         "api_format": "openai_chat",
         "base_url_env": "DEEPSEEK_API_BASE",
         "base_url_default": "https://api.deepseek.com/v1/chat/completions",
