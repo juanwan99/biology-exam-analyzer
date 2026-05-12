@@ -40,13 +40,14 @@ class PipelineError(Exception):
     def from_exception(cls, e: Exception, step: str = "",
                         question_id: int = 0) -> "PipelineError":
         msg = str(e)
-        if "timeout" in msg.lower() or "ReadTimeout" in type(e).__name__:
+        etype = type(e).__name__
+        if "timeout" in msg.lower() or "Timeout" in etype:
             return cls(msg, ErrorCategory.LLM_TIMEOUT, step, question_id, retryable=True, original=e)
         if "429" in msg or "rate" in msg.lower():
             return cls(msg, ErrorCategory.LLM_RATE_LIMIT, step, question_id, retryable=True, original=e)
         if "401" in msg or "403" in msg or "auth" in msg.lower():
             return cls(msg, ErrorCategory.LLM_AUTH, step, question_id, retryable=False, original=e)
-        if "json" in msg.lower() or "parse" in msg.lower() or "decode" in msg.lower():
+        if "json" in msg.lower() or "parse" in msg.lower() or "decode" in msg.lower() or "JSONDecode" in etype:
             return cls(msg, ErrorCategory.LLM_INVALID_RESPONSE, step, question_id, retryable=True, original=e)
         if "file" in msg.lower() or "FileNotFound" in type(e).__name__:
             return cls(msg, ErrorCategory.FILE_ERROR, step, question_id, retryable=False, original=e)
