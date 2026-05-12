@@ -676,12 +676,14 @@ async def analyze_auto(
         raise HTTPException(401, detail="认证失败，请重新登录")
 
     try:
-        await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题-{file.filename}")
-    except credits_service.InsufficientCreditsError as e:
-        raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+        balance = await credits_service.get_balance(user_id)
+        if balance < credits_service.ANALYSIS_COST:
+            raise HTTPException(402, detail=f"积分不足：余额 {balance}，需要 {credits_service.ANALYSIS_COST}")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[积分] 扣费失败: {e}")
-        raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+        logger.error(f"[积分] 余额查询失败: {e}")
+        raise HTTPException(500, detail="积分查询失败，请稍后重试")
 
     doc_processor = get_doc_processor()
     word_splitter = get_word_splitter()
@@ -689,7 +691,7 @@ async def analyze_auto(
     competency_analyzer = get_competency_analyzer()
 
     start_time = datetime.now()
-    logger.info(f"[自动分析] 收到文件: {file.filename} (用户 {user_id}, 已扣 {credits_service.ANALYSIS_COST} 积分)")
+    logger.info(f"[自动分析] 收到文件: {file.filename} (用户 {user_id})")
 
     file_path = None
     file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
@@ -712,7 +714,14 @@ async def analyze_auto(
         loop = asyncio.get_event_loop()
         if file_ext == 'docx':
             logger.info("使用Word原生拆分题目...")
-            split_result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+            try:
+                split_result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+            except Exception as e:
+                err_msg = str(e)
+                logger.error(f"[Word拆分] 格式错误: {err_msg}")
+                if "relationship" in err_msg or "opc" in err_msg.lower() or "package" in err_msg.lower():
+                    raise HTTPException(400, detail="文件格式不兼容。请用 Microsoft Word 打开此文件，另存为 .docx 格式后重新上传（WPS 另存的文件可能不兼容）")
+                raise HTTPException(400, detail=f"文件解析失败: {err_msg[:200]}")
             questions = split_result.get("questions", [])
             logger.info(f"Word拆分完成，共 {len(questions)} 道题")
 
@@ -728,6 +737,16 @@ async def analyze_auto(
 
             # PDF的图片已包含在 _media_for_ai 中
             image_bytes = []
+
+        # 3.5 文件拆分成功，扣除积分
+        try:
+            await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题-{file.filename}")
+            logger.info(f"[积分] 文件拆分成功，已扣费 {credits_service.ANALYSIS_COST} 积分")
+        except credits_service.InsufficientCreditsError as e:
+            raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+        except Exception as e:
+            logger.error(f"[积分] 扣费失败: {e}")
+            raise HTTPException(500, detail="积分扣费失败，请稍后重试")
 
         # 4. 并发分析所有题目（分析+难度+素养一次完成）
         logger.info(f"开始并发分析 {len(questions)} 道题（{MAX_WORKERS}线程）...")

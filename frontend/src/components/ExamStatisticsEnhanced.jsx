@@ -89,7 +89,8 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
     avg_cognitive_level,
     top_knowledge_points,
     knowledge_textbook_distribution,
-    competency_distribution
+    competency_distribution,
+    bloom_distribution,
   } = data
 
   // 难度分布数据转换为recharts格式（题目数量）
@@ -132,8 +133,21 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
   // 检查是否有实际分值数据（总分大于0才显示）
   const hasScoreData = difficultyScoreData.length > 0 && difficultyScoreData.some(item => item.score > 0)
 
-  // 知识点数据（取前10，保留兼容性）
-  const knowledgePointsData = top_knowledge_points ? top_knowledge_points.slice(0, 10) : []
+  // 知识点数据（取前10，V1 返回 weighted_score，兼容旧 count）
+  const knowledgePointsData = top_knowledge_points
+    ? top_knowledge_points.slice(0, 10).map(item => ({
+        ...item,
+        score: item.weighted_score ?? item.count ?? 0,
+      }))
+    : []
+
+  // Bloom 认知层级分布（分值加权占比，来自后端 V1）
+  const BLOOM_COLORS_BAR = ['#a3c4bc', '#5a9a6d', '#10b981', '#2d5a3d', '#f59e0b', '#ef4444']
+  const bloomData = bloom_distribution
+    ? Object.entries(bloom_distribution)
+        .filter(([_, v]) => v > 0)
+        .map(([name, value], i) => ({ name, value: Math.round(value * 100), fill: BLOOM_COLORS_BAR[i] }))
+    : []
 
   // v3.1新增：教材分布数据处理
   const textbookColors = {
@@ -147,35 +161,35 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
   const textbookDistData = knowledge_textbook_distribution ? [
     {
       name: '必修1',
-      count: knowledge_textbook_distribution['必修1']?.count || 0,
+      score: knowledge_textbook_distribution['必修1']?.weighted_score ?? knowledge_textbook_distribution['必修1']?.count ?? 0,
       percentage: knowledge_textbook_distribution['必修1']?.percentage || 0,
       fill: textbookColors['必修1']
     },
     {
       name: '必修2',
-      count: knowledge_textbook_distribution['必修2']?.count || 0,
+      score: knowledge_textbook_distribution['必修2']?.weighted_score ?? knowledge_textbook_distribution['必修2']?.count ?? 0,
       percentage: knowledge_textbook_distribution['必修2']?.percentage || 0,
       fill: textbookColors['必修2']
     },
     {
       name: '选修1',
-      count: knowledge_textbook_distribution['选择性必修1']?.count || 0,
+      score: knowledge_textbook_distribution['选择性必修1']?.weighted_score ?? knowledge_textbook_distribution['选择性必修1']?.count ?? 0,
       percentage: knowledge_textbook_distribution['选择性必修1']?.percentage || 0,
       fill: textbookColors['选择性必修1']
     },
     {
       name: '选修2',
-      count: knowledge_textbook_distribution['选择性必修2']?.count || 0,
+      score: knowledge_textbook_distribution['选择性必修2']?.weighted_score ?? knowledge_textbook_distribution['选择性必修2']?.count ?? 0,
       percentage: knowledge_textbook_distribution['选择性必修2']?.percentage || 0,
       fill: textbookColors['选择性必修2']
     },
     {
       name: '选修3',
-      count: knowledge_textbook_distribution['选择性必修3']?.count || 0,
+      score: knowledge_textbook_distribution['选择性必修3']?.weighted_score ?? knowledge_textbook_distribution['选择性必修3']?.count ?? 0,
       percentage: knowledge_textbook_distribution['选择性必修3']?.percentage || 0,
       fill: textbookColors['选择性必修3']
     }
-  ].filter(item => item.count > 0) : []
+  ].filter(item => item.score > 0) : []
 
   // 素养分布数据转换（使用总权重而非题目数，因为一道题可能涉及多种素养）
   const competencyData = competency_distribution ? [
@@ -336,7 +350,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         >
           <div style={{ padding: '32px' }}>
             <p className="text-sm font-medium" style={{ color: 'var(--color-muted)', marginBottom: '8px' }}>
-              平均难度系数
+              平均难度系数（分值加权）
             </p>
             <div className="font-extrabold" style={{ fontSize: '3rem', color: 'var(--color-primary)', lineHeight: 1.1 }}>
               {avg_difficulty !== undefined ? avg_difficulty.toFixed(2) : 'N/A'}
@@ -361,7 +375,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         >
           <div style={{ padding: '32px' }}>
             <p className="text-sm font-medium" style={{ color: 'var(--color-muted)', marginBottom: '8px' }}>
-              平均认知层级
+              平均认知层级（分值加权）
             </p>
             <div className="font-extrabold" style={{ fontSize: '3rem', color: 'var(--color-primary-light)', lineHeight: 1.1 }}>
               {avg_cognitive_level !== undefined ? avg_cognitive_level.toFixed(2) : 'N/A'}
@@ -535,6 +549,47 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
         )}
       </div>
 
+      {/* Bloom 认知层级分布（分值加权） */}
+      {bloomData.length > 0 && (
+        <div
+          style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-sm)',
+            background: 'var(--color-bg)',
+            marginBottom: '32px',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '32px' }}>
+            <h3 className="section-title text-lg" style={{ marginBottom: '24px' }}>
+              <Brain size={18} className="inline mr-1" /> Bloom 认知层级分布（分值加权）
+            </h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={bloomData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8e4" />
+                <XAxis dataKey="name" />
+                <YAxis label={{ value: '占比 %', angle: -90, position: 'insideLeft' }} domain={[0, 100]} />
+                <Tooltip
+                  formatter={(value) => [`${value}%`, '占比']}
+                  contentStyle={{ borderRadius: '14px', border: '1px solid var(--color-border-light)', boxShadow: 'var(--shadow-md)' }}
+                />
+                <Bar dataKey="value" name="分值占比" radius={[8, 8, 0, 0]}>
+                  {bloomData.map((entry, index) => (
+                    <Cell key={`bloom-${index}`} fill={entry.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <div style={{ marginTop: '20px', padding: '14px 16px', background: 'var(--macaron-mint-light)', borderRadius: '14px' }}>
+              <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                <strong>说明：</strong>按 Bloom 分类法展示各认知层级占试卷总分的比例（1识记→6创造）
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 难度因素气泡图 */}
       {factorsData.length > 0 && (
         <div
@@ -663,7 +718,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
               <PieChart>
                 <Pie
                   data={textbookDistData}
-                  dataKey="count"
+                  dataKey="score"
                   nameKey="name"
                   cx="50%"
                   cy="50%"
@@ -684,7 +739,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                           <p className="font-semibold" style={{ color: data.fill }}>
                             {data.name}
                           </p>
-                          <p className="text-sm" style={{ color: 'var(--color-primary)' }}>知识点数: {data.count}</p>
+                          <p className="text-sm" style={{ color: 'var(--color-primary)' }}>加权分值: {data.score.toFixed(1)}分</p>
                           <p className="text-sm" style={{ color: 'var(--color-primary)' }}>占比: {data.percentage}%</p>
                         </div>
                       )
@@ -701,19 +756,20 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                 各教材章节分布详情（点击展开）
               </p>
               {Object.entries(knowledge_textbook_distribution || {}).map(([textbook, data]) => {
-                if (data.count === 0) return null
+                const tbScore = data.weighted_score ?? data.count ?? 0
+                if (tbScore === 0) return null
 
                 const chapters = Object.entries(data.chapters || {}).map(([chNum, chData]) => ({
                   number: chNum,
                   name: chData.name,
-                  count: chData.count
+                  score: chData.weighted_score ?? chData.count ?? 0,
                 }))
 
                 return (
                   <Collapsible
                     key={textbook}
                     title={textbook}
-                    badge={`${data.count}个知识点`}
+                    badge={`${tbScore.toFixed(1)}分`}
                     badgeColor={textbookColors[textbook]}
                     barColor={textbookColors[textbook]}
                     percentage={data.percentage}
@@ -741,7 +797,7 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
                               className="font-bold text-lg"
                               style={{ color: textbookColors[textbook], marginTop: '6px' }}
                             >
-                              {ch.count}个知识点
+                              {ch.score.toFixed(1)}分
                             </p>
                           </div>
                         ))}
@@ -758,8 +814,8 @@ function ExamStatisticsEnhanced({ data, questions, scorePrediction }) {
 
             <div style={{ marginTop: '24px', padding: '16px 20px', background: 'var(--macaron-mint-light)', borderRadius: '14px' }}>
               <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
-                <strong>说明：</strong>知识点已自动映射到对应教材章节，帮助教师全面把握试卷在五本教材中的分布情况，
-                确保知识点覆盖的均衡性和全面性。
+                <strong>说明：</strong>知识点已按题目分值加权映射到教材章节。高分题的知识点获得更高权重，
+                更准确反映试卷对各教材的考查力度。
               </p>
             </div>
           </div>

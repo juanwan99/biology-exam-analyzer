@@ -403,10 +403,16 @@ class ReportGenerator:
         part2 = questions_difficulty[part_size:part_size*2]
         part3 = questions_difficulty[part_size*2:]
 
-        # 计算平均难度
-        avg1 = sum(q["final_difficulty"] for q in part1) / len(part1) if part1 else 0
-        avg2 = sum(q["final_difficulty"] for q in part2) / len(part2) if part2 else 0
-        avg3 = sum(q["final_difficulty"] for q in part3) / len(part3) if part3 else 0
+        # 计算平均难度（分值加权，fallback 简单平均）
+        def _weighted_avg(part):
+            w = sum(q.get("total_score", 0) for q in part)
+            if w > 0:
+                return sum(q["final_difficulty"] * q.get("total_score", 0) for q in part) / w
+            return sum(q["final_difficulty"] for q in part) / len(part) if part else 0
+
+        avg1 = _weighted_avg(part1)
+        avg2 = _weighted_avg(part2)
+        avg3 = _weighted_avg(part3)
 
         # 创建条形图
         fig = go.Figure(data=[
@@ -450,313 +456,512 @@ class ReportGenerator:
         logger.info(f"[图表6] 难度梯度: {gradient_type}, 前{avg1:.2f} 中{avg2:.2f} 后{avg3:.2f}")
         return fig
 
+    def generate_knowledge_pie(self, textbook_distribution: Dict[str, Any]) -> go.Figure:
+        """生成教材知识点分布饼图"""
+        labels = []
+        values = []
+        for book, info in textbook_distribution.items():
+            if isinstance(info, dict) and info.get("weighted_score", 0) > 0:
+                labels.append(book)
+                values.append(info["weighted_score"])
+        if not labels:
+            labels = ["无数据"]
+            values = [1]
+        fig = go.Figure(data=[go.Pie(
+            labels=labels, values=values,
+            textposition='inside', textfont=dict(size=12),
+            marker=dict(colors=['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']),
+            hovertemplate='<b>%{label}</b><br>分值: %{value:.1f}<br>占比: %{percent}<extra></extra>'
+        )])
+        fig.update_layout(
+            title={'text': '教材知识点分值分布', 'x': 0.5,
+                   'font': {'size': 18, 'family': 'SimHei'}},
+            font=dict(family='SimHei', size=12), height=400, showlegend=True,
+        )
+        return fig
+
+    def generate_feature_radar(self, avg_per_dimension: Dict[str, float]) -> go.Figure:
+        """生成 6 维特征雷达图"""
+        DIM_LABELS = {
+            "bloom": "Bloom层级", "reasoning_steps": "推理步数",
+            "knowledge_breadth": "知识跨度", "info_density": "信息密度",
+            "novelty": "情境新颖度", "representation_complexity": "表征复杂度",
+        }
+        DIM_MAX = {
+            "bloom": 6, "reasoning_steps": 10, "knowledge_breadth": 3,
+            "info_density": 3, "novelty": 3, "representation_complexity": 3,
+        }
+        labels = [DIM_LABELS[d] for d in avg_per_dimension if d in DIM_LABELS]
+        values = [avg_per_dimension[d] / DIM_MAX.get(d, 1) * 100
+                  for d in avg_per_dimension if d in DIM_LABELS]
+        values.append(values[0])  # 闭合
+        labels.append(labels[0])
+
+        fig = go.Figure(data=go.Scatterpolar(
+            r=values, theta=labels, fill='toself',
+            line=dict(color='#2d5a3d', width=2),
+            fillcolor='rgba(45,90,61,0.15)',
+        ))
+        fig.update_layout(
+            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+            title={'text': '试卷难度特征画像（6维）', 'x': 0.5, 'font': {'size': 18, 'family': 'SimHei'}},
+            font=dict(family='SimHei', size=12), height=450, showlegend=False,
+        )
+        return fig
+
+    def generate_bloom_chart(self, bloom_distribution: Dict[str, float]) -> go.Figure:
+        """生成 Bloom 认知层级分布柱状图"""
+        BLOOM_COLORS = ['#a3c4bc', '#5a9a6d', '#10b981', '#2d5a3d', '#f59e0b', '#ef4444']
+        labels = list(bloom_distribution.keys())
+        values = [round(v * 100, 1) for v in bloom_distribution.values()]
+
+        fig = go.Figure(data=[go.Bar(
+            x=labels, y=values,
+            text=[f"{v}%" for v in values], textposition='auto',
+            marker=dict(color=BLOOM_COLORS[:len(labels)]),
+        )])
+        fig.update_layout(
+            title={'text': 'Bloom 认知层级分布（分值加权）', 'x': 0.5,
+                   'font': {'size': 18, 'family': 'SimHei'}},
+            xaxis_title='认知层级', yaxis_title='分值占比 (%)',
+            yaxis=dict(range=[0, 100]),
+            template='plotly_white', font=dict(family='SimHei', size=12), height=400,
+        )
+        return fig
+
     def _fig_to_base64(self, fig: go.Figure) -> str:
         """将plotly图表转为base64编码的PNG"""
         img_bytes = fig.to_image(format="png", width=800, height=400, scale=2)
         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
         return f"data:image/png;base64,{img_base64}"
 
-    def generate_pdf_report(
-        self,
-        questions_analysis: List[Dict[str, Any]],
-        competency_summary: Dict[str, Any],
-        exam_info: Dict[str, str],
-        output_path: str
-    ) -> str:
-        """
-        生成完整的PDF评估报告
 
-        Args:
-            questions_analysis: 所有题目的分析结果
-            competency_summary: 素养汇总统计
-            exam_info: 试卷基本信息 {"name": "2025山东卷", "total": 25, "mode": "deep"}
-            output_path: PDF输出路径
 
-        Returns:
-            PDF文件路径
-        """
-        logger.info(f"[PDF生成] 开始生成报告，题目数: {len(questions_analysis)}")
+# ============ 模块级 PDF 生成入口 ============
 
-        # 提取难度数据
-        questions_difficulty = [
-            {
-                "question_id": q.get("id", q.get("question_id", idx+1)),  # 兼容id和question_id两种字段
-                "final_difficulty": q.get("difficulty", {}).get("final_difficulty", q.get("final_difficulty", q.get("base_difficulty", 5.0))),
-                "difficulty_label": q.get("difficulty", {}).get("difficulty_label", q.get("difficulty_label", "中等")),
-                "knowledge_complexity": q.get("difficulty", {}).get("knowledge_complexity", q.get("knowledge_complexity", 0)),
-                "cognitive_level": q.get("difficulty", {}).get("cognitive_level", q.get("cognitive_level", 0)),
-                "info_extraction": q.get("difficulty", {}).get("information_extraction", q.get("info_extraction", 0)),
-                "reasoning_steps": q.get("difficulty", {}).get("reasoning_steps", q.get("reasoning_steps", 0))
-            }
-            for idx, q in enumerate(questions_analysis)
-        ]
+def generate_pdf_report(
+    report_data: Dict,
+    insights: Dict,
+    mode: str = "brief",
+    output_path: str = "",
+) -> str:
+    """生成 PDF 报告（模块级函数）。
 
-        # 生成所有图表
-        logger.info("[PDF生成] 正在生成图表...")
-        chart1 = self._fig_to_base64(self.generate_difficulty_curve(questions_difficulty))
-        chart2 = self._fig_to_base64(self.generate_difficulty_distribution(questions_difficulty))
-        chart3 = self._fig_to_base64(self.generate_dimension_radar(questions_difficulty[0]))  # 示例：第1题
-        chart4 = self._fig_to_base64(self.generate_competency_pie(competency_summary))
-        chart5 = self._fig_to_base64(self.generate_competency_bar(competency_summary))
-        chart6 = self._fig_to_base64(self.generate_difficulty_gradient(questions_difficulty))
+    Args:
+        report_data: aggregate_report_data() 输出
+        insights: generate_insights() 输出
+        mode: "brief" 或 "full"
+        output_path: PDF 输出路径
+    """
+    rg = ReportGenerator()
+    logger.info(f"[PDF生成] mode={mode}, 题目数={report_data['exam_info']['total_questions']}")
 
-        # 计算统计数据
-        avg_difficulty = sum(q["final_difficulty"] for q in questions_difficulty) / len(questions_difficulty)
+    # 提取图表所需数据（PR-02 修复：包含 score_distribution_by_difficulty）
+    questions_difficulty = [
+        {
+            "question_id": q["id"],
+            "final_difficulty": q["difficulty"],
+            "difficulty_label": q["difficulty_label"],
+            "total_score": q["total_score"],
+            "score_distribution_by_difficulty": q.get("score_distribution_by_difficulty", {}),
+        }
+        for q in report_data["questions"]
+    ]
 
-        # 计算分值分布（优先使用分值，回退到题数）
-        has_score_distribution = any("score_distribution_by_difficulty" in q for q in questions_difficulty)
+    # 生成图表
+    charts = {}
+    charts["curve"] = rg._fig_to_base64(rg.generate_difficulty_curve(questions_difficulty))
+    charts["distribution"] = rg._fig_to_base64(rg.generate_difficulty_distribution(questions_difficulty))
+    charts["competency_pie"] = rg._fig_to_base64(rg.generate_competency_pie(
+        report_data["competency"]["distribution"]))
+    charts["bloom"] = rg._fig_to_base64(rg.generate_bloom_chart(
+        report_data["metrics"]["bloom_distribution"]))
+    textbook_dist = report_data["knowledge"].get("textbook_distribution", {})
+    if textbook_dist:
+        charts["knowledge_pie"] = rg._fig_to_base64(rg.generate_knowledge_pie(textbook_dist))
 
-        if has_score_distribution:
-            # 基于分值统计
-            easy_score = sum(q.get("score_distribution_by_difficulty", {}).get("简单", 0.0) for q in questions_difficulty)
-            medium_score = sum(q.get("score_distribution_by_difficulty", {}).get("中等", 0.0) for q in questions_difficulty)
-            hard_score = sum(q.get("score_distribution_by_difficulty", {}).get("困难", 0.0) for q in questions_difficulty)
-            total_score = easy_score + medium_score + hard_score
+    if mode == "full":
+        charts["gradient"] = rg._fig_to_base64(rg.generate_difficulty_gradient(questions_difficulty))
+        charts["radar"] = rg._fig_to_base64(rg.generate_feature_radar(
+            report_data["feature_profile"]["avg_per_dimension"]))
+        charts["competency_bar"] = rg._fig_to_base64(rg.generate_competency_bar(
+            report_data["competency"]["distribution"]))
 
-            stats_text = f"""
-        <div class="info-item"><span class="info-label">简单题:</span> <span class="difficulty-low">{easy_score:.1f}分 ({easy_score/total_score*100:.1f}%)</span></div>
-        <div class="info-item"><span class="info-label">中等题:</span> <span class="difficulty-medium">{medium_score:.1f}分 ({medium_score/total_score*100:.1f}%)</span></div>
-        <div class="info-item"><span class="info-label">困难题:</span> <span class="difficulty-high">{hard_score:.1f}分 ({hard_score/total_score*100:.1f}%)</span></div>
-        <div class="info-item"><span class="info-label">总分:</span> {total_score:.1f}分</div>
-"""
-            logger.info(f"[PDF生成] 分值守恒验证: 总分={total_score:.1f}分")
-            if abs(total_score - 100.0) > 1.0:
-                logger.warning(f"[PDF生成] 分值守恒异常！总分={total_score:.1f}，期望100分")
+    # 组装 HTML
+    html = _render_html(report_data, insights, charts, mode)
+
+    # HTML → PDF
+    HTML(string=html).write_pdf(output_path)
+    logger.info(f"[PDF生成] 完成: {output_path}")
+    return output_path
+
+
+# ============ HTML 模板渲染 ============
+
+def _get_report_css() -> str:
+    """A4 排版 CSS 样式"""
+    return """<style>
+@page { size: A4; margin: 2cm; }
+body { font-family: 'SimSun', 'Microsoft YaHei', sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; }
+h1 { text-align: center; color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-bottom: 30px; }
+h2 { color: #1e40af; border-left: 4px solid #3b82f6; padding-left: 10px; margin-top: 30px; page-break-after: avoid; }
+.cover { text-align: center; padding: 60px 0 40px; }
+.cover h1 { font-size: 28px; margin-bottom: 20px; }
+.cover .subtitle { font-size: 20px; color: #475569; margin: 10px 0; }
+.cover p { color: #64748b; margin: 5px 0; }
+.metrics-grid { display: flex; flex-wrap: wrap; gap: 15px; margin: 20px 0; }
+.metric-card { flex: 1; min-width: 140px; background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 15px; text-align: center; }
+.metric-value { font-size: 28px; font-weight: bold; color: #1e40af; }
+.metric-label { font-size: 12px; color: #64748b; margin-top: 5px; }
+.insight-box { background: #fefce8; border-left: 4px solid #eab308; padding: 12px 16px; margin: 15px 0; border-radius: 0 8px 8px 0; }
+.chart { margin: 20px 0; text-align: center; page-break-inside: avoid; }
+.chart img { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; page-break-inside: auto; }
+th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; font-size: 13px; }
+th { background: #eff6ff; font-weight: bold; color: #1e40af; }
+tr:nth-child(even) { background: #f8fafc; }
+tr { page-break-inside: avoid; }
+.question-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 15px 0; page-break-inside: avoid; }
+.question-card h4 { color: #1e40af; margin: 0 0 10px; }
+.question-card .meta { color: #64748b; font-size: 12px; margin-bottom: 8px; }
+.question-card .comment { background: #f0fdf4; border-left: 3px solid #22c55e; padding: 8px 12px; margin-top: 10px; font-style: italic; }
+.rec-item { border-left: 3px solid #3b82f6; padding: 8px 12px; margin: 10px 0; }
+.rec-item.high { border-left-color: #ef4444; }
+.rec-item.medium { border-left-color: #f59e0b; }
+.rec-item.low { border-left-color: #22c55e; }
+.rec-category { font-weight: bold; color: #1e40af; font-size: 13px; }
+.difficulty-high { color: #dc2626; font-weight: bold; }
+.difficulty-medium { color: #ea580c; }
+.difficulty-low { color: #16a34a; }
+.footer { margin-top: 40px; text-align: center; color: #64748b; font-size: 11px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+</style>"""
+
+
+def _render_difficulty_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
+    """渲染难度分析 section"""
+    html = '<h2>二、难度分析</h2>'
+    html += f'<div class="chart"><img src="{charts["curve"]}" alt="难度曲线"></div>'
+    html += f'<div class="chart"><img src="{charts["distribution"]}" alt="难度分布"></div>'
+
+    if mode == "full":
+        if "gradient" in charts:
+            html += f'<div class="chart"><img src="{charts["gradient"]}" alt="难度梯度"></div>'
+        if "radar" in charts:
+            html += f'<div class="chart"><img src="{charts["radar"]}" alt="特征雷达"></div>'
+
+    analysis = insights.get("difficulty_analysis", "")
+    if analysis:
+        if mode == "brief":
+            # 精简档取首句
+            first_sentence = analysis.split("。")[0] + "。" if "。" in analysis else analysis
+            html += f'<div class="insight-box">{first_sentence}</div>'
         else:
-            # 回退：基于题数统计
-            easy_count = sum(1 for q in questions_difficulty if q["final_difficulty"] < 4)
-            medium_count = sum(1 for q in questions_difficulty if 4 <= q["final_difficulty"] < 7)
-            hard_count = sum(1 for q in questions_difficulty if q["final_difficulty"] >= 7)
+            html += f'<div class="insight-box">{analysis}</div>'
 
-            stats_text = f"""
-        <div class="info-item"><span class="info-label">简单题:</span> <span class="difficulty-low">{easy_count}道</span></div>
-        <div class="info-item"><span class="info-label">中等题:</span> <span class="difficulty-medium">{medium_count}道</span></div>
-        <div class="info-item"><span class="info-label">困难题:</span> <span class="difficulty-high">{hard_count}道</span></div>
-"""
-            logger.warning(f"[PDF生成] 未找到score_distribution_by_difficulty，使用题目数量统计")
+    return html
 
-        # 生成HTML报告
-        html_content = f"""
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>生物试卷质量评估报告</title>
-    <style>
-        @page {{
-            size: A4;
-            margin: 2cm;
-        }}
-        body {{
-            font-family: 'SimSun', 'Microsoft YaHei', sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 900px;
-            margin: 0 auto;
-        }}
-        h1 {{
-            text-align: center;
-            color: #2563eb;
-            border-bottom: 3px solid #2563eb;
-            padding-bottom: 10px;
-            margin-bottom: 30px;
-        }}
-        h2 {{
-            color: #1e40af;
-            border-left: 4px solid #3b82f6;
-            padding-left: 10px;
-            margin-top: 30px;
-        }}
-        .info-box {{
-            background: #f0f9ff;
-            border: 1px solid #bfdbfe;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 20px 0;
-        }}
-        .info-item {{
-            display: inline-block;
-            margin-right: 30px;
-            margin-bottom: 10px;
-        }}
-        .info-label {{
-            font-weight: bold;
-            color: #1e40af;
-        }}
-        .chart {{
-            margin: 20px 0;
-            text-align: center;
-            page-break-inside: avoid;
-        }}
-        .chart img {{
-            max-width: 100%;
-            height: auto;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }}
-        th, td {{
-            border: 1px solid #cbd5e1;
-            padding: 10px;
-            text-align: left;
-        }}
-        th {{
-            background: #eff6ff;
-            font-weight: bold;
-            color: #1e40af;
-        }}
-        tr:nth-child(even) {{
-            background: #f8fafc;
-        }}
-        .footer {{
-            margin-top: 40px;
-            text-align: center;
-            color: #64748b;
-            font-size: 12px;
-            border-top: 1px solid #e2e8f0;
-            padding-top: 20px;
-        }}
-        .difficulty-high {{ color: #dc2626; font-weight: bold; }}
-        .difficulty-medium {{ color: #ea580c; }}
-        .difficulty-low {{ color: #16a34a; }}
-    </style>
-</head>
-<body>
-    <h1>生物试卷质量评估报告</h1>
 
-    <div class="info-box">
-        <div class="info-item"><span class="info-label">试卷名称:</span> {exam_info.get("name", "未命名")}</div>
-        <div class="info-item"><span class="info-label">题目总数:</span> {exam_info.get("total", len(questions_difficulty))}</div>
-        <div class="info-item"><span class="info-label">评估模式:</span> {exam_info.get("mode", "fast")=="deep" and "深度模式🔬" or "快速模式🚄"}</div>
-        <div class="info-item"><span class="info-label">生成时间:</span> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
-    </div>
+def _render_knowledge_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
+    """渲染知识覆盖 section"""
+    html = '<h2>三、知识覆盖</h2>'
 
-    <h2>一、试卷概览</h2>
-    <div class="info-box">
-        <div class="info-item"><span class="info-label">平均难度:</span> {avg_difficulty:.2f}/10</div>
-{stats_text}
-    </div>
+    # Top10 知识点表
+    top_points = data["knowledge"].get("top_points", [])
+    if top_points:
+        html += '<table><thead><tr><th>排名</th><th>知识点</th><th>分值权重</th></tr></thead><tbody>'
+        for i, kp in enumerate(top_points[:10], 1):
+            html += f'<tr><td>{i}</td><td>{kp.get("name", "")}</td><td>{kp.get("weighted_score", 0):.1f}</td></tr>'
+        html += '</tbody></table>'
 
-    <h2>二、难度分析</h2>
+    # 教材饼图（brief+full 都渲染）
+    if "knowledge_pie" in charts:
+        html += f'<div class="chart"><img src="{charts["knowledge_pie"]}" alt="教材分布"></div>'
 
-    <div class="chart">
-        <img src="{chart1}" alt="难度曲线图">
-    </div>
+    # 教材章节明细表（full 模式）
+    textbook = data["knowledge"].get("textbook_distribution", {})
+    if textbook and mode == "full":
+        html += '<table><thead><tr><th>教材册别</th><th>分值权重</th><th>占比</th></tr></thead><tbody>'
+        for book, info in textbook.items():
+            if isinstance(info, dict):
+                score = info.get("weighted_score", 0)
+                pct = info.get("percentage", 0)
+                html += f'<tr><td>{book}</td><td>{score:.1f}</td><td>{pct:.1f}%</td></tr>'
+        html += '</tbody></table>'
 
-    <div class="chart">
-        <img src="{chart2}" alt="难度分布">
-    </div>
+    analysis = insights.get("knowledge_analysis", "")
+    if analysis:
+        html += f'<div class="insight-box">{analysis}</div>'
 
-    <div class="chart">
-        <img src="{chart6}" alt="难度梯度">
-    </div>
+    return html
 
-    <h2>三、核心素养分析</h2>
 
-    <div class="chart">
-        <img src="{chart4}" alt="素养覆盖">
-    </div>
+def _render_bloom_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
+    """渲染 Bloom 认知层级 section"""
+    html = '<h2>四、Bloom 认知层级</h2>'
+    html += f'<div class="chart"><img src="{charts["bloom"]}" alt="Bloom分布"></div>'
 
-    <div class="chart">
-        <img src="{chart5}" alt="素养细分">
-    </div>
+    analysis = insights.get("bloom_analysis", "")
+    if analysis:
+        html += f'<div class="insight-box">{analysis}</div>'
 
-    <h2>四、题目详情</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>题号</th>
-                <th>难度系数</th>
-                <th>难度等级</th>
-                <th>知识复杂度</th>
-                <th>认知层级</th>
-                <th>信息提取</th>
-                <th>推理步骤</th>
-            </tr>
-        </thead>
-        <tbody>
-"""
+    return html
 
-        # 添加题目详情
-        for q in questions_difficulty:
-            difficulty_class = "difficulty-low"
-            if q["final_difficulty"] >= 7:
-                difficulty_class = "difficulty-high"
-            elif q["final_difficulty"] >= 4:
-                difficulty_class = "difficulty-medium"
 
-            html_content += f"""
-            <tr>
-                <td>{q["question_id"]}</td>
-                <td class="{difficulty_class}">{q["final_difficulty"]:.2f}</td>
-                <td>{q["difficulty_label"]}</td>
-                <td>{q["knowledge_complexity"]:.1f}</td>
-                <td>{q["cognitive_level"]:.1f}</td>
-                <td>{q["info_extraction"]:.1f}</td>
-                <td>{q["reasoning_steps"]:.1f}</td>
-            </tr>
-"""
+def _render_competency_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
+    """渲染核心素养 section"""
+    html = '<h2>五、核心素养</h2>'
+    html += f'<div class="chart"><img src="{charts["competency_pie"]}" alt="素养分布"></div>'
 
-        html_content += """
-        </tbody>
-    </table>
+    if mode == "full" and "competency_bar" in charts:
+        html += f'<div class="chart"><img src="{charts["competency_bar"]}" alt="素养细分"></div>'
 
-    <h2>五、评估建议</h2>
-    <div class="info-box">
-"""
+    analysis = insights.get("competency_analysis", "")
+    if analysis:
+        html += f'<div class="insight-box">{analysis}</div>'
 
-        # 生成建议
-        if avg_difficulty >= 7:
-            html_content += "<p>✅ <strong>整体难度偏高</strong>，适合选拔性考试，建议适当增加基础题。</p>"
-        elif avg_difficulty >= 5:
-            html_content += "<p>✅ <strong>难度适中</strong>，符合常规考试要求。</p>"
+    return html
+
+
+def _render_questions_section(data: dict, insights: dict, mode: str) -> str:
+    """渲染逐题详情 section"""
+    BLOOM_MAP = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
+    questions = data["questions"]
+    comments = insights.get("question_comments", {})
+
+    html = '<h2>七、逐题详情</h2>'
+
+    if mode == "brief":
+        # 精简表格
+        html += '<table><thead><tr><th>题号</th><th>分值</th><th>难度</th><th>Bloom</th><th>知识点</th><th>主素养</th></tr></thead><tbody>'
+        for q in questions:
+            diff_class = "difficulty-low"
+            if q["difficulty"] >= 7:
+                diff_class = "difficulty-high"
+            elif q["difficulty"] >= 4:
+                diff_class = "difficulty-medium"
+            kps = ", ".join(q.get("knowledge_points", [])[:3])
+            bloom_label = BLOOM_MAP.get(q.get("bloom", 3), "应用")
+            html += (f'<tr><td>{q["id"]}</td><td>{q["total_score"]}</td>'
+                     f'<td class="{diff_class}">{q["difficulty"]:.1f}</td>'
+                     f'<td>{bloom_label}</td><td>{kps}</td>'
+                     f'<td>{q.get("primary_competency", "")}</td></tr>')
+        html += '</tbody></table>'
+    else:
+        # 完整卡片
+        for q in questions:
+            diff_class = "difficulty-low"
+            if q["difficulty"] >= 7:
+                diff_class = "difficulty-high"
+            elif q["difficulty"] >= 4:
+                diff_class = "difficulty-medium"
+            bloom_label = BLOOM_MAP.get(q.get("bloom", 3), "应用")
+            kps = ", ".join(q.get("knowledge_points", []))
+            mistakes = ", ".join(q.get("common_mistakes", [])[:3])
+
+            qs = q.get("quality_score")
+            qs_text = ""
+            if qs is not None:
+                qs_labels = {1: "严重缺陷", 2: "需修改", 3: "基本合格", 4: "较好", 5: "优秀"}
+                qs_colors = {1: "#dc2626", 2: "#ea580c", 3: "#ca8a04", 4: "#16a34a", 5: "#16a34a"}
+                qs_text = f' | <span style="color:{qs_colors.get(qs, "#333")}">质量: {qs}/5 {qs_labels.get(qs, "")}</span>'
+
+            html += f'''<div class="question-card">
+<h4>题目 {q["id"]}（{q["total_score"]}分）</h4>
+<div class="meta">
+难度: <span class="{diff_class}">{q["difficulty"]:.1f} {q["difficulty_label"]}</span> |
+Bloom: {bloom_label} | 素养: {q.get("primary_competency", "")} ({q.get("competency_level", "")}){qs_text}
+</div>
+<p><strong>知识点:</strong> {kps}</p>'''
+
+            if q.get("detailed_analysis"):
+                html += f'<p><strong>解析:</strong> {q["detailed_analysis"][:200]}</p>'
+            if mistakes:
+                html += f'<p><strong>常见错误:</strong> {mistakes}</p>'
+
+            # 7 维 reason（CR-02 修复：full 模式展示特征分析理由）
+            reasons = []
+            if q.get("bloom_reason"):
+                reasons.append(f"Bloom层级: {q['bloom_reason']}")
+            if q.get("steps_detail"):
+                reasons.append(f"推理步数: {q['steps_detail']}")
+            if q.get("breadth_reason"):
+                reasons.append(f"知识跨度: {q['breadth_reason']}")
+            if q.get("density_reason"):
+                reasons.append(f"信息密度: {q['density_reason']}")
+            if q.get("novelty_reason"):
+                reasons.append(f"情境新颖度: {q['novelty_reason']}")
+            if q.get("representation_reason"):
+                reasons.append(f"表征复杂度: {q['representation_reason']}")
+            if reasons:
+                html += '<p><strong>特征分析:</strong></p><ul>'
+                for r in reasons:
+                    html += f'<li style="font-size:12px;color:#475569">{r}</li>'
+                html += '</ul>'
+
+            # 命题质量审查（v3: 从 feature_extractor 合并）
+            quality_items = []
+            if q.get("quality_scientific"):
+                quality_items.append(f"科学性: {q['quality_scientific']}")
+            if q.get("quality_normative"):
+                quality_items.append(f"规范性: {q['quality_normative']}")
+            if q.get("quality_language"):
+                quality_items.append(f"语言表述: {q['quality_language']}")
+            if q.get("quality_context"):
+                quality_items.append(f"情境设计: {q['quality_context']}")
+            if quality_items:
+                html += '<p><strong>命题质量:</strong></p><ul>'
+                for qi in quality_items:
+                    html += f'<li style="font-size:12px;color:#475569">{qi}</li>'
+                html += '</ul>'
+
+            # 教师点评（v3: 从 feature_extractor 合并，替代原 report_insights 逐题点评）
+            comment = q.get("teacher_comment", "") or comments.get(str(q["id"]), "")
+            if comment:
+                html += f'<div class="comment"><strong>教师点评:</strong> {comment}</div>'
+
+            html += '</div>'
+
+    return html
+
+
+def _render_quality_overview_section(data: dict) -> str:
+    """渲染命题质量总览 section — 按严重程度汇总所有题的质量问题。"""
+    questions = data["questions"]
+
+    # 分类：硬伤（score 1-2）、待改进（score 3）、良好（score 4-5）、未评估
+    critical = []   # 硬伤
+    improve = []    # 待改进
+    good = []       # 良好
+    no_score = []   # 未评估
+
+    for q in questions:
+        qs = q.get("quality_score")
+        qid = q["id"]
+        issues = []
+        for key, label in [("quality_scientific", "科学性"), ("quality_normative", "规范性"),
+                           ("quality_language", "语言"), ("quality_context", "情境")]:
+            text = q.get(key, "")
+            if text and "无明显问题" not in text and "无问题" not in text:
+                issues.append(f"{label}: {text}")
+
+        entry = {"id": qid, "score": qs, "issues": issues}
+        if qs is None:
+            no_score.append(entry)
+        elif qs <= 2:
+            critical.append(entry)
+        elif qs == 3:
+            improve.append(entry)
         else:
-            html_content += "<p>✅ <strong>整体难度偏低</strong>，适合日常测验，建议增加挑战性题目。</p>"
+            good.append(entry)
 
-        # 困难题占比建议（基于分值或题数）
-        if has_score_distribution:
-            if hard_score / total_score > 0.4:
-                html_content += f"<p>⚠️ 困难题占比过高（{hard_score/total_score*100:.1f}%），可能影响学生自信心。</p>"
-        else:
-            hard_count = sum(1 for q in questions_difficulty if q["final_difficulty"] >= 7)
-            if hard_count > len(questions_difficulty) * 0.4:
-                html_content += "<p>⚠️ 困难题占比过高，可能影响学生自信心。</p>"
+    # 统计
+    total = len(questions)
+    avg_score = sum(q.get("quality_score", 0) for q in questions if q.get("quality_score")) / max(1, sum(1 for q in questions if q.get("quality_score")))
 
-        # 素养建议
-        for comp, data in competency_summary.items():
-            if isinstance(data, dict) and "占比" in data and data["占比"] < 0.1:
-                html_content += f"<p>⚠️ <strong>{comp}</strong>覆盖不足（{data['占比']*100:.1f}%），建议增加相关题目。</p>"
+    html = '<h2>六、命题质量总览</h2>'
 
-        html_content += """
-    </div>
+    # 总评卡片
+    html += f'''<div class="metrics-grid">
+<div class="metric-card"><div class="metric-value" style="color:#dc2626">{len(critical)}</div><div class="metric-label">硬伤（必须修改）</div></div>
+<div class="metric-card"><div class="metric-value" style="color:#ca8a04">{len(improve)}</div><div class="metric-label">待改进</div></div>
+<div class="metric-card"><div class="metric-value" style="color:#16a34a">{len(good)}</div><div class="metric-label">良好</div></div>
+<div class="metric-card"><div class="metric-value">{avg_score:.1f}/5</div><div class="metric-label">平均质量评分</div></div>
+</div>'''
 
-    <div class="footer">
-        <p>本报告由 生物试卷智能分析系统 自动生成</p>
-        <p>基于《普通高中生物学课程标准（2017年版2020修订）》</p>
-    </div>
-</body>
-</html>
-"""
+    # 硬伤列表（红色高亮）
+    if critical:
+        html += '<h3 style="color:#dc2626;margin-top:20px">⚠ 硬伤（quality_score ≤ 2，必须修改）</h3>'
+        for entry in critical:
+            html += f'<div class="rec-item high"><strong>题目 {entry["id"]}</strong>（评分 {entry["score"]}/5）'
+            if entry["issues"]:
+                html += '<ul style="margin:5px 0">'
+                for issue in entry["issues"]:
+                    html += f'<li style="font-size:12px">{issue}</li>'
+                html += '</ul>'
+            html += '</div>'
 
-        # 生成PDF
-        logger.info("[PDF生成] HTML生成完成，开始转换为PDF...")
-        HTML(string=html_content).write_pdf(output_path)
-        logger.info(f"[PDF生成] 报告生成成功: {output_path}")
+    # 待改进列表（黄色）
+    if improve:
+        html += '<h3 style="color:#ca8a04;margin-top:20px">△ 待改进（quality_score = 3，建议修改）</h3>'
+        for entry in improve:
+            html += f'<div class="rec-item medium"><strong>题目 {entry["id"]}</strong>（评分 {entry["score"]}/5）'
+            if entry["issues"]:
+                html += '<ul style="margin:5px 0">'
+                for issue in entry["issues"]:
+                    html += f'<li style="font-size:12px">{issue}</li>'
+                html += '</ul>'
+            html += '</div>'
 
-        return output_path
+    # 良好的只列题号
+    if good:
+        good_ids = ", ".join(str(e["id"]) for e in good)
+        html += f'<p style="color:#16a34a;margin-top:15px"><strong>✓ 质量良好：</strong>题目 {good_ids}</p>'
+
+    if no_score:
+        no_ids = ", ".join(str(e["id"]) for e in no_score)
+        html += f'<p style="color:#94a3b8;margin-top:10px"><strong>未评估：</strong>题目 {no_ids}（特征提取不完整）</p>'
+
+    return html
 
 
-# 测试代码
-if __name__ == "__main__":
-    print("可视化报告生成器模块加载成功")
-    print("6个图表函数已就绪:")
-    print("  1. generate_difficulty_curve() - 难度曲线图")
-    print("  2. generate_difficulty_distribution() - 难度分布直方图")
-    print("  3. generate_dimension_radar() - 维度雷达图")
-    print("  4. generate_competency_pie() - 素养覆盖饼图")
-    print("  5. generate_competency_bar() - 素养细分柱状图")
-    print("  6. generate_difficulty_gradient() - 难度梯度评估")
-    print("  7. generate_pdf_report() - 生成完整PDF报告 ⭐")
+def _render_recommendations_section(insights: dict, mode: str) -> str:
+    """渲染综合建议 section"""
+    html = '<h2>八、综合建议</h2>'
+    recs = insights.get("recommendations", [])
+
+    if mode == "brief":
+        recs = recs[:3]  # 精简档 top 3
+
+    for rec in recs:
+        priority = rec.get("priority", "medium")
+        html += f'''<div class="rec-item {priority}">
+<span class="rec-category">[{rec.get("category", "")}]</span> {rec.get("content", "")}
+</div>'''
+
+    return html
+
+
+def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
+    """组装完整 HTML 报告。"""
+    exam = data["exam_info"]
+    metrics = data["metrics"]
+
+    css = _get_report_css()
+
+    # 封面
+    cover = f'''<div class="cover">
+<h1>生物试卷质量评估报告</h1>
+<p class="subtitle">{exam["name"]}</p>
+<p>题目总数: {exam["total_questions"]} | 总分: {exam["total_score"]}分 |
+模式: {"深度" if exam["mode"]=="deep" else "快速"} |
+档位: {"完整版" if mode=="full" else "精简版"}</p>
+<p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+</div>'''
+
+    # 一、试卷总评
+    section1 = f'''<h2>一、试卷总评</h2>
+<div class="metrics-grid">
+<div class="metric-card"><div class="metric-value">{metrics["avg_difficulty"]:.2f}</div><div class="metric-label">平均难度（分值加权）</div></div>
+<div class="metric-card"><div class="metric-value">{metrics["avg_cognitive_level"]:.2f}</div><div class="metric-label">平均认知层级</div></div>
+<div class="metric-card"><div class="metric-value">{exam["total_score"]}</div><div class="metric-label">总分</div></div>
+<div class="metric-card"><div class="metric-value">{exam["total_questions"]}</div><div class="metric-label">题目数</div></div>
+</div>
+<div class="insight-box">{insights.get("overall_assessment", "")}</div>'''
+
+    sections = [css, cover, section1]
+    sections.append(_render_difficulty_section(data, insights, charts, mode))
+    sections.append(_render_knowledge_section(data, insights, charts, mode))
+    sections.append(_render_bloom_section(data, insights, charts, mode))
+    sections.append(_render_competency_section(data, insights, charts, mode))
+    sections.append(_render_quality_overview_section(data))
+    sections.append(_render_questions_section(data, insights, mode))
+    sections.append(_render_recommendations_section(insights, mode))
+
+    # Footer
+    sections.append('''<div class="footer">
+<p>本报告由 生物试卷智能分析系统 自动生成</p>
+<p>基于《普通高中生物学课程标准（2017年版2020修订）》</p>
+</div>''')
+
+    return f'''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<title>试卷评估报告</title></head><body>{"".join(sections)}</body></html>'''

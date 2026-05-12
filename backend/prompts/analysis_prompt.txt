@@ -6,6 +6,11 @@
     "knowledge_points": ["知识点1", "知识点2", "知识点3"],
     "detailed_analysis": "解题分析（严格控制在100字以内）",
     "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
     "common_mistakes": ["易错点1", "易错点2"],
     "answer": "标准答案",
     "total_score": 2,
@@ -107,12 +112,37 @@
      ]
      ```
 
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、系谱图、装置图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图
+     * `table`：数据表格
+     * `pedigree`：遗传系谱图
+     * `device`：实验装置图
+     * `flowchart`：流程图/概念图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如从系谱图推导基因型）
+     * `false`：表征仅为装饰或辅助说明（如旁边配了一张细胞图但不影响解题）
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂系谱图/多图联读/实验装置图，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
 **示例输出（系谱图遗传题）**：
 
 {
     "knowledge_points": ["伴性遗传", "多等位基因", "概率计算", "系谱图分析"],
     "detailed_analysis": "核心考点：X染色体多等位基因的多代遗传推导。解题关键：①识别Ⅱ代个体基因型的不确定性（各有两种可能）；②理解独立事件概率相乘原则；③建立Ⅳ代纯合的所有遗传路径。思维难点：多分支概率的组合计算，需清晰的逻辑框架避免遗漏或重复。",
     "difficulty": "困难",
+    "has_representation": true,
+    "representation_type": "pedigree",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 3,
+    "representation_reason": "系谱图是推导基因型和计算概率的核心依据",
     "common_mistakes": ["未穷尽所有遗传路径", "概率相乘时漏算某个分支", "混淆独立事件与互斥事件"],
     "answer": "D",
     "total_score": 4,
@@ -132,6 +162,11 @@
     "knowledge_points": ["光合作用过程", "物质转化", "同位素示踪", "有氧呼吸"],
     "detailed_analysis": "核心考点：光合作用和呼吸作用中的物质追踪。解题关键：①明确H₂O在光反应中的光解产生O₂和[H]；②追踪³H标记从H₂O→葡萄糖→呼吸中间产物的路径；③区分18O在光合和呼吸中的不同去向。思维难点：同位素标记的跨过程追踪，需要准确理解物质在两大代谢中的转化关系。",
     "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字选择题，无图表",
     "common_mistakes": ["混淆光合作用和呼吸作用中H₂O的作用", "忽略18O可能进入CO₂", "³H标记路径追踪不完整"],
     "answer": "C",
     "total_score": 2,
@@ -151,6 +186,11 @@
     "knowledge_points": ["细胞膜结构", "磷脂双分子层", "流动镶嵌模型"],
     "detailed_analysis": "核心考点：细胞膜的基本结构。解题关键：识别磷脂双分子层是膜结构的基本支架，蛋白质镶嵌其中。思维难点：理解"基本支架"与"主要成分"的区别（蛋白质含量虽高但不是支架）。",
     "difficulty": "简单",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字概念题",
     "common_mistakes": ["将蛋白质误认为基本支架", "混淆含量最多与结构作用"],
     "answer": "A",
     "total_score": 2,
@@ -170,6 +210,11 @@
     "knowledge_points": ["光合作用", "叶绿体结构", "物质转化", "能量转换"],
     "detailed_analysis": "核心考点：光合作用的场所和物质能量变化。解题关键：①区分光反应和暗反应的场所；②理解[H]和ATP的来源和去向；③掌握CO₂的固定和还原过程。思维难点：光反应和暗反应的物质联系。",
     "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "flowchart",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "光合作用流程图辅助理解物质转化",
     "common_mistakes": ["混淆光反应和暗反应的场所", "不清楚ATP的去向", "对C₃和C₅的转化理解不清"],
     "answer": "基粒(类囊体薄膜) / [H]和ATP / 叶绿体基质 / C₃ / (CH₂O)",
     "total_score": 10,

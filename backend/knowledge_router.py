@@ -18,7 +18,7 @@ logger = get_logger()
 router = APIRouter(prefix="/api/knowledge", tags=["知识库"])
 
 # 数据库配置
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@localhost:5432/biology_edu")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@postgres:5432/biology_edu")
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 

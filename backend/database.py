@@ -14,7 +14,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     # 仅在开发环境使用默认值
     if os.getenv("ENV", "development") == "development":
-        DATABASE_URL = "postgresql://biology:biology123@localhost:5432/biology_edu"
+        DATABASE_URL = "postgresql://biology:biology123@postgres:5432/biology_edu"
         logger.warning("使用默认数据库连接（仅限开发环境）")
     else:
         raise ValueError("生产环境必须设置 DATABASE_URL 环境变量")

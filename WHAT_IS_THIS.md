@@ -4,9 +4,9 @@
 试卷智能分析系统。上传 PDF/DOCX 试卷 → AI 拆题 + 分析 + 难度评估 + 分数预估。
 
 ## 技术栈
-- 后端: FastAPI + PostgreSQL(pgvector) + Claude Sonnet 4.5(分析/拆题/特征提取) + GPT 5.4(报告洞察)
+- 后端: FastAPI + PostgreSQL(pgvector) + DeepSeek V4(首选) + Claude/GPT/Gemini(fallback)
 - 前端: React 18 + Vite + Tailwind CSS + Lucide React
-- LLM 中转: AIProxy (aiproxy.superaichao.xin)，`llm_config.py` 一键切换 Claude/GPT
+- LLM: DeepSeek 直连(首选) + AIProxy(fallback)，`llm_config.py` 一键切换 Claude/GPT
 - 部署: Docker Compose
 
 ## 核心模块
@@ -25,7 +25,7 @@
 - 后端: 127.0.0.1:8001（容器内 uvicorn:8000）
 - PostgreSQL: 5432
 
-## 当前状态（2026-03-27）
+## 当前状态（2026-05-12）
 - 核心功能完整可用（3 容器运行中）
 - AI 已从 Gemini 全面切换为 Claude Sonnet 4.5（AIProxy 中转）
 - 难度 Pipeline v2 已实现（7 维特征 + 非线性评分）

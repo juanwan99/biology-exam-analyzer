@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
+import { Lock, User, LogOut, BookOpen, FileText, Terminal, ScrollText, Users } from 'lucide-react'
 import ExercisesTab from './admin/ExercisesTab'
 import TextbookTab from './admin/TextbookTab'
 import PromptsTab from './admin/PromptsTab'
@@ -83,78 +84,118 @@ function AdminPage() {
 
   if (!authenticated) {
     return (
-      <div className="max-w-md mx-auto mt-20">
-        <div className="bg-white shadow rounded-lg p-8">
-          <h2 className="text-2xl font-bold mb-6 text-center">管理员登录</h2>
-          {loginError && (
-            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded">{loginError}</div>
-          )}
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="请输入用户名"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4"
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="请输入密码"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4"
-            onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-          />
-          <button
-            onClick={handleLogin}
-            className="w-full bg-[#1a2e1f] text-white py-2 px-4 rounded-lg hover:bg-[#0f1c13]"
-          >
-            登录
-          </button>
+      <div className="min-h-[70vh] flex items-center justify-center px-4">
+        <div className="w-full max-w-[400px] animate-fade-in">
+          <div className="text-center mb-8">
+            <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center text-white"
+              style={{ background: 'var(--color-primary)', boxShadow: 'var(--shadow-md)' }}>
+              <Lock size={24} />
+            </div>
+            <h2 className="text-2xl font-bold" style={{ color: 'var(--color-primary)' }}>管理后台</h2>
+            <p className="mt-2 text-sm" style={{ color: 'var(--color-muted)' }}>请输入管理员凭证</p>
+          </div>
+
+          <div style={{
+            borderRadius: '24px',
+            border: '1px solid var(--color-border-light)',
+            boxShadow: 'var(--shadow-lg)',
+            background: 'rgba(255, 255, 255, 0.92)',
+            backdropFilter: 'blur(12px)',
+            padding: '32px',
+          }}>
+            {loginError && (
+              <div className="alert alert-error mb-5 text-sm">{loginError}</div>
+            )}
+            <div className="mb-4">
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--color-secondary)' }}>用户名</label>
+              <div className="relative">
+                <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2"
+                  style={{ color: 'var(--color-muted)' }} />
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="请输入用户名"
+                  className="input-modern"
+                  style={{ paddingLeft: '40px' }}
+                />
+              </div>
+            </div>
+            <div className="mb-6">
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--color-secondary)' }}>密码</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2"
+                  style={{ color: 'var(--color-muted)' }} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="请输入密码"
+                  className="input-modern"
+                  style={{ paddingLeft: '40px' }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                />
+              </div>
+            </div>
+            <button onClick={handleLogin} className="btn-primary w-full">
+              登录
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 
+  const tabs = [
+    { key: 'exercises', label: '题库管理', icon: BookOpen },
+    { key: 'textbook', label: '教材管理', icon: FileText },
+    { key: 'prompts', label: 'Prompt管理', icon: Terminal },
+    { key: 'logs', label: '操作日志', icon: ScrollText },
+    ...(user?.role === 'admin' ? [{ key: 'users', label: '用户管理', icon: Users }] : [])
+  ]
+
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">管理后台</h1>
+    <div className="max-w-[1200px] mx-auto py-8 px-6">
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="page-title">管理后台</h1>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">
+          <span className="badge badge-primary">
             {user?.display_name || user?.username}
-            {user?.role === 'admin' && <span className="ml-1 text-[#1a2e1f]">(管理员)</span>}
+            {user?.role === 'admin' && ' (管理员)'}
           </span>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 text-sm text-red-600 hover:text-red-800"
+          <button onClick={handleLogout}
+            className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-full"
+            style={{ color: 'var(--danger)', transition: 'var(--transition)' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--macaron-coral-light)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
-            退出登录
+            <LogOut size={14} /> 退出
           </button>
         </div>
       </div>
 
       {/* 标签页 */}
-      <div className="border-b border-gray-200 mb-6">
-        <nav className="-mb-px flex space-x-8">
-          {[
-            { key: 'exercises', label: '题库管理' },
-            { key: 'textbook', label: '教材管理' },
-            { key: 'prompts', label: 'Prompt管理' },
-            { key: 'logs', label: '操作日志' },
-            ...(user?.role === 'admin' ? [{ key: 'users', label: '用户管理' }] : [])
-          ].map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === tab.key
-                  ? 'border-[#2d5a3d] text-[#1a2e1f]'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+      <div className="mb-8" style={{ borderBottom: '1px solid var(--color-border-light)' }}>
+        <nav className="-mb-px flex gap-1">
+          {tabs.map(tab => {
+            const Icon = tab.icon
+            const isActive = activeTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors"
+                style={{
+                  borderColor: isActive ? 'var(--color-primary-light)' : 'transparent',
+                  color: isActive ? 'var(--color-primary)' : 'var(--color-muted)',
+                }}
+              >
+                <Icon size={15} /> {tab.label}
+              </button>
+            )
+          })}
         </nav>
       </div>
 

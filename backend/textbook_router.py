@@ -1233,7 +1233,7 @@ async def get_vector_stats():
 
     DATABASE_URL = os.environ.get(
         "DATABASE_URL",
-        "postgresql://biology:biology123@localhost:5432/biology_edu"
+        "postgresql://biology:biology123@postgres:5432/biology_edu"
     )
 
     try:

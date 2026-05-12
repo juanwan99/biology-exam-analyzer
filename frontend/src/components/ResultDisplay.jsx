@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle } from 'lucide-react'
 import ExamStatisticsEnhanced from './ExamStatisticsEnhanced'
 
@@ -33,6 +34,11 @@ function QuestionModal({ question, onClose }) {
             {question.competency?.primary_competency && !hasError && (
               <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
                 {question.competency.primary_competency}
+              </span>
+            )}
+            {question.difficulty?.features?.bloom && !hasError && (
+              <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
+                {['', '识记', '理解', '应用', '分析', '评价', '创造'][question.difficulty.features.bloom] || ''}
               </span>
             )}
           </div>
@@ -249,6 +255,62 @@ function QuestionModal({ question, onClose }) {
               </ul>
             </div>
           )}
+
+          {/* 命题质量审查 */}
+          {(() => {
+            const f = question.difficulty?.features
+            const items = []
+            if (f?.quality_scientific) items.push({ label: '科学性', text: f.quality_scientific })
+            if (f?.quality_normative) items.push({ label: '规范性', text: f.quality_normative })
+            if (f?.quality_language) items.push({ label: '语言表述', text: f.quality_language })
+            if (f?.quality_context) items.push({ label: '情境设计', text: f.quality_context })
+            if (items.length === 0) return null
+            const qs = f?.quality_score
+            const scoreColors = {
+              1: 'bg-[#fef0f0] text-[#991b1b] border-[#fde8e8]',
+              2: 'bg-[#fef0f0] text-[#991b1b] border-[#fde8e8]',
+              3: 'bg-[#fdf6e3] text-[#92400e] border-[#fef3c7]',
+              4: 'bg-[#e8f8ee] text-[#2d5a3d] border-[#c8f0d4]',
+              5: 'bg-[#e8f8ee] text-[#2d5a3d] border-[#c8f0d4]',
+            }
+            const scoreLabels = { 1: '严重缺陷', 2: '需修改', 3: '基本合格', 4: '较好', 5: '优秀' }
+            return (
+              <div className="mb-6">
+                <h4 className="font-semibold text-[#1a2e1f] mb-3 flex items-center gap-2">
+                  <span className="w-1 h-5 bg-gradient-to-b from-[#2d5a3d] to-[#1a2e1f] rounded-full"></span>
+                  命题质量审查
+                  {qs && (
+                    <span className={`ml-2 px-2 py-0.5 text-xs font-semibold rounded-full border ${scoreColors[qs] || ''}`}>
+                      {qs}/5 {scoreLabels[qs] || ''}
+                    </span>
+                  )}
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {items.map((item, idx) => (
+                    <div key={idx} className="p-3 bg-[#f9fafb] rounded-lg border border-[#e2e8e4]">
+                      <div className="text-xs font-semibold text-[#5a6b5e] mb-1">{item.label}</div>
+                      <p className="text-sm text-[#1a2e1f] leading-relaxed">{item.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* 教师点评 */}
+          {question.difficulty?.features?.teacher_comment && (
+            <div className="mb-6">
+              <h4 className="font-semibold text-[#1a2e1f] mb-3 flex items-center gap-2">
+                <span className="w-1 h-5 bg-gradient-to-b from-[#2d5a3d] to-[#1a2e1f] rounded-full"></span>
+                教师点评
+              </h4>
+              <div className="p-4 bg-[#fdf6e3] rounded-xl border border-[#fef3c7]">
+                <p className="text-[#1a2e1f] leading-relaxed">
+                  {question.difficulty.features.teacher_comment}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -354,11 +416,9 @@ function ResultDisplay({ data }) {
             </p>
             <a
               href={data.report_url}
-              download
-              target="_blank"
-              rel="noopener noreferrer"
+              download="试卷质量评估报告.pdf"
               className="btn-primary"
-              style={{ padding: '14px 48px', fontSize: '16px' }}
+              style={{ padding: '14px 48px', fontSize: '16px', display: 'inline-block', textDecoration: 'none' }}
             >
               下载PDF报告
             </a>
@@ -480,12 +540,13 @@ function ResultDisplay({ data }) {
         </div>
       </div>
 
-      {/* 弹窗 */}
-      {selectedQuestion && (
+      {/* 弹窗 — Portal 到 body 避免父容器 stacking context 裁剪 */}
+      {selectedQuestion && createPortal(
         <QuestionModal
           question={selectedQuestion}
           onClose={() => setSelectedQuestion(null)}
-        />
+        />,
+        document.body
       )}
     </div>
   )

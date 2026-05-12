@@ -121,8 +121,8 @@ class DifficultyPipeline:
         else:
             raw_score = compute_difficulty(features)
 
-        from calibration import calibrate
-        score = calibrate(raw_score)
+
+        score = raw_score
         label = score_to_label(score)
         logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
                     + (" [v3.1 大题]" if is_big_question and not big_question_fallback else ""))

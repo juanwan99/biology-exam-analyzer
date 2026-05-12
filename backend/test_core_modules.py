@@ -3,7 +3,6 @@
 覆盖不依赖数据库的纯逻辑模块：
 - utils.py (infer_question_type)
 - session_manager.py (save/get/expire)
-- calibration.py (calibrate/fit/piecewise)
 - feature_extractor.py (parse_features/build_prompt)
 - rule_scorer.py (score_to_label, _interpolate)
 """
@@ -110,37 +109,6 @@ class TestSessionManager:
         assert self.get("s1")["v"] == 2
 
 
-# ============ calibration.py ============
-
-class TestCalibration:
-    """难度校准测试。"""
-
-    def test_no_model_passthrough(self):
-        """无校准模型时原样返回。"""
-        from calibration import calibrate, _calibration_fn
-        import calibration
-        calibration._calibration_fn = None
-        # 确保模型文件不存在的情况下
-        with patch.object(calibration, '_CALIBRATION_PATH') as mock_path:
-            mock_path.exists.return_value = False
-            assert calibrate(5.0) == 5.0
-            assert calibrate(0.0) == 0.0
-
-    def test_piecewise_interpolation(self):
-        """分段线性插值。"""
-        from calibration import _apply_piecewise
-        model = {"x": [0.0, 5.0, 10.0], "y": [1.0, 5.0, 9.0]}
-        assert _apply_piecewise(model, 0.0) == 1.0
-        assert _apply_piecewise(model, 5.0) == 5.0
-        assert _apply_piecewise(model, 10.0) == 9.0
-        assert _apply_piecewise(model, 2.5) == 3.0  # 线性插值
-
-    def test_piecewise_clamp(self):
-        """超出范围时夹到边界。"""
-        from calibration import _apply_piecewise
-        model = {"x": [2.0, 8.0], "y": [3.0, 7.0]}
-        assert _apply_piecewise(model, 0.0) == 3.0  # 低于最小
-        assert _apply_piecewise(model, 100.0) == 7.0  # 高于最大
 
 
 # ============ feature_extractor.py ============

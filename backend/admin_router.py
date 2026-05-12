@@ -186,7 +186,11 @@ async def download_report(filename: str):
     return FileResponse(
         report_path,
         media_type='application/pdf',
-        filename=filename
+        filename=filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        }
     )
 
 

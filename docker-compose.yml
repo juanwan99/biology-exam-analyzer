@@ -4,7 +4,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: biology_postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=biology
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-biology123}
@@ -33,17 +33,11 @@ services:
       - ./backend/rules:/app/rules
       - ./reports:/app/reports
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_API_BASE=${GEMINI_API_BASE}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
-      - CLAUDE_API_BASE=${CLAUDE_API_BASE:-https://aiproxy.superaichao.xin/api/v1/anthropic}
-      - AIPROXY_OAI_KEY=${AIPROXY_OAI_KEY}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
-      - VECTO_API_KEY=${VECTO_API_KEY}
-      - VECTO_API_BASE=${VECTO_API_BASE:-https://api.vectorengine.ai/v1/chat/completions}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

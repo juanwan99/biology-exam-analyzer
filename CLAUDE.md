@@ -266,8 +266,4 @@ DifficultyMapping, ScorePrediction
 
 - ~~main.py 臃肿~~ → **已完成**（208 行，8 router 拆分）
 - ~~P0 安全~~ → **已完成**（路径穿越/认证/限流/输入校验/异常脱敏）
-- **document_processor.py 阻塞事件循环** — `convert_from_path()` 等同步调用需包装 `run_in_executor`
-- **Session 内存管理** — auth_router 的 active_tokens 无定期清理
 - **文档处理器重复** — word_parser_v2/word_splitter/pdf_parser/pdf_splitter/rule_splitter 需统一
-- **calibration.py/task_registry.py 未集成** — 代码完整但无调用方
-- **frontend/src/src/ 重复** — 存在一层多余的 src/src/ 副本目录

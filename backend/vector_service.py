@@ -17,7 +17,7 @@ from logger import get_logger
 logger = get_logger()
 
 # 数据库配置
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@localhost:5432/biology_edu")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@postgres:5432/biology_edu")
 
 # 向量模型配置
 # 使用 paraphrase-multilingual-MiniLM-L12-v2，支持中文，768维

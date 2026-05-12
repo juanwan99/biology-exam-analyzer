@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 内置 Opus→GPT→Gemini fallback 链。
+"""统一 LLM 客户端 — 内置 DeepSeek→Claude→GPT→Gemini fallback 链。
 
 所有 LLM 调用都通过 llm_call() 入口，自动按 llm_config.PROVIDERS 顺序尝试。
 每次调用独立 fallback，不是整卷切换。
@@ -145,6 +145,11 @@ def _extract_text(api_format: str, data: dict) -> str:
     if api_format == "anthropic":
         return data["content"][0]["text"]
     elif api_format == "openai_responses":
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for block in item.get("content", []):
+                    if block.get("type") == "output_text":
+                        return block["text"]
         return data["output"][0]["content"][0]["text"]
     else:  # openai_chat
         return data["choices"][0]["message"]["content"]
@@ -174,6 +179,11 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
         for attempt in range(retries + 1):
             try:
                 resp = await _http_post(url, headers=headers, json=body, timeout=timeout)
+                ct = resp.headers.get("content-type", "")
+                if "text/html" in ct:
+                    raise RuntimeError(
+                        f"API returned HTML instead of JSON (URL may be invalid: {url})"
+                    )
                 resp.raise_for_status()
                 data = resp.json()
                 return _extract_text(provider["api_format"], data)
@@ -211,21 +221,7 @@ async def llm_call(
     temperature: float = 0,
     timeout: float = 120.0,
 ) -> str:
-    """统一 LLM 调用入口，内置 fallback 链。
-
-    Args:
-        messages: OpenAI Chat 格式 [{"role": "user", "content": str | list}]
-        max_tokens: 最大输出 token
-        temperature: 温度
-        timeout: 单次 HTTP 超时（秒）
-
-    Returns:
-        str: LLM 响应文本
-
-    Raises:
-        AllProvidersFailed: 所有 provider 都失败
-        httpx.HTTPStatusError: 400 Bad Request（不 fallback）
-    """
+    """统一 LLM 调用入口，内置 fallback 链。"""
     providers = get_providers()
     if not providers:
         raise AllProvidersFailed([("none", RuntimeError("无可用 LLM provider，请检查 API key 配置"))])
@@ -250,7 +246,7 @@ async def llm_call(
                     body_text = e.response.text[:200]
                 except Exception:
                     pass
-                logger.warning(f"[LLM] {provider['name']} 403 (可能模型 ID 过期): {body_text}")
+                logger.warning(f"[LLM] {provider['name']} 403: {body_text}")
                 errors.append((provider["name"], e))
                 continue
             if status == 401:
