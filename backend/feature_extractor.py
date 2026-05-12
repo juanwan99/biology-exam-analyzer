@@ -5,7 +5,7 @@ v3 核心变化：bloom 降为报告标签，新增 working_memory/chain_couplin
 """
 import json
 import re
-from claude_client import send_message_gpt
+from llm_client import send_message_gpt
 from prompt_loader import PromptLoader
 from logger import get_logger
 

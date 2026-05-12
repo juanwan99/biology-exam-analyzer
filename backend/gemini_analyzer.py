@@ -10,12 +10,11 @@ logger = get_logger()
 
 
 class GeminiAnalyzer:
-    """LLM 分析器：题目拆分和分析（统一 fallback 客户端）"""
+    """LLM 分析器：题目拆分和分析（统一 fallback 客户端）。"""
 
-    def __init__(self, api_key: str = None, api_base: str = None):
-        """初始化分析器。api_key/api_base 参数保留兼容性，实际不使用。"""
+    def __init__(self):
         self.logger = get_logger()
-        self.logger.info("LLM 分析器初始化完成（统一 fallback 客户端）")
+        self.logger.info("LLM 分析器初始化完成")
 
     @staticmethod
     def extract_json(text: str) -> str:

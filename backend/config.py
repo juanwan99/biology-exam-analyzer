@@ -18,10 +18,3 @@ REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", BASE_DIR / "reports"))
 # 确保目录存在
 for directory in [UPLOAD_DIR, LOG_DIR, PROMPT_DIR, RULES_DIR, REPORTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
-
-# Claude API (AIProxy Anthropic 端点 — 难度量化 Pipeline)
-CLAUDE_API_BASE = os.environ.get(
-    "CLAUDE_API_BASE",
-    "https://aiproxy.superaichao.xin/api/v1/anthropic"
-)
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "")

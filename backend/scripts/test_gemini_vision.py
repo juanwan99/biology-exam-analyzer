@@ -1,3 +1,11 @@
+import os as _os
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not _os.environ.get("GEMINI_API_KEY"),
+    reason="需要 GEMINI_API_KEY 环境变量（集成测试）"
+)
+
 # -*- coding: utf-8 -*-
 """
 测试 Gemini 视觉模型对教材页面的文本提取效果

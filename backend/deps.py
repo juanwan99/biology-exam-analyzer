@@ -12,7 +12,6 @@ from logger import get_logger
 logger = get_logger()
 
 # ============ 环境变量 ============
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "21"))
 
 # ============ 惰性单例 ============
@@ -51,8 +50,7 @@ def get_competency_analyzer():
     global _competency_analyzer
     if _competency_analyzer is None:
         from competency_analyzer import CompetencyAnalyzer
-        g = get_gemini_analyzer()
-        _competency_analyzer = CompetencyAnalyzer(gemini_analyzer=g)
+        _competency_analyzer = CompetencyAnalyzer()
     return _competency_analyzer
 
 

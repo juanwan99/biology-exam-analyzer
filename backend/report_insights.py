@@ -6,7 +6,7 @@ GPT 失败直接 raise，不降级。
 """
 import json
 import re
-from claude_client import send_message_gpt
+from llm_client import send_message_gpt
 from logger import get_logger
 
 logger = get_logger()

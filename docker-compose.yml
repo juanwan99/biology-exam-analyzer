@@ -7,7 +7,7 @@ services:
       - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=biology
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-biology123}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       - POSTGRES_DB=biology_edu
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -44,6 +44,12 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build: ./frontend

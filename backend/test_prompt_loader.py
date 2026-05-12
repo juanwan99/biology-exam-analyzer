@@ -37,8 +37,7 @@ class TestPromptLoader:
 
     def test_nonexistent_subject_fallback(self):
         """不存在的学科 fallback 到 _base（如果存在）或抛异常。"""
-        loader = PromptLoader("physics")
-        # physics 目录不存在，_base 也不存在 → 应抛 FileNotFoundError
+        loader = PromptLoader("nonexistent_subject_xyz")
         with pytest.raises(FileNotFoundError):
             loader.load("feature_extractor")
 

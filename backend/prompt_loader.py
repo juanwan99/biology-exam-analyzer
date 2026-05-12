@@ -10,10 +10,13 @@ logger = get_logger()
 
 # 学科 prompts 目录：优先从环境变量读取，默认 BASE_DIR / "subject_prompts"
 # Docker 中由 docker-compose 挂载 ./prompts -> /app/subject_prompts
-_PROMPTS_DIR = Path(os.environ.get(
-    "SUBJECT_PROMPTS_DIR",
-    Path(__file__).parent / "subject_prompts"
-))
+_default_dir = Path(__file__).parent / "subject_prompts"
+if not any(_default_dir.iterdir()) if _default_dir.exists() else True:
+    _alt = Path(__file__).parent.parent / "prompts"
+    if _alt.exists():
+        _default_dir = _alt
+
+_PROMPTS_DIR = Path(os.environ.get("SUBJECT_PROMPTS_DIR", str(_default_dir)))
 
 
 class PromptLoader:

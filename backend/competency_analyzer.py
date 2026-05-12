@@ -18,7 +18,7 @@ class CompetencyAnalyzer:
     def __init__(
         self,
         library_path: str = None,
-        gemini_analyzer=None
+
     ):
         """
         初始化核心素养分析器
@@ -29,8 +29,6 @@ class CompetencyAnalyzer:
         """
         self.library_path = library_path or str(RULES_DIR / "competency_library.json")
         self.library = self._load_library()
-        # gemini_analyzer 保留用于 extract_json
-        self.gemini_analyzer = gemini_analyzer
 
         logger.info("核心素养分析器初始化完成")
 
@@ -97,16 +95,9 @@ class CompetencyAnalyzer:
             )
             logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
 
-            # 解析JSON — 优先用 gemini_analyzer.extract_json，否则直接解析
-            if self.gemini_analyzer:
-                json_text = self.gemini_analyzer.extract_json(response_text)
-            else:
-                # fallback: 尝试直接从响应中提取 JSON
-                json_text = response_text
-                if "```json" in json_text:
-                    json_text = json_text.split("```json")[1].split("```")[0]
-                elif "```" in json_text:
-                    json_text = json_text.split("```")[1].split("```")[0]
+            # 解析JSON
+            from gemini_analyzer import GeminiAnalyzer
+            json_text = GeminiAnalyzer.extract_json(response_text)
 
             result = json.loads(json_text)
 
