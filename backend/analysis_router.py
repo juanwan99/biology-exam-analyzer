@@ -34,6 +34,7 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
 from utils import infer_question_type
 from deps import (
+    get_analysis_service,
     get_gemini_analyzer,
     get_difficulty_engine,
     get_competency_analyzer,
@@ -64,103 +65,9 @@ async def analyze_question_full(
     image_bytes: List[bytes],
     mode: str = "deep"
 ) -> Dict[str, Any]:
-    """
-    完整分析单道题目（分析 + 难度 + 素养 一次完成）
-
-    Args:
-        question: 题目数据
-        image_bytes: 文档图片列表
-        mode: 评估模式（fast/deep）
-
-    Returns:
-        包含 analysis, difficulty, competency 的完整题目数据
-    """
-    gemini_analyzer = get_gemini_analyzer()
-    difficulty_engine = get_difficulty_engine()
-    competency_analyzer = get_competency_analyzer()
-
-    q_id = question.get("id", 0)
-
-    try:
-        # 步骤0：题型推断
-        question_type = infer_question_type(question)
-        question["question_type"] = question_type
-        section_header = question.get("_section_header")
-
-        # 准备图片数据
-        q_image_indices = question.get("image_indices", [])
-        q_images = [image_bytes[i] for i in q_image_indices if i < len(image_bytes)]
-
-        # 如果有 _media_for_ai 字段（Word拆分模式），使用它
-        media_for_ai = question.get("_media_for_ai", [])
-        if media_for_ai:
-            q_images = []
-            for media_item in media_for_ai:
-                try:
-                    if media_item.get("type") in ["image", "table"]:
-                        base64_str = media_item.get("base64", "")
-                        if base64_str:
-                            q_images.append(base64.b64decode(base64_str))
-                except Exception as e:
-                    logger.warning(f"[分析] 题目{q_id} 媒体解码失败: {str(e)}")
-
-        # 步骤1：Gemini题目分析
-        if not gemini_analyzer:
-            raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
-        logger.info(f"[分析] 题目{q_id} 开始Gemini分析")
-        analysis = await gemini_analyzer.analyze_question(
-            question_text=question.get("content", ""),
-            question_images=q_images,
-            question_id=q_id,
-            question_type=question_type,
-            section_header=section_header
-        )
-        question["analysis"] = analysis
-
-        # 步骤2：难度评估
-        logger.info(f"[分析] 题目{q_id} 开始难度评估")
-        q_image_b64 = ""
-        if q_images:
-            import base64 as _b64
-            q_image_b64 = _b64.b64encode(q_images[0]).decode("utf-8")
-        difficulty_result = await difficulty_engine.evaluate_with_refinement(
-            question={
-                "id": q_id,
-                "content": question.get("content", ""),
-                "knowledge_points": analysis.get("knowledge_points", []),
-                "total_score": analysis.get("total_score", question.get("total_score", 0)),
-                "num_options": analysis.get("num_options", 4),
-                "question_type": question_type,
-                "correct_answer": analysis.get("answer", ""),
-                "sub_questions_count": question.get("sub_questions_count"),
-                "sub_scores": question.get("sub_scores", []),
-                "image_base64": q_image_b64,
-            },
-            mode=mode,
-            analysis_result=analysis
-        )
-        question["difficulty"] = difficulty_result
-
-        # 步骤3：素养分析
-        logger.info(f"[分析] 题目{q_id} 开始素养分析")
-        competency_result = await competency_analyzer.analyze_competency(
-            question={
-                "id": q_id,
-                "content": question.get("content", ""),
-                "knowledge_points": analysis.get("knowledge_points", [])
-            }
-        )
-        question["competency"] = competency_result
-
-        logger.info(f"[分析] 题目{q_id} 完整分析完成")
-        return question
-
-    except Exception as e:
-        logger.error(f"[分析] 题目{q_id} 分析失败: {str(e)}")
-        question["analysis"] = {"error": str(e), "knowledge_points": [], "answer": "分析失败"}
-        question["difficulty"] = {"error": str(e)}
-        question["competency"] = {"error": str(e)}
-        return question
+    """单题完整分析 — 委托给 AnalysisService。"""
+    svc = get_analysis_service()
+    return await svc.analyze_question(question, image_bytes, mode)
 
 
 def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) -> Dict:

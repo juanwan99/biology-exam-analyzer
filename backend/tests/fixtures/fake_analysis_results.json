@@ -1,0 +1,41 @@
+{
+  "1": {
+    "knowledge_points": [
+      "细胞膜的结构与功能"
+    ],
+    "answer": "B",
+    "total_score": 2,
+    "analysis": "考查细胞膜基本组成。B选项错误：不同功能细胞膜蛋白不同。",
+    "common_mistakes": [
+      "忽略膜蛋白的多样性"
+    ],
+    "detailed_analysis": "细胞膜的流动镶嵌模型",
+    "num_options": 4
+  },
+  "2": {
+    "knowledge_points": [
+      "渗透作用",
+      "质壁分离"
+    ],
+    "answer": "(1)外界溶液浓度大于细胞液浓度...(2)换清水观察...",
+    "total_score": 8,
+    "analysis": "考查质壁分离的原理和实验操作。",
+    "common_mistakes": [
+      "混淆原生质体和原生质层"
+    ],
+    "detailed_analysis": "分析渗透作用原理"
+  },
+  "3": {
+    "knowledge_points": [
+      "光合作用",
+      "呼吸作用"
+    ],
+    "answer": "(1)光合作用暗反应 (2)C3",
+    "total_score": 6,
+    "analysis": "考查光合作用与呼吸作用的关系。",
+    "common_mistakes": [
+      "混淆C3和C5"
+    ],
+    "detailed_analysis": "光反应与暗反应的物质变化"
+  }
+}

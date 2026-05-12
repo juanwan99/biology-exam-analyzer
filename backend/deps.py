@@ -101,3 +101,22 @@ def get_report_generator():
         from report_generator import ReportGenerator
         _report_generator = ReportGenerator()
     return _report_generator
+
+
+_analysis_service = None
+
+def get_analysis_service():
+    global _analysis_service
+    if _analysis_service is None:
+        from services.analysis_service import AnalysisService
+        _analysis_service = AnalysisService(
+            analyzer=get_gemini_analyzer(),
+            difficulty_engine=get_difficulty_engine(),
+            competency_analyzer=get_competency_analyzer(),
+            knowledge_mapper=get_knowledge_mapper(),
+            doc_processor=get_doc_processor(),
+            word_splitter=get_word_splitter(),
+            pdf_splitter=get_pdf_splitter(),
+            max_workers=MAX_WORKERS,
+        )
+    return _analysis_service

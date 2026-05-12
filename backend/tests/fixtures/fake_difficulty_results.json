@@ -1,0 +1,65 @@
+{
+  "1": {
+    "final_difficulty": 3.2,
+    "cognitive_level": 2,
+    "features": {
+      "bloom": 2,
+      "reasoning_steps": 1,
+      "knowledge_breadth": 1,
+      "info_density": 1,
+      "novelty": 1,
+      "representation_complexity": 1,
+      "bloom_distribution": {
+        "识记": 1,
+        "理解": 1
+      }
+    },
+    "score_distribution_by_difficulty": {
+      "简单": 2.0,
+      "中等": 0.0,
+      "困难": 0.0
+    }
+  },
+  "2": {
+    "final_difficulty": 6.5,
+    "cognitive_level": 4,
+    "features": {
+      "bloom": 4,
+      "reasoning_steps": 3,
+      "knowledge_breadth": 2,
+      "info_density": 2,
+      "novelty": 2,
+      "representation_complexity": 1,
+      "bloom_distribution": {
+        "应用": 1,
+        "分析": 1
+      }
+    },
+    "score_distribution_by_difficulty": {
+      "简单": 0.0,
+      "中等": 8.0,
+      "困难": 0.0
+    }
+  },
+  "3": {
+    "final_difficulty": 5.8,
+    "cognitive_level": 3,
+    "features": {
+      "bloom": 3,
+      "reasoning_steps": 2,
+      "knowledge_breadth": 2,
+      "info_density": 2,
+      "novelty": 1,
+      "representation_complexity": 2,
+      "bloom_distribution": {
+        "理解": 1,
+        "应用": 1
+      }
+    },
+    "score_distribution_by_difficulty": {
+      "简单": 0.0,
+      "中等": 6.0,
+      "困难": 0.0
+    }
+  }
+}
