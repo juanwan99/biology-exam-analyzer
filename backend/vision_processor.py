@@ -24,7 +24,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@p
 
 # Gemini API配置
 API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
-API_BASE = os.environ.get("GEMINI_API_BASE", "https://www.chataiapi.com/v1")
+API_BASE = os.environ.get("GEMINI_API_BASE", "")
 VISION_MODEL = "gemini-2.5-flash"
 
 # 提示词

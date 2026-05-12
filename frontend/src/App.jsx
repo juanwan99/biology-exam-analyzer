@@ -1,9 +1,14 @@
+import React from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { ScanSearch } from 'lucide-react'
 import AnalyzerPage from './pages/AnalyzerPage'
 import AdminPage from './pages/AdminPage'
 import CorrectionPage from './pages/CorrectionPage'
 import ErrorBoundary from './components/ErrorBoundary'
+const ExercisePage = React.lazy(() => import('./pages/ExercisePage'))
+const TextbookPage = React.lazy(() => import('./pages/TextbookPage'))
+const QuizGeneratorPage = React.lazy(() => import('./pages/QuizGeneratorPage'))
+const HistoryDataPage = React.lazy(() => import('./pages/HistoryDataPage'))
 
 function App() {
   const location = useLocation()
@@ -64,6 +69,10 @@ function App() {
             <Route path="/" element={<AnalyzerPage />} />
             <Route path="/correction" element={<CorrectionPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/exercises" element={<React.Suspense fallback={<div>加载中...</div>}><ExercisePage /></React.Suspense>} />
+            <Route path="/textbooks" element={<React.Suspense fallback={<div>加载中...</div>}><TextbookPage /></React.Suspense>} />
+            <Route path="/quiz" element={<React.Suspense fallback={<div>加载中...</div>}><QuizGeneratorPage /></React.Suspense>} />
+            <Route path="/history" element={<React.Suspense fallback={<div>加载中...</div>}><HistoryDataPage /></React.Suspense>} />
             <Route path="*" element={
               <div className="min-h-[60vh] flex items-center justify-center">
                 <div className="text-center">

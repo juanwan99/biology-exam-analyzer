@@ -284,251 +284,54 @@ async def analyze_document(
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
 ):
-    """
-    主接口：上传文档并完成完整分析流程
-
-    Args:
-        file: 上传的PDF或DOCX文件
-        mode: 评估模式 "fast"(快速) 或 "deep"(深度)
-        generate_report: 是否生成PDF报告
-
-    流程：
-    1. 保存上传文件
-    2. 转换为图片
-    3. Gemini拆分题目
-    4. 逐题深度分析
-    5. 难度评估（新增）
-    6. 素养分析（新增）
-    7. 生成PDF报告（可选）
-    8. 返回完整结果
-    """
-    gemini_analyzer = get_gemini_analyzer()
-    doc_processor = get_doc_processor()
-    difficulty_engine = get_difficulty_engine()
-    competency_analyzer = get_competency_analyzer()
-
+    """主接口：上传文档并完成完整分析流程。"""
+    svc = get_analysis_service()
     start_time = datetime.now()
     logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
 
+    file_path = None
     try:
-        # 1. 保存文件
         file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
         async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            if len(content) > MAX_UPLOAD_SIZE:
+            file_content = await file.read()
+            if len(file_content) > MAX_UPLOAD_SIZE:
                 raise HTTPException(413, detail=f"文件过大，上限 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
-            await f.write(content)
-        logger.debug(f"文件已保存: {file_path}, 大小: {len(content) / 1024:.2f}KB")
+            await f.write(file_content)
 
-        # 2. 文档转图片
-        extracted_text = None  # 存储提取的文字
-        extracted_elements = None  # 存储提取的元素信息
-        loop = asyncio.get_event_loop()
-        if file.filename.lower().endswith('.pdf'):
-            images = await loop.run_in_executor(None, doc_processor.process_pdf, str(file_path))
-        elif file.filename.lower().endswith('.docx'):
-            images = await loop.run_in_executor(None, doc_processor.process_docx, str(file_path))
-        else:
-            raise HTTPException(400, "不支持的文件格式，仅支持PDF和DOCX")
+        exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        result = await svc.run_full_analysis(
+            file_path=str(file_path),
+            filename=file.filename,
+            mode=mode,
+            generate_report=generate_report,
+            report_mode=report_mode,
+            reports_dir=str(REPORTS_DIR),
+            exam_id=exam_id,
+        )
 
-        if not images:
-            raise HTTPException(400, "文档转换失败，未生成图片")
-
-        # 检查图片是否包含提取的文字和元素信息（PDF和Word都支持）
-        if images and hasattr(images[0], 'info'):
-            if 'extracted_text' in images[0].info:
-                extracted_text = images[0].info['extracted_text']
-                logger.info(f"检测到提取文字，长度: {len(extracted_text)} 字符")
-            if 'elements' in images[0].info:
-                extracted_elements = images[0].info['elements']
-                logger.info(f"检测到元素信息，共 {len(extracted_elements)} 个元素")
-
-        image_bytes = await loop.run_in_executor(None, doc_processor.images_to_bytes, images)
-        logger.info(f"图片转换完成，共{len(image_bytes)}张")
-
-        # 3. Gemini拆分题目（传递提取的文字）
-        if not gemini_analyzer:
-            raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
-        questions = await gemini_analyzer.split_questions(image_bytes, extracted_text=extracted_text)
-        logger.info(f"题目拆分完成，共{len(questions)}道题")
-
-        # 【调试】打印第一道题的内容，检查是否包含选项
-        if questions:
-            first_q_content = questions[0].get('content', '')
-            logger.info(f"[DEBUG] 第一道题内容长度: {len(first_q_content)} 字符")
-            logger.info(f"[DEBUG] 第一道题内容预览:\n{first_q_content[:300]}...")
-            has_options = any(opt in first_q_content for opt in ['A.', 'B.', 'C.', 'D.', 'A、', 'B、'])
-            logger.info(f"[DEBUG] 第一道题是否包含选项: {has_options}")
-
-        # 3.5 如果有元素信息，使用智能匹配算法分配给题目
-        if extracted_elements:
-            doc_processor.match_elements_to_questions(questions, extracted_elements)
-
-        # 4. 逐题分析
-        for idx, question in enumerate(questions):
-            logger.info(f"开始分析第{idx+1}/{len(questions)}题")
-
-            # 获取该题的图片
-            q_image_indices = question.get("image_indices", [])
-            q_images = [image_bytes[i] for i in q_image_indices if i < len(image_bytes)]
-
-            # 获取题型（从拆分阶段识别的）
-            question_type = question.get("question_type", "unknown")
-
-            # 获取分节标题
-            section_header = question.get("_section_header")
-
-            # 题型fallback推断：如果拆分阶段未识别题型，根据section_header推断
-            if question_type == "unknown" and section_header:
-                if "单选" in section_header or "单项选择" in section_header or "只有一项" in section_header or "只有一个选项" in section_header:
-                    question_type = "single_choice"
-                    logger.info(f"[题型推断] 题目{question.get('id')} 根据分节标题推断为 single_choice")
-                elif "多选" in section_header or "不定项" in section_header or "多项" in section_header or "一项或多项" in section_header or "一个或多个选项" in section_header:
-                    question_type = "multiple_choice"
-                    logger.info(f"[题型推断] 题目{question.get('id')} 根据分节标题推断为 multiple_choice")
-                elif "填空" in section_header:
-                    question_type = "fill_blank"
-                    logger.info(f"[题型推断] 题目{question.get('id')} 根据分节标题推断为 fill_blank")
-                elif "非选择题" in section_header or "简答" in section_header or "实验" in section_header:
-                    question_type = "short_answer"
-                    logger.info(f"[题型推断] 题目{question.get('id')} 根据分节标题推断为 short_answer")
-
-            # 更新question对象的question_type（用于后续流程）
-            question["question_type"] = question_type
-
-            # 调用Gemini分析（传递题型和分节标题）
-            if not gemini_analyzer:
-                raise HTTPException(503, detail="AI 分析服务未配置（缺少 GEMINI_API_KEY）")
-            analysis = await gemini_analyzer.analyze_question(
-                question_text=question.get("content", ""),
-                question_images=q_images,
-                question_id=question.get("id", idx+1),
-                question_type=question_type,
-                section_header=section_header  # 新增：传递分节标题
-            )
-
-            # 合并结果
-            question["analysis"] = analysis
-
-        # 5. 难度评估（新增）
-        logger.info(f"开始难度评估，模式: {mode}")
-        for idx, question in enumerate(questions):
-            logger.info(f"评估第{idx+1}/{len(questions)}题难度")
-            try:
-                difficulty_result = await difficulty_engine.evaluate_with_refinement(
-                    question={
-                        "id": question.get("id"),
-                        "content": question.get("content", ""),
-                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", []),
-                        "correct_answer": question.get("analysis", {}).get("answer", ""),
-                        "question_type": question.get("question_type", ""),
-                        "total_score": question.get("analysis", {}).get("total_score", question.get("total_score", 0)),
-                        "image_base64": (
-                            question.get("_media_for_ai", [{}])[0].get("base64", "")
-                            if question.get("_media_for_ai")
-                            else (
-                                __import__("base64").b64encode(
-                                    image_bytes[question["image_indices"][0]]
-                                ).decode("utf-8")
-                                if image_bytes and question.get("image_indices")
-                                and question["image_indices"][0] < len(image_bytes)
-                                else ""
-                            )
-                        ),
-                    },
-                    mode=mode,
-                    analysis_result=question.get("analysis", {})
-                )
-                question["difficulty"] = difficulty_result
-                logger.debug(f"题目{question.get('id')}难度: {difficulty_result.get('final_difficulty', 'N/A')}/10")
-            except Exception as e:
-                logger.error(f"题目{question.get('id')}难度评估失败: {str(e)}")
-                question["difficulty"] = {"error": str(e)}
-
-        # 6. 素养分析（新增）
-        logger.info("开始核心素养分析")
-        for idx, question in enumerate(questions):
-            logger.info(f"分析第{idx+1}/{len(questions)}题素养")
-            try:
-                competency_result = await competency_analyzer.analyze_competency(
-                    question={
-                        "id": question.get("id"),
-                        "content": question.get("content", ""),
-                        "knowledge_points": question.get("analysis", {}).get("knowledge_points", [])
-                    }
-                )
-                question["competency"] = competency_result
-                primary = competency_result.get("primary_competency", "未知")
-                logger.debug(f"题目{question.get('id')}主要素养: {primary}")
-            except Exception as e:
-                logger.error(f"题目{question.get('id')}素养分析失败: {str(e)}")
-                question["competency"] = {"error": str(e)}
-
-        # 7. 聚合素养统计（分值加权）
-        try:
-            competency_list = _build_competency_list(questions)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
-            logger.info(f"素养聚合完成，主要素养: {competency_summary.get('primary_competency', 'N/A')}")
-        except Exception as e:
-            logger.error(f"素养聚合失败: {str(e)}")
-            competency_summary = {"error": str(e)}
-
-        # 8. 计算整卷统计（新增，原来此 endpoint 没有）
-        try:
-            exam_statistics = generate_exam_statistics(questions, competency_summary)
-        except Exception as e:
-            logger.error(f"整卷统计失败: {str(e)}")
-            exam_statistics = {}
-
-        # 9. 生成PDF报告（可选）
-        report_url = None
-        report_error = None
-        if generate_report:
-            try:
-                from report_data import aggregate_report_data
-                from report_insights import generate_insights
-                from report_generator import generate_pdf_report as gen_pdf
-
-                logger.info("开始生成PDF报告")
-                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
-
-                rdata = aggregate_report_data(
-                    questions, competency_summary, exam_statistics,
-                    {"name": file.filename, "total": len(questions), "mode": mode},
-                )
-                insights = await generate_insights(rdata, mode=report_mode)
-                gen_pdf(rdata, insights, mode=report_mode, output_path=str(pdf_path))
-
-                report_url = f"/api/reports/{exam_id}.pdf"
-                logger.info(f"PDF报告生成成功: {report_url}")
-            except Exception as e:
-                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
-                report_error = f"报告生成失败: {str(e)}"
-
-        # 清理上传文件（节省空间）
-        file_path.unlink()
-        logger.debug(f"已删除临时文件: {file_path}")
-
-        # 计算耗时
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(f"完整流程完成，总耗时: {elapsed:.2f}秒")
 
-        # 返回完整结果
         return {
-            "questions": questions,
-            "total_count": len(questions),
+            "questions": result["questions"],
+            "total_count": len(result["questions"]),
             "processing_time": elapsed,
-            "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,
-            "report_url": report_url,
-            "report_error": report_error,
-            "mode": mode
+            "competency_summary": result["competency_summary"],
+            "exam_statistics": result["exam_statistics"],
+            "report_url": result.get("report_url"),
+            "report_error": result.get("report_error"),
+            "mode": mode,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"分析流程失败: {str(e)}", exc_info=True)
         raise HTTPException(500, detail="服务器内部错误")
+    finally:
+        if file_path and file_path.exists():
+            file_path.unlink()
+            logger.debug(f"已删除临时文件: {file_path}")
 
 
 # ============ 积分查询 ============

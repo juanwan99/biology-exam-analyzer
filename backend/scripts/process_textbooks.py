@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 # 设置环境变量
-os.environ['GEMINI_API_KEY_2'] = 'sk-aK9B9caOEnFgtPAuVSjzrVKMH48d0hxUUdJ61GZbgNboUh4c'
-os.environ['GEMINI_API_BASE'] = 'https://www.chataiapi.com/v1'
+os.environ.setdefault('GEMINI_API_KEY_2', os.environ.get('GEMINI_API_KEY', ''))
+os.environ.setdefault('GEMINI_API_BASE', os.environ.get('GEMINI_API_BASE', ''))
 
 from vision_processor import VisionProcessor
 

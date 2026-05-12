@@ -19,8 +19,8 @@ import fitz  # PyMuPDF
 from pathlib import Path
 
 # API配置 - 使用第二个API Key
-API_KEY = os.environ.get("GEMINI_API_KEY_2", "sk-aK9B9caOEnFgtPAuVSjzrVKMH48d0hxUUdJ61GZbgNboUh4c")
-API_BASE = os.environ.get("GEMINI_API_BASE", "https://www.chataiapi.com/v1")
+API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
+API_BASE = os.environ.get("GEMINI_API_BASE", "")
 
 # 测试的模型 - 使用flash版本（更便宜且通常可用）
 MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"]

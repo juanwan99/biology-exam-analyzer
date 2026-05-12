@@ -15,7 +15,7 @@ load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY_2") or os.environ.get("GEMINI_API_KEY", "")
 os.environ["GEMINI_API_KEY"] = api_key
 os.environ["GEMINI_API_KEY_2"] = api_key
-os.environ.setdefault("GEMINI_API_BASE", "https://www.chataiapi.com/v1")
+# GEMINI_API_BASE from environment
 
 from vision_processor import VisionProcessor
 

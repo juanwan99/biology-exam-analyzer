@@ -18,8 +18,8 @@ from logger import get_logger
 logger = get_logger()
 
 # Gemini API 配置 - 使用新的API Key
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY_2", "sk-aK9B9caOEnFgtPAuVSjzrVKMH48d0hxUUdJ61GZbgNboUh4c")
-GEMINI_API_BASE = os.environ.get("GEMINI_API_BASE", "https://www.chataiapi.com/v1")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
+GEMINI_API_BASE = os.environ.get("GEMINI_API_BASE", "")
 
 
 class TextbookProcessor:
