@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 内置 DeepSeek→Claude→GPT→Gemini fallback 链。
+"""统一 LLM 客户端 — 内置 DeepSeek + Gemini fallback 链。
 
 所有 LLM 调用都通过 llm_call() 入口，自动按 llm_config.PROVIDERS 顺序尝试。
 每次调用独立 fallback，不是整卷切换。
@@ -11,8 +11,16 @@ from llm_config import get_providers
 
 logger = get_logger()
 
-_client: httpx.AsyncClient | None = None
+_clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
+
+
+async def close_llm_clients():
+    """关闭所有缓存的 HTTP 客户端（FastAPI shutdown 时调用）。"""
+    for client in _clients.values():
+        if not client.is_closed:
+            await client.aclose()
+    _clients.clear()
 
 
 class AllProvidersFailed(Exception):
@@ -23,14 +31,19 @@ class AllProvidersFailed(Exception):
         super().__init__(f"All LLM providers failed: {names}")
 
 
-async def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
+async def _get_client(proxy: str = None) -> httpx.AsyncClient:
+    key = proxy or "__direct__"
+    client = _clients.get(key)
+    if client is None or client.is_closed:
+        kwargs = dict(
             timeout=120.0,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
-    return _client
+        if proxy:
+            kwargs["proxy"] = proxy
+        client = httpx.AsyncClient(**kwargs)
+        _clients[key] = client
+    return client
 
 
 def _get_semaphore(provider: dict) -> asyncio.Semaphore:
@@ -59,6 +72,13 @@ def _get_url(provider: dict) -> str:
         if url:
             return url
     return provider["base_url_default"]
+
+
+def _get_proxy(provider: dict) -> str | None:
+    env_key = provider.get("proxy_env")
+    if env_key:
+        return os.environ.get(env_key) or None
+    return None
 
 
 # ── 格式转换 ──────────────────────────────────────────────────────
@@ -158,9 +178,9 @@ def _extract_text(api_format: str, data: dict) -> str:
 # ── HTTP 调用 ─────────────────────────────────────────────────────
 
 async def _http_post(url: str, headers: dict, json: dict,
-                     timeout: float) -> httpx.Response:
+                     timeout: float, proxy: str = None) -> httpx.Response:
     """可被测试 mock 的 HTTP POST。"""
-    client = await _get_client()
+    client = await _get_client(proxy)
     return await client.post(url, headers=headers, json=json, timeout=timeout)
 
 
@@ -170,6 +190,7 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
     url = _get_url(provider)
     headers = _get_headers(provider)
     body = _build_request_body(provider, messages, max_tokens, temperature)
+    proxy = _get_proxy(provider)
     retries = provider.get("retry_count", 2)
     retryable = {429, 500, 502, 503, 529}
     sem = _get_semaphore(provider)
@@ -178,7 +199,8 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
         last_err = None
         for attempt in range(retries + 1):
             try:
-                resp = await _http_post(url, headers=headers, json=body, timeout=timeout)
+                resp = await _http_post(url, headers=headers, json=body,
+                                        timeout=timeout, proxy=proxy)
                 ct = resp.headers.get("content-type", "")
                 if "text/html" in ct:
                     raise RuntimeError(
@@ -276,7 +298,6 @@ async def send_message_gpt(
     max_tokens: int = 512,
     temperature: float = 0,
 ) -> str:
-    """兼容旧 claude_client.send_message_gpt() 接口。"""
     return await llm_call(
         [{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
@@ -290,7 +311,6 @@ async def send_message(
     max_tokens: int = 256,
     temperature: float = 0.7,
 ) -> str:
-    """兼容旧 claude_client.send_message() 接口。"""
     return await send_message_gpt(prompt, model=model, max_tokens=max_tokens,
                                   temperature=temperature)
 
@@ -303,7 +323,6 @@ async def send_message_with_image(
     max_tokens: int = 256,
     temperature: float = 0.7,
 ) -> str:
-    """兼容旧 claude_client.send_message_with_image() 接口。"""
     messages = [{"role": "user", "content": [
         {"type": "image_url", "image_url": {
             "url": f"data:{media_type};base64,{image_base64}"}},

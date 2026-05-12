@@ -202,6 +202,14 @@ async def start_cleanup_task():
     logger.info("[主模块] 后台清理任务已启动（间隔 5 分钟）")
 
 
+
+@app.on_event("shutdown")
+async def shutdown_llm_clients():
+    from llm_client import close_llm_clients
+    await close_llm_clients()
+    logger.info("[主模块] LLM 客户端已关闭")
+
+
 if __name__ == "__main__":
     import uvicorn
     logger.info("启动开发服务器...")
