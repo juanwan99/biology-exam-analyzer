@@ -57,18 +57,36 @@ def _error(status):
 
 class TestLlmConfig:
     def test_get_providers_filters_missing_keys(self):
-        import os
+        import os, tempfile
         from llm_config import get_providers, PROVIDERS
-        env = {PROVIDERS[0]["key_env"]: "test-key"}
-        with patch.dict(os.environ, env, clear=False):
-            result = get_providers()
-            assert len(result) >= 1
-            assert result[0]["name"] == PROVIDERS[0]["name"]
+        # Find a key_env provider (skip sa_file_env like vertex)
+        key_providers = [p for p in PROVIDERS if p.get("key_env")]
+        if key_providers:
+            env = {key_providers[0]["key_env"]: "test-key"}
+            with patch.dict(os.environ, env, clear=False):
+                result = get_providers()
+                assert len(result) >= 1
+        else:
+            # All providers use sa_file_env; test with temp SA file
+            sa_provider = [p for p in PROVIDERS if p.get("sa_file_env")][0]
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+                f.write(b"{}")
+                sa_path = f.name
+            env = {sa_provider["sa_file_env"]: sa_path}
+            with patch.dict(os.environ, env, clear=False):
+                result = get_providers()
+                assert len(result) >= 1
+            import os as _os; _os.unlink(sa_path)
 
     def test_get_providers_empty_when_no_keys(self):
         import os
         from llm_config import get_providers, PROVIDERS
-        clear = {p["key_env"]: "" for p in PROVIDERS}
+        clear = {}
+        for p in PROVIDERS:
+            if p.get("key_env"):
+                clear[p["key_env"]] = ""
+            if p.get("sa_file_env"):
+                clear[p["sa_file_env"]] = ""
         with patch.dict(os.environ, clear):
             result = get_providers()
             assert result == []
