@@ -164,6 +164,26 @@ async def get_token_stats_api():
     return {"providers": [{"name": k, **v} for k, v in get_token_stats().items()]}
 
 
+# ============ 校准 API ============
+
+@router.get("/api/admin/calibration")
+async def get_calibration_api(admin_ok=Depends(verify_admin)):
+    """获取当前校准状态"""
+    from calibration_service import get_calibration_status
+    return get_calibration_status()
+
+
+@router.post("/api/admin/calibration/run")
+async def run_calibration_api(admin_ok=Depends(verify_admin)):
+    """执行校准分析"""
+    from calibration_service import collect_data_from_db, analyze
+    from database import async_session
+    async with async_session() as session:
+        pairs = await collect_data_from_db(session)
+    result = analyze(pairs)
+    return result
+
+
 # ============ 报告下载 API ============
 
 @router.get("/api/reports/{filename}")

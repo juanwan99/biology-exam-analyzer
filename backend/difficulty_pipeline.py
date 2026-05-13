@@ -128,6 +128,17 @@ class DifficultyPipeline:
 
 
         score = raw_score
+
+        # 校准修正
+        try:
+            from calibration_service import get_correction
+            correction = get_correction(score)
+            if correction != 0:
+                score = max(0, min(10, score + correction))
+                logger.debug(f"[校准] 难度修正 {correction:+.2f} -> {score:.2f}")
+        except Exception:
+            pass
+
         label = score_to_label(score)
         logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
                     + (" [v3.1 大题]" if is_big_question and not big_question_fallback else ""))
