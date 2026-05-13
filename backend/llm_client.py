@@ -353,9 +353,23 @@ async def llm_call(
     max_tokens: int = 4096,
     temperature: float = 0,
     timeout: float = 120.0,
+    stage: str = "",
+    prefer_provider: str = "",
 ) -> str:
-    """统一 LLM 调用入口，内置 fallback 链。"""
+    """统一 LLM 调用入口，内置 fallback 链。
+
+    Args:
+        prefer_provider: 优先使用的 provider 名称（如 "deepseek"），不可用时仍 fallback。
+    """
+    import time as _time
+    _t0 = _time.monotonic()
+    _prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
     providers = get_providers()
+    if prefer_provider and len(providers) > 1:
+        preferred = [p for p in providers if p["name"] == prefer_provider]
+        others = [p for p in providers if p["name"] != prefer_provider]
+        if preferred:
+            providers = preferred + others
     if not providers:
         raise AllProvidersFailed([("none", RuntimeError("无可用 LLM provider，请检查 API key 配置"))])
 
@@ -365,9 +379,13 @@ async def llm_call(
             result = await _call_single_provider(
                 provider, messages, max_tokens, temperature, timeout
             )
+            elapsed = round(_time.monotonic() - _t0, 1)
             if len(errors) > 0:
                 logger.info(f"[LLM] Fallback 成功: {provider['name']} "
                             f"(前 {len(errors)} 个 provider 失败)")
+            logger.info(f"[LLM perf] stage={stage} provider={provider['name']} "
+                        f"elapsed={elapsed}s prompt={_prompt_chars}c max_tokens={max_tokens} "
+                        f"response={len(result)}c")
             return result
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -414,11 +432,15 @@ async def send_message_gpt(
     model: str = None,
     max_tokens: int = 512,
     temperature: float = 0,
+    stage: str = "",
+    prefer_provider: str = "",
 ) -> str:
     return await llm_call(
         [{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         temperature=temperature,
+        stage=stage,
+        prefer_provider=prefer_provider,
     )
 
 

@@ -117,6 +117,8 @@ class CompetencyAnalyzer:
             response_text = await llm_call(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2048,
+                stage="competency",
+                prefer_provider="deepseek",
                 temperature=0.1,
             )
             logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")

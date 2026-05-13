@@ -258,6 +258,8 @@ async def extract_features(question_text: str, options: str = "",
             prompt,
             max_tokens=1500,
             temperature=0,
+            stage="feature_extract",
+            prefer_provider="deepseek",
         )
         result = parse_features(raw)
 

@@ -29,7 +29,7 @@ class AnalysisService:
         self.word_splitter = word_splitter
         self.pdf_splitter = pdf_splitter
         import os
-        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
+        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "10"))
 
     # ── 单题完整分析 ──────────────────────────────────────────
 

@@ -191,6 +191,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
             prompt=_build_overall_prompt(data),
             max_tokens=2000,
             temperature=0.3,
+            stage="report_overall",
         )
         result = _parse_json_response(overall_text)
         from llm_schemas import validate_llm_output, InsightsResult
@@ -219,6 +220,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                 prompt=teaching_prompt,
                 max_tokens=2048,
                 temperature=0.3,
+                stage="report_teaching",
             )
             teaching = _parse_json_response(teaching_text)
             logger.info(f"[LLM分析] 教学建议生成完成")

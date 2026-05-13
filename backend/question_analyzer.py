@@ -9,6 +9,27 @@ from llm_client import llm_call
 logger = get_logger()
 
 
+def _downsample_image(img_bytes: bytes, max_width: int = 1024, quality: int = 75) -> bytes:
+    """降采样图片以减少 LLM API 传输延迟。"""
+    try:
+        from PIL import Image
+        from io import BytesIO
+        img = Image.open(BytesIO(img_bytes))
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_size = (max_width, int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        result = buf.getvalue()
+        if len(result) < len(img_bytes):
+            return result
+    except Exception:
+        pass
+    return img_bytes
+
+
+
 class QuestionAnalyzer:
     """LLM 分析器：题目拆分和分析（统一 fallback 客户端）。"""
 
@@ -110,11 +131,19 @@ class QuestionAnalyzer:
             logger.debug("[拆分] 准备调用 llm_call（统一 fallback 客户端）")
             logger.debug("[拆分] 请求参数 - max_tokens: 8192, temperature: 0")
 
+            # P0-2: 按题型动态 max_tokens（选择题输出短，大题输出长）
+            if question_type in ("single_choice", "multiple_choice"):
+                _max_tokens = 2048
+            elif question_type in ("fill_blank",):
+                _max_tokens = 3072
+            else:
+                _max_tokens = 4096
             response_text = await llm_call(
                 messages=[{"role": "user", "content": message_content}],
-                max_tokens=8192,
+                max_tokens=_max_tokens,
                 temperature=0,
                 timeout=120.0,
+                stage=f"analyze_q{question_id}",
             )
             finish_reason = "stop"  # fallback 客户端已处理截断重试
 
@@ -196,9 +225,10 @@ class QuestionAnalyzer:
         # 构建消息内容
         message_content = [{"type": "text", "text": full_prompt}]
 
-        # 添加题目图片
+        # 添加题目图片（P1-2: 降采样减少延迟）
         if question_images:
             for idx, img_bytes in enumerate(question_images):
+                img_bytes = _downsample_image(img_bytes)
                 base64_image = base64.b64encode(img_bytes).decode('utf-8')
                 message_content.append({
                     "type": "image_url",
