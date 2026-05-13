@@ -183,6 +183,11 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             reverse=True
         )[:10]
 
+        # 置信度统计
+        confidences = [q.get("analysis_confidence", 0) for q in questions if "analysis_confidence" in q]
+        low_confidence_count = sum(1 for c in confidences if c < 0.6)
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+
         return {
             "difficulty_distribution": difficulty_distribution,
             "difficulty_distribution_by_score": difficulty_distribution_by_score,
@@ -195,6 +200,11 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             "knowledge_textbook_distribution": textbook_distribution,
             "competency_distribution": competency_summary,
             "bloom_distribution": bloom_distribution,
+            "confidence_stats": {
+                "average": round(avg_confidence, 2),
+                "low_confidence_count": low_confidence_count,
+                "total_analyzed": len(confidences),
+            },
         }
 
     except Exception as e:

@@ -100,6 +100,20 @@ class AnalysisService:
                 standardized = self.knowledge_mapper.map_knowledge_points(analysis["knowledge_points"])
                 question["knowledge_mapping"] = standardized
 
+            # 置信度计算（5维度加权，0-1）
+            confidence = 0.0
+            if "error" not in analysis:
+                confidence += 0.3  # JSON 解析成功
+            if analysis.get("knowledge_points"):
+                confidence += 0.2
+            if analysis.get("answer"):
+                confidence += 0.2
+            if question.get("competency") and "error" not in question.get("competency", {}):
+                confidence += 0.15
+            if analysis.get("bloom_level"):
+                confidence += 0.15
+            question["analysis_confidence"] = round(confidence, 2)
+
             return question
 
         except Exception as e:

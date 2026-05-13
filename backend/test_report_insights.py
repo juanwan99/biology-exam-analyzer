@@ -60,9 +60,10 @@ class TestGenerateInsights:
         mock_gpt.return_value = MOCK_OVERALL_RESPONSE
         from report_insights import generate_insights
         result = await generate_insights(sample_report_data, mode="brief")
-        assert mock_gpt.call_count == 1
+        assert mock_gpt.call_count == 2  # overall + teaching
         assert "overall_assessment" in result
         assert len(result["recommendations"]) >= 1
+        assert "teaching_suggestions" in result
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_full_mode_one_call_with_comments_from_data(self, mock_gpt, sample_report_data):
@@ -73,10 +74,47 @@ class TestGenerateInsights:
         sample_report_data["questions"][1]["teacher_comment"] = "需要综合分析系谱图。"
         from report_insights import generate_insights
         result = await generate_insights(sample_report_data, mode="full")
-        assert mock_gpt.call_count == 1  # 只调用 1 次
+        assert mock_gpt.call_count == 2  # overall + teaching
         assert "question_comments" in result
         assert "1" in result["question_comments"]
+        assert "teaching_suggestions" in result
 
+
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_structure(self, mock_gpt, sample_report_data):
+        """教学建议返回包含三个子键"""
+        mock_teaching = json.dumps({
+            "error_categories": [
+                {"category": "概念混淆", "description": "光合与呼吸混淆", "related_questions": [1], "frequency": "高"}
+            ],
+            "lecture_outline": [
+                {"topic": "光合作用vs呼吸作用", "duration_minutes": 15, "key_points": ["区别要点"], "related_errors": ["概念混淆"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "光合作用", "exercise_type": "判断题", "difficulty": "中等"}
+            ]
+        })
+        mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, mock_teaching]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        ts = result["teaching_suggestions"]
+        assert len(ts["error_categories"]) == 1
+        assert ts["error_categories"][0]["category"] == "概念混淆"
+        assert len(ts["lecture_outline"]) == 1
+        assert len(ts["remedial_exercises"]) == 1
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_fallback_on_failure(self, mock_gpt, sample_report_data):
+        """教学建议 GPT 失败时降级为空结构，不影响整体"""
+        mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, RuntimeError("API timeout")]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        assert "overall_assessment" in result
+        ts = result["teaching_suggestions"]
+        assert ts["error_categories"] == []
+        assert ts["lecture_outline"] == []
+        assert ts["remedial_exercises"] == []
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_gpt_failure_raises(self, mock_gpt, sample_report_data):
         """GPT 失败直接抛异常，不降级"""
