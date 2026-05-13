@@ -17,7 +17,7 @@ class AnalysisResult(BaseModel):
     difficulty: str = "中等"
     common_mistakes: List[str] = Field(default_factory=list)
     answer: str = ""
-    total_score: Optional[int] = None
+    total_score: int = 0
     bloom_level: Optional[int] = Field(default=None, ge=1, le=6)
     competency: Optional[Dict[str, Any]] = None
     sub_questions: Optional[List[Dict]] = None

@@ -223,8 +223,8 @@ def _convert_messages_to_gemini(messages: list) -> tuple:
 
 
 async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
-                                temperature: float) -> str:
-    """调用 Vertex AI Gemini（google-genai SDK）。"""
+                                temperature: float, timeout: float = 120.0) -> str:
+    """调用 Vertex AI Gemini（google-genai SDK），含超时和重试。"""
     from google.genai import types
 
     client = _get_vertex_client(provider)
@@ -241,17 +241,41 @@ async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
 
     config = types.GenerateContentConfig(**config_kwargs)
     sem = _get_semaphore(provider)
+    retries = provider.get("retry_count", 2)
 
     async with sem:
-        response = await client.aio.models.generate_content(
-            model=provider["model"],
-            contents=contents,
-            config=config,
-        )
-        text = response.text
-        if text is None:
-            raise RuntimeError(f"Vertex AI returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
-        return text
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=provider["model"],
+                        contents=contents,
+                        config=config,
+                    ),
+                    timeout=timeout,
+                )
+                text = response.text
+                if text is None:
+                    raise RuntimeError(f"Vertex AI returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
+                return text
+            except asyncio.TimeoutError:
+                last_err = TimeoutError(f"Vertex AI timeout after {timeout}s")
+                if attempt < retries:
+                    wait = 2 ** attempt
+                    logger.warning(f"[LLM] vertex timeout, retry {attempt+1}/{retries} in {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
+                raise last_err
+            except Exception as e:
+                last_err = e
+                if attempt < retries and "500" in str(e):
+                    wait = 2 ** attempt
+                    logger.warning(f"[LLM] vertex error, retry {attempt+1}/{retries} in {wait}s: {str(e)[:80]}")
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+        raise last_err
 
 
 # ── HTTP 调用 ─────────────────────────────────────────────────────
@@ -268,7 +292,7 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float) -> str:
     """调用单个 provider（含内部重试）。"""
     if provider["api_format"] == "vertex_genai":
-        return await _call_vertex_provider(provider, messages, max_tokens, temperature)
+        return await _call_vertex_provider(provider, messages, max_tokens, temperature, timeout)
 
     url = _get_url(provider)
     headers = _get_headers(provider)

@@ -64,7 +64,7 @@ class AnalysisService:
                 "id": q_id,
                 "content": question.get("content", ""),
                 "knowledge_points": analysis.get("knowledge_points", []),
-                "total_score": analysis.get("total_score", question.get("total_score", 0)),
+                "total_score": analysis.get("total_score") or question.get("total_score") or 0,
                 "num_options": analysis.get("num_options", 4),
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
@@ -219,7 +219,8 @@ class AnalysisService:
         rdata = aggregate_report_data(
             questions, competency_summary, exam_statistics, exam_info
         )
-        rdata["diagnostics"] = diagnose_exam(questions, exam_statistics)
+        rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
+            exam_type=exam_info.get("exam_type", "高考"))
         insights = await generate_insights(rdata, mode=mode)
         generate_pdf_report(rdata, insights, mode=mode, output_path=output_path)
         return output_path

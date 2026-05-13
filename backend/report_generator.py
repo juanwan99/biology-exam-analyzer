@@ -110,7 +110,7 @@ class ReportGenerator:
         medium_score = 0.0
         hard_score = 0.0
 
-        has_score_distribution = any("score_distribution_by_difficulty" in q for q in questions_difficulty)
+        has_score_distribution = any(q.get("score_distribution_by_difficulty") for q in questions_difficulty)
 
         if has_score_distribution:
             # 基于分值分配

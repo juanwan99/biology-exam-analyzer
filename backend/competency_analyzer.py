@@ -123,7 +123,11 @@ class CompetencyAnalyzer:
 
             # 解析JSON（四级降级：直接解析→代码块→首对象→截断修复）
             result = _extract_json(response_text)
-
+            from llm_schemas import validate_llm_output, CompetencyResult
+            result, ext_conf, val_errors = validate_llm_output(result, CompetencyResult, f"素养分析 题目{question.get('id', '?')}")
+            if val_errors:
+                logger.warning(f"[素养] Schema校验: {val_errors[:3]}")
+            result["_extraction_confidence"] = ext_conf
             # 添加题目ID
             result["question_id"] = question.get("id")
 

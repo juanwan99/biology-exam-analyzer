@@ -261,7 +261,7 @@ async def serve_uploads(path: str):
 
 
 @router.post("/api/feedback/score-rate")
-async def submit_score_rate(request: Request):
+async def submit_score_rate(request: Request, admin_ok=Depends(verify_admin)):
     """P5a: 教师回填题目实际得分率。"""
     from database import get_async_session
     from models import QuestionPerformance, ExamHistory
@@ -301,6 +301,7 @@ async def submit_score_rate(request: Request):
                     question_number=qn,
                     question_score=fb.get("total_score", 0),
                     score_rate=sr,
+                    absolute_difficulty=fb.get("predicted_difficulty"),
                 )
                 session.add(qp)
             updated += 1
@@ -308,4 +309,16 @@ async def submit_score_rate(request: Request):
         await session.commit()
 
     logger.info(f"[P5] 得分率回填: exam_id={exam_id}, {updated} 题")
+
+    # F-03: 回填后自动触发校准更新
+    try:
+        from calibration_service import collect_data_from_db, analyze
+        async with get_async_session() as cal_session:
+            pairs = await collect_data_from_db(cal_session)
+        if len(pairs) >= 10:
+            analyze(pairs)
+            logger.info(f"[P5] 校准自动更新: {len(pairs)} 样本")
+    except Exception as e:
+        logger.warning(f"[P5] 校准更新失败（不影响回填）: {e}")
+
     return {"success": True, "updated": updated}

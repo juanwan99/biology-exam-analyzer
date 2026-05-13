@@ -31,7 +31,7 @@ class DifficultyPipeline:
         """
         question_text = question.get("content", "")
         correct_answer = question.get("correct_answer", "")
-        total_score = float(question.get("total_score", 1))
+        total_score = float(question.get("total_score") or 1)
         options = question.get("options", "")
         question_type = question.get("question_type", "")
         subject = question.get("subject", "biology")
