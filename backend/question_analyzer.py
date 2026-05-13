@@ -252,7 +252,12 @@ class QuestionAnalyzer:
 
             try:
                 result = json.loads(json_text)
-                logger.info(f"[分析] 题目{question_id} 分析完成")
+                from llm_schemas import validate_llm_output, AnalysisResult
+                result, ext_conf, val_errors = validate_llm_output(result, AnalysisResult, f"题目{question_id}")
+                result["_extraction_confidence"] = ext_conf
+                if val_errors:
+                    result["_validation_errors"] = val_errors
+                logger.info(f"[分析] 题目{question_id} 分析完成 (extraction_confidence={ext_conf})")
                 return result
             except json.JSONDecodeError as json_err:
                 logger.error(f"[分析] 题目{question_id} JSON解析失败: {str(json_err)}")

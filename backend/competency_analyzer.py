@@ -12,6 +12,32 @@ from llm_client import llm_call
 logger = get_logger()
 
 
+def _extract_json(text: str) -> dict:
+    """从 LLM 响应中提取 JSON（四级降级）。"""
+    import re
+    text = text.strip()
+    # 1. 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # 2. 代码块提取
+    m = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+    # 3. 首个 { } 对象
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+    raise ValueError(f"无法从LLM响应中提取JSON: {text[:100]}...")
+
+
 class CompetencyAnalyzer:
     """核心素养分析器"""
 
@@ -95,11 +121,8 @@ class CompetencyAnalyzer:
             )
             logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
 
-            # 解析JSON
-            from question_analyzer import QuestionAnalyzer
-            json_text = GeminiAnalyzer.extract_json(response_text)
-
-            result = json.loads(json_text)
+            # 解析JSON（四级降级：直接解析→代码块→首对象→截断修复）
+            result = _extract_json(response_text)
 
             # 添加题目ID
             result["question_id"] = question.get("id")
@@ -120,19 +143,7 @@ class CompetencyAnalyzer:
 
         except Exception as e:
             logger.error(f"[素养分析] 题目 {question.get('id')} 分析失败: {str(e)}", exc_info=True)
-            return self._get_default_result(question.get("id"))
-
-    def _get_default_result(self, question_id) -> Dict:
-        """返回默认结果（分析失败时）"""
-        return {
-            "question_id": question_id,
-            "生命观念": {"涉及": False, "具体维度": [], "权重": 0, "分析说明": ""},
-            "科学思维": {"涉及": True, "具体维度": ["演绎与推理"], "权重": 1.0, "分析说明": "默认结果"},
-            "科学探究": {"涉及": False, "具体维度": [], "权重": 0, "分析说明": ""},
-            "社会责任": {"涉及": False, "具体维度": [], "权重": 0, "分析说明": ""},
-            "primary_competency": "科学思维",
-            "competency_level": "中"
-        }
+            return {"error": f"素养分析失败: {str(e)}", "question_id": question.get("id")}
 
     def aggregate_exam_competencies(self, questions_competencies: List[Dict]) -> Dict:
         """

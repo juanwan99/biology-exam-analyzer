@@ -19,7 +19,7 @@ from typing import Optional
 from enum import Enum
 
 import aiofiles
-from fastapi import APIRouter, HTTPException, Header, Depends
+from fastapi import APIRouter, HTTPException, Header, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -258,3 +258,54 @@ async def serve_uploads(path: str):
     mime_type = mime_types.get(suffix, "application/octet-stream")
 
     return FileResponse(file_path, media_type=mime_type)
+
+
+@router.post("/api/feedback/score-rate")
+async def submit_score_rate(request: Request):
+    """P5a: 教师回填题目实际得分率。"""
+    from database import get_async_session
+    from models import QuestionPerformance, ExamHistory
+    from sqlalchemy import select
+
+    data = await request.json()
+    exam_id = data.get("exam_id")
+    feedbacks = data.get("feedbacks", [])
+
+    if not exam_id or not feedbacks:
+        raise HTTPException(400, detail="需要 exam_id 和 feedbacks 数组")
+
+    async with get_async_session() as session:
+        exam = await session.get(ExamHistory, exam_id)
+        if not exam:
+            raise HTTPException(404, detail=f"考试 {exam_id} 不存在")
+
+        updated = 0
+        for fb in feedbacks:
+            qn = fb.get("question_number")
+            sr = fb.get("score_rate")
+            if qn is None or sr is None:
+                continue
+
+            stmt = select(QuestionPerformance).where(
+                QuestionPerformance.exam_id == exam_id,
+                QuestionPerformance.question_number == qn
+            )
+            result = await session.execute(stmt)
+            qp = result.scalar_one_or_none()
+
+            if qp:
+                qp.score_rate = sr
+            else:
+                qp = QuestionPerformance(
+                    exam_id=exam_id,
+                    question_number=qn,
+                    question_score=fb.get("total_score", 0),
+                    score_rate=sr,
+                )
+                session.add(qp)
+            updated += 1
+
+        await session.commit()
+
+    logger.info(f"[P5] 得分率回填: exam_id={exam_id}, {updated} 题")
+    return {"success": True, "updated": updated}

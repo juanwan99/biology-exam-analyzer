@@ -414,6 +414,19 @@ class KnowledgeMapper:
     }
 
     def __init__(self):
+        self._synonyms = {}
+        try:
+            import json, os
+            syn_path = os.path.join(os.path.dirname(__file__), "knowledge_synonyms.json")
+            if os.path.exists(syn_path):
+                with open(syn_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                for canonical, aliases in raw.items():
+                    for alias in aliases:
+                        self._synonyms[alias] = canonical
+                logger.info(f"[知识点映射器] 同义词表加载: {len(self._synonyms)} 条")
+        except Exception as e:
+            logger.warning(f"[知识点映射器] 同义词表加载失败: {e}")
         logger.info("[知识点映射器] 初始化完成")
         logger.info(f"[知识点映射器] 教材结构：{len(self.TEXTBOOK_STRUCTURE)}本教材，关键词映射表：{len(self.KEYWORD_MAPPING)}条")
 
@@ -441,95 +454,43 @@ class KnowledgeMapper:
                 "mapped": False
             }
         """
-        # 尝试关键词匹配
-        for keyword, location in self.KEYWORD_MAPPING.items():
-            if keyword in knowledge_point:
-                textbook, chapter, section = location
+        # 同义词展开：如果输入匹配同义词，追加规范名用于匹配
+        expanded = [knowledge_point]
+        for alias, canonical in self._synonyms.items():
+            if alias in knowledge_point and canonical not in knowledge_point:
+                expanded.append(knowledge_point.replace(alias, canonical))
+                expanded.append(canonical)
 
-                textbook_data = self.TEXTBOOK_STRUCTURE.get(textbook, {})
-                chapter_data = textbook_data.get("chapters", {}).get(chapter, {})
-                section_name = chapter_data.get("sections", {}).get(section, "")
+        # 尝试关键词匹配（含同义词展开）
+        for kp_variant in expanded:
+            for keyword, location in self.KEYWORD_MAPPING.items():
+                if keyword in kp_variant:
+                    textbook, chapter, section = location
 
-                # 完全匹配关键词给 1.0，包含关键词给 0.9
-                confidence = 1.0 if knowledge_point == keyword else 0.9
+                    textbook_data = self.TEXTBOOK_STRUCTURE.get(textbook, {})
+                    chapter_data = textbook_data.get("chapters", {}).get(chapter, {})
+                    section_name = chapter_data.get("sections", {}).get(section, "")
 
-                result = {
-                    "original": knowledge_point,
-                    "mapped": True,
-                    "standard_name": section_name or keyword,
-                    "confidence": confidence,
-                    "textbook": textbook,
-                    "textbook_name": textbook_data.get("name", ""),
-                    "chapter": chapter,
-                    "chapter_name": chapter_data.get("name", ""),
-                    "section": section,
-                    "section_name": section_name
-                }
+                    result = {
+                        "original": knowledge_point,
+                        "mapped": True,
+                        "textbook": textbook,
+                        "textbook_name": textbook_data.get("name", ""),
+                        "chapter": chapter,
+                        "chapter_name": chapter_data.get("name", ""),
+                        "section": section,
+                        "section_name": section_name
+                    }
 
-                logger.debug(f"[知识点映射] '{knowledge_point}' → {textbook} {chapter} {section} (confidence={confidence})")
-                return result
+                    logger.debug(f"[知识点映射] '{knowledge_point}' → {textbook} {chapter} {section}")
+                    return result
 
-        # 2. 教材树路径模糊匹配（confidence: 0.3-0.7）
-        fuzzy_result = self._fuzzy_match_textbook(knowledge_point)
-        if fuzzy_result:
-            return fuzzy_result
-
-        # 3. 映射失败（confidence: 0.0）
+        # 映射失败（含同义词展开后仍未匹配）
         logger.info(f"[知识点映射] '{knowledge_point}' 映射失败，返回原始内容")
         return {
             "original": knowledge_point,
-            "mapped": False,
-            "standard_name": knowledge_point,
-            "confidence": 0.0
+            "mapped": False
         }
-
-
-    def _fuzzy_match_textbook(self, knowledge_point: str) -> Optional[Dict[str, Any]]:
-        """教材树路径模糊匹配：用知识点文本与章节名/节名做字符交集"""
-        best_match = None
-        best_score = 0.0
-
-        kp_chars = set(knowledge_point)
-
-        for textbook_key, textbook_data in self.TEXTBOOK_STRUCTURE.items():
-            for chapter_key, chapter_data in textbook_data.get("chapters", {}).items():
-                chapter_name = chapter_data.get("name", "")
-                chapter_overlap = len(kp_chars & set(chapter_name))
-
-                for section_key, section_name in chapter_data.get("sections", {}).items():
-                    section_chars = set(section_name)
-                    overlap = len(kp_chars & section_chars)
-                    union = len(kp_chars | section_chars)
-                    if union == 0:
-                        continue
-
-                    # Jaccard-like score + chapter name bonus
-                    score = (overlap + chapter_overlap * 0.3) / union
-
-                    if score > best_score and score >= 0.25:
-                        best_score = score
-                        best_match = {
-                            "textbook": textbook_key,
-                            "textbook_name": textbook_data.get("name", ""),
-                            "chapter": chapter_key,
-                            "chapter_name": chapter_name,
-                            "section": section_key,
-                            "section_name": section_name,
-                        }
-
-        if best_match and best_score >= 0.25:
-            confidence = round(min(0.7, 0.3 + best_score * 0.8), 2)
-            result = {
-                "original": knowledge_point,
-                "mapped": True,
-                "standard_name": best_match["section_name"],
-                "confidence": confidence,
-                **best_match
-            }
-            logger.debug(f"[知识点映射-模糊] \'{knowledge_point}\' → {best_match['textbook']} {best_match['section']} (confidence={confidence})")
-            return result
-
-        return None
 
     def map_knowledge_points(self, knowledge_points: List[str]) -> List[Dict[str, Any]]:
         """

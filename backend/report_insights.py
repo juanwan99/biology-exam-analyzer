@@ -34,24 +34,23 @@ def _parse_json_response(text: str) -> dict:
 def _build_overall_prompt(data: dict) -> str:
     """构建整卷综合分析 prompt。"""
     metrics = data["metrics"]
-    gradient = data["difficulty_gradient"]
+    diff_gradient = data["difficulty_gradient"]
     knowledge = data["knowledge"]
     competency = data["competency"]
     feature = data["feature_profile"]
     exam = data["exam_info"]
 
-    # Batch 3: 整卷质量诊断上下文
     diag = data.get("diagnostics", {})
     diag_section = ""
-    if diag:
-        gradient = diag.get("gradient", {})
+    if diag and diag.get("overall_rating") != "数据不足":
+        diag_grad = diag.get("gradient", {})
         comp_bal = diag.get("competency_balance", {})
-        disc = diag.get("discrimination", {})
+        spread = diag.get("difficulty_spread", {})
         diag_section = f"""
 ## 整卷质量诊断
-- 难度梯度评级: {gradient.get('rating', 'N/A')}，偏差值: {gradient.get('deviation', 'N/A')}
-- 素养均衡度: {comp_bal.get('balance', 'N/A')}
-- 区分度: {disc.get('discrimination', 'N/A')}（标准差={disc.get('difficulty_stdev', 'N/A')}）
+- 难度梯度评级: {diag_grad.get('rating', 'N/A')}（偏差={diag_grad.get('deviation', 'N/A')}，理想分布={json.dumps(diag_grad.get('ideal', {}), ensure_ascii=False)}）
+- 素养均衡度: {comp_bal.get('balance', 'N/A')}（方差={comp_bal.get('variance', 'N/A')}，缺失={comp_bal.get('missing', [])}）
+- 难度离散度: {spread.get('spread_level', 'N/A')}（标准差={spread.get('difficulty_stdev', 'N/A')}，极差={spread.get('difficulty_range', 'N/A')}）
 - 综合评价: {diag.get('overall_rating', 'N/A')}
 """
 
@@ -68,8 +67,8 @@ def _build_overall_prompt(data: dict) -> str:
 - Bloom 认知层级分布（分值占比）: {json.dumps(metrics["bloom_distribution"], ensure_ascii=False)}
 
 ## 难度梯度
-- 前段: {gradient["front"]}，中段: {gradient["middle"]}，后段: {gradient["back"]}
-- 梯度类型: {gradient["gradient_type"]}
+- 前段: {diff_gradient["front"]}，中段: {diff_gradient["middle"]}，后段: {diff_gradient["back"]}
+- 梯度类型: {diff_gradient["gradient_type"]}
 
 ## 知识覆盖
 - Top10 知识点: {json.dumps(knowledge["top_points"], ensure_ascii=False)}
@@ -194,7 +193,11 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
             temperature=0.3,
         )
         result = _parse_json_response(overall_text)
-        logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议")
+        from llm_schemas import validate_llm_output, InsightsResult
+        result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
+        if val_errors:
+            logger.warning(f"[LLM分析] 整卷分析 schema 校验: {val_errors[:3]}")
+        logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议 (confidence={ext_conf})")
 
         # 逐题点评和质量审查已移入 feature_extractor（v3 合并优化）
         # 从 report_data 的 questions 中提取 teacher_comment
@@ -228,5 +231,75 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
         return result
 
     except Exception as e:
-        logger.error(f"[LLM分析] 失败: {e}", exc_info=True)
-        raise RuntimeError(f"LLM 分析生成失败: {e}") from e
+        logger.error(f"[LLM分析] 失败，使用数据降级模板: {e}", exc_info=True)
+        return _build_fallback_insights(data)
+
+
+def _build_fallback_insights(data: dict) -> dict:
+    """基于 rdata 数值生成降级分析（无 LLM）。"""
+    metrics = data.get("metrics", {})
+    avg_diff = metrics.get("avg_difficulty", 0)
+    avg_cog = metrics.get("avg_cognitive_level", 0)
+    dist = metrics.get("difficulty_distribution", {})
+    bloom = metrics.get("bloom_distribution", {})
+    gradient = data.get("difficulty_gradient", {})
+    diag = data.get("diagnostics", {})
+    knowledge = data.get("knowledge", {})
+    competency = data.get("competency", {})
+
+    diff_label = "偏易" if avg_diff < 4 else ("偏难" if avg_diff > 7 else "适中")
+    overall_rating = diag.get("overall_rating", "")
+    rating_text = f"整卷质量评价为「{overall_rating}」。" if overall_rating and overall_rating != "数据不足" else ""
+
+    overall = (
+        f"本卷共{data.get('exam_info', {}).get('total_questions', '?')}题，"
+        f"总分{data.get('exam_info', {}).get('total_score', '?')}分。"
+        f"分值加权平均难度{avg_diff:.1f}（{diff_label}），"
+        f"平均认知层级{avg_cog:.1f}。"
+        f"难度分布：简单{dist.get('简单', 0)}题、中等{dist.get('中等', 0)}题、困难{dist.get('困难', 0)}题。"
+        f"{rating_text}"
+    )
+
+    grad_type = gradient.get("gradient_type", "")
+    diff_analysis = (
+        f"难度梯度类型为「{grad_type}」（前段{gradient.get('front', 0)}、"
+        f"中段{gradient.get('middle', 0)}、后段{gradient.get('back', 0)}）。"
+    )
+    if diag.get("gradient", {}).get("rating"):
+        diff_analysis += f"梯度评级：{diag['gradient']['rating']}（偏差{diag['gradient'].get('deviation', '?')}）。"
+
+    top_kps = [kp.get("name", "") for kp in knowledge.get("top_points", [])[:5]]
+    know_analysis = f"高频知识点：{'、'.join(top_kps)}。" if top_kps else "知识点数据不足。"
+
+    comp_dist = competency.get("distribution", {})
+    comp_bal = diag.get("competency_balance", {})
+    balance_text = comp_bal.get("balance", "未知")
+    comp_analysis = f"素养均衡度：{balance_text}。"
+    if comp_bal.get("missing"):
+        comp_analysis += f"缺失维度：{'、'.join(comp_bal['missing'])}。"
+
+    high_order = sum(bloom.get(k, 0) for k in ["分析", "评价", "创造"])
+    bloom_analysis = f"高阶思维（分析+评价+创造）占比{high_order*100:.1f}%。"
+
+    recs = []
+    if avg_diff > 7:
+        recs.append({"category": "难度", "content": "整卷偏难，建议增加基础题占比。", "priority": "high"})
+    elif avg_diff < 3.5:
+        recs.append({"category": "难度", "content": "整卷偏易，建议增加中等及以上难度题目。", "priority": "high"})
+    if comp_bal.get("missing"):
+        recs.append({"category": "素养", "content": f"缺失{'、'.join(comp_bal['missing'])}相关题目，建议补充。", "priority": "high"})
+    if high_order < 0.2:
+        recs.append({"category": "认知", "content": "高阶思维题目占比偏低，建议增加分析、评价类题目。", "priority": "medium"})
+    if not recs:
+        recs.append({"category": "综合", "content": "各项指标基本达标，建议参考详细数据进一步优化。", "priority": "low"})
+
+    return {
+        "overall_assessment": overall,
+        "recommendations": recs,
+        "difficulty_analysis": diff_analysis,
+        "knowledge_analysis": know_analysis,
+        "competency_analysis": comp_analysis,
+        "bloom_analysis": bloom_analysis,
+        "question_comments": {},
+        "teaching_suggestions": {"error_categories": [], "lecture_outline": [], "remedial_exercises": []},
+    }

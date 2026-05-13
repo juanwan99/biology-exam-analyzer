@@ -2,14 +2,20 @@
 
 依赖方向：difficulty_pipeline -> calibration_service（单向）。
 本模块不 import difficulty_pipeline，只提供校准系数。
+
+校准策略（P5 分阶段）：
+- 阶段 0（0 样本）：无校准
+- 阶段 1（20-100 样本）：全局偏移（bias correction）
+- 阶段 2（100+ 样本）：Isotonic Regression（单调递减）
 """
 import statistics as stats_mod
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Callable
 from logger import get_logger
 
 logger = get_logger()
 
 _calibration_data: Optional[Dict] = None
+_isotonic_predictor: Optional[Callable] = None
 
 
 async def collect_data_from_db(db_session) -> List[Tuple[float, float]]:
@@ -72,30 +78,74 @@ def analyze(data_pairs: List[Tuple[float, float]]) -> Dict:
         errors.append((s - expected) ** 2)
     rmse = (sum(errors) / len(errors)) ** 0.5
 
+    # 阶段判定
+    n = len(data_pairs)
+    if n < 20:
+        stage = 0
+    elif n < 100:
+        stage = 1
+    else:
+        stage = 2
+
     result = {
         "status": "calibrated",
-        "sample_count": len(data_pairs),
+        "stage": stage,
+        "sample_count": n,
         "overall_rmse": round(rmse, 4),
         "bias_by_range": bias_by_range,
     }
 
-    global _calibration_data
+    global _calibration_data, _isotonic_predictor
     _calibration_data = result
-    logger.info(f"[校准] 完成，RMSE={rmse:.4f}，样本={len(data_pairs)}")
+
+    # 阶段 2：Isotonic Regression
+    if stage >= 2:
+        try:
+            from sklearn.isotonic import IsotonicRegression
+            difficulties = [d for d, _ in data_pairs]
+            score_rates = [s for _, s in data_pairs]
+            ir = IsotonicRegression(increasing=False, out_of_bounds="clip")
+            ir.fit(difficulties, score_rates)
+            _isotonic_predictor = ir.predict
+            result["isotonic"] = True
+            logger.info(f"[校准] Isotonic Regression 拟合完成 (n={n})")
+        except ImportError:
+            logger.warning("[校准] sklearn 不可用，回退到 bias correction")
+            _isotonic_predictor = None
+            result["isotonic"] = False
+        except Exception as e:
+            logger.warning(f"[校准] Isotonic 拟合失败: {e}")
+            _isotonic_predictor = None
+            result["isotonic"] = False
+    else:
+        _isotonic_predictor = None
+
+    logger.info(f"[校准] 完成，阶段={stage}，RMSE={rmse:.4f}，样本={n}")
     return result
 
 
 def get_correction(difficulty: float) -> float:
     """获取校准修正值。difficulty_pipeline 调用此函数。
 
-    Returns:
-        修正值（加到 final_difficulty 上），默认 0（不校准）。
+    阶段 2 使用 Isotonic 映射，阶段 1 使用 bias correction，阶段 0 返回 0。
     """
     if _calibration_data is None or _calibration_data.get("status") != "calibrated":
         return 0.0
 
-    bias_by_range = _calibration_data.get("bias_by_range", {})
+    stage = _calibration_data.get("stage", 0)
+    if stage == 0:
+        return 0.0
 
+    # 阶段 2: Isotonic
+    if stage >= 2 and _isotonic_predictor is not None:
+        predicted_rate = _isotonic_predictor([difficulty])[0]
+        linear_rate = max(0, 1 - difficulty / 10)
+        bias = predicted_rate - linear_rate
+        correction = max(-1.5, min(1.5, -bias * 5))
+        return round(correction, 2)
+
+    # 阶段 1: bias correction
+    bias_by_range = _calibration_data.get("bias_by_range", {})
     if difficulty <= 3.5:
         bias_info = bias_by_range.get("简单(0-3.5)", {})
     elif difficulty <= 6.5:
@@ -104,8 +154,6 @@ def get_correction(difficulty: float) -> float:
         bias_info = bias_by_range.get("困难(6.5-10)", {})
 
     bias = bias_info.get("bias", 0)
-    # bias > 0 表示实际得分率高于预期 -> 难度预测偏高 -> 修正为降低难度
-    # 修正幅度限制在 [-1.5, 1.5]
     correction = max(-1.5, min(1.5, -bias * 5))
     return round(correction, 2)
 

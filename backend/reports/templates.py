@@ -237,10 +237,10 @@ def _render_diagnostics_section(data: dict, charts: dict) -> str:
     if balance.get("balance"):
         html += f'<div class="diagnosis-card"><h4>素养均衡度</h4><p>{balance["balance"]}</p></div>'
 
-    # 区分度
-    disc = diag.get("discrimination", {})
-    if disc.get("discrimination"):
-        html += f'<div class="diagnosis-card"><h4>区分度</h4><p>{disc["discrimination"]}（标准差: {disc.get("difficulty_stdev", 0):.2f}）</p></div>'
+    # 难度离散度
+    disc = diag.get("difficulty_spread", {})
+    if disc.get("spread_level"):
+        html += f'<div class="diagnosis-card"><h4>难度离散度</h4><p>{disc["spread_level"]}（标准差: {disc.get("difficulty_stdev", 0):.2f}）</p></div>'
 
     html += '</div>'
     return html

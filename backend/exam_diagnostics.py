@@ -4,34 +4,46 @@ from logger import get_logger
 
 logger = get_logger()
 
+DIFFICULTY_PROFILES = {
+    "高考": {"简单": 0.3, "中等": 0.5, "困难": 0.2},
+    "月考": {"简单": 0.2, "中等": 0.5, "困难": 0.3},
+    "模拟考": {"简单": 0.25, "中等": 0.5, "困难": 0.25},
+    "期中期末": {"简单": 0.3, "中等": 0.45, "困难": 0.25},
+}
+
 
 def diagnose_exam(questions: List[Dict], statistics: Dict,
-                  exam_scope: Optional[Dict] = None) -> Dict:
+                  exam_scope: Optional[Dict] = None,
+                  exam_type: str = "高考") -> Dict:
     """诊断试卷命题质量。
 
     Args:
         questions: 分析完成的题目列表
         statistics: generate_exam_statistics 的输出
         exam_scope: 可选，{"grade": "高三", "volumes": ["必修1", "必修2"]}
+        exam_type: 考试类型（高考/月考/模拟考/期中期末），决定理想难度分布
 
     Returns:
-        {gradient, coverage, competency_balance, discrimination, overall_rating}
+        {gradient, coverage, competency_balance, difficulty_spread, overall_rating}
     """
     if not questions:
         return {"gradient": {}, "coverage": {}, "competency_balance": {},
-                "discrimination": {}, "overall_rating": "数据不足"}
+                "difficulty_spread": {}, "overall_rating": "数据不足"}
+
+    profile = DIFFICULTY_PROFILES.get(exam_type, DIFFICULTY_PROFILES["高考"])
 
     result = {}
-    result["gradient"] = _analyze_gradient(questions, statistics)
+    result["gradient"] = _analyze_gradient(questions, statistics, profile)
     result["coverage"] = _analyze_coverage(questions, exam_scope)
     result["competency_balance"] = _analyze_competency_balance(questions)
-    result["discrimination"] = _analyze_discrimination(questions, statistics)
+    result["difficulty_spread"] = _analyze_difficulty_spread(questions, statistics)
     result["overall_rating"] = _compute_overall(result)
     return result
 
 
-def _analyze_gradient(questions: List[Dict], statistics: Dict) -> Dict:
-    """难度梯度合理性分析。理想分布：30%简单 + 50%中等 + 20%困难。"""
+def _analyze_gradient(questions: List[Dict], statistics: Dict,
+                      profile: Dict) -> Dict:
+    """难度梯度合理性分析。理想分布由 exam_type 决定。"""
     if len(questions) < 2:
         return {"rating": "题目不足", "detail": "至少需要2题才能分析梯度"}
 
@@ -41,8 +53,10 @@ def _analyze_gradient(questions: List[Dict], statistics: Dict) -> Dict:
     medium_pct = dist.get("中等", 0) / total
     hard_pct = dist.get("困难", 0) / total
 
-    # 与理想分布的偏差
-    deviation = abs(easy_pct - 0.3) + abs(medium_pct - 0.5) + abs(hard_pct - 0.2)
+    ideal_easy = profile["简单"]
+    ideal_medium = profile["中等"]
+    ideal_hard = profile["困难"]
+    deviation = abs(easy_pct - ideal_easy) + abs(medium_pct - ideal_medium) + abs(hard_pct - ideal_hard)
 
     if deviation < 0.2:
         rating = "优秀"
@@ -58,7 +72,7 @@ def _analyze_gradient(questions: List[Dict], statistics: Dict) -> Dict:
     return {
         "rating": rating,
         "actual": {"简单": round(easy_pct, 2), "中等": round(medium_pct, 2), "困难": round(hard_pct, 2)},
-        "ideal": {"简单": 0.3, "中等": 0.5, "困难": 0.2},
+        "ideal": {"简单": ideal_easy, "中等": ideal_medium, "困难": ideal_hard},
         "deviation": round(deviation, 2),
     }
 
@@ -147,8 +161,8 @@ def _analyze_competency_balance(questions: List[Dict]) -> Dict:
     return {"balance": balance, "distribution": normalized, "missing": missing, "variance": round(variance, 4)}
 
 
-def _analyze_discrimination(questions: List[Dict], statistics: Dict) -> Dict:
-    """区分度估算。"""
+def _analyze_difficulty_spread(questions: List[Dict], statistics: Dict) -> Dict:
+    """难度离散度分析（注：基于预估难度，非基于学生实际作答的区分度）。"""
     difficulties = []
     for q in questions:
         d = q.get("difficulty", {})
@@ -156,7 +170,7 @@ def _analyze_discrimination(questions: List[Dict], statistics: Dict) -> Dict:
             difficulties.append(d["final_difficulty"])
 
     if len(difficulties) < 3:
-        return {"discrimination": "数据不足", "detail": "至少需要3题"}
+        return {"spread_level": "数据不足", "detail": "至少需要3题"}
 
     import statistics as stats_mod
     mean_d = stats_mod.mean(difficulties)
@@ -171,46 +185,48 @@ def _analyze_discrimination(questions: List[Dict], statistics: Dict) -> Dict:
         level = "低"
 
     return {
-        "discrimination": level,
+        "spread_level": level,
         "difficulty_stdev": round(stdev_d, 2),
-        "difficulty_spread": round(spread, 2),
+        "difficulty_range": round(spread, 2),
         "difficulty_mean": round(mean_d, 2),
+        "note": "本指标基于预估难度计算，非基于学生实际作答的区分度",
     }
 
 
 def _compute_overall(result: Dict) -> str:
-    """综合评价。"""
-    scores = []
+    """综合评价（加权：梯度 0.4 + 素养均衡 0.35 + 离散度 0.25）。"""
+    weighted_sum = 0.0
+    weight_sum = 0.0
 
     gradient = result.get("gradient", {})
-    if gradient.get("rating") == "优秀":
-        scores.append(3)
-    elif gradient.get("rating") == "良好":
-        scores.append(2)
-    elif gradient.get("rating") in ("偏难", "偏易"):
-        scores.append(0)
-    else:
-        scores.append(1)
+    if gradient.get("rating") not in (None, "题目不足"):
+        s = {"优秀": 3, "良好": 2, "一般": 1, "偏难": 0, "偏易": 0}.get(gradient["rating"], 1)
+        weighted_sum += s * 0.4
+        weight_sum += 0.4
 
     balance = result.get("competency_balance", {})
-    if balance.get("balance") == "均衡":
-        scores.append(3)
-    elif balance.get("balance") == "基本均衡":
-        scores.append(2)
-    elif balance.get("missing"):
-        scores.append(0)
-    else:
-        scores.append(1)
+    if balance.get("balance") not in (None, "数据不足"):
+        if balance["balance"] == "均衡":
+            s = 3
+        elif balance["balance"] == "基本均衡":
+            s = 2
+        elif balance.get("missing"):
+            s = 0
+        else:
+            s = 1
+        weighted_sum += s * 0.35
+        weight_sum += 0.35
 
-    disc = result.get("discrimination", {})
-    if disc.get("discrimination") == "高":
-        scores.append(3)
-    elif disc.get("discrimination") == "中等":
-        scores.append(2)
-    else:
-        scores.append(1)
+    spread = result.get("difficulty_spread", {})
+    if spread.get("spread_level") not in (None, "数据不足"):
+        s = {"高": 3, "中等": 2, "低": 1}.get(spread["spread_level"], 1)
+        weighted_sum += s * 0.25
+        weight_sum += 0.25
 
-    avg = sum(scores) / len(scores) if scores else 0
+    if weight_sum == 0:
+        return "数据不足"
+
+    avg = weighted_sum / weight_sum
     if avg >= 2.5:
         return "优秀"
     elif avg >= 1.5:

@@ -63,11 +63,11 @@ class ReportGenerator:
         ))
 
         # 添加难度区间背景
-        fig.add_hrect(y0=0, y1=4, fillcolor="green", opacity=0.1, line_width=0,
+        fig.add_hrect(y0=0, y1=3.5, fillcolor="green", opacity=0.1, line_width=0,
                       annotation_text="简单", annotation_position="top left")
-        fig.add_hrect(y0=4, y1=7, fillcolor="yellow", opacity=0.1, line_width=0,
+        fig.add_hrect(y0=3.5, y1=6.5, fillcolor="yellow", opacity=0.1, line_width=0,
                       annotation_text="中等", annotation_position="top left")
-        fig.add_hrect(y0=7, y1=10, fillcolor="red", opacity=0.1, line_width=0,
+        fig.add_hrect(y0=6.5, y1=10, fillcolor="red", opacity=0.1, line_width=0,
                       annotation_text="困难", annotation_position="top left")
 
         # 布局设置
@@ -126,7 +126,7 @@ class ReportGenerator:
             # 创建柱状图（显示分值）
             fig = go.Figure(data=[
                 go.Bar(
-                    x=['简单 (0-4.5)', '中等 (4.5-7.5)', '困难 (7.5-10)'],
+                    x=['简单 (0-3.5)', '中等 (3.5-6.5)', '困难 (6.5-10)'],
                     y=[easy_score, medium_score, hard_score],
                     text=[f"{easy_score:.1f}分<br>({easy_score/total_score*100:.1f}%)" if total_score > 0 else f"{easy_score:.1f}分",
                           f"{medium_score:.1f}分<br>({medium_score/total_score*100:.1f}%)" if total_score > 0 else f"{medium_score:.1f}分",
@@ -140,16 +140,16 @@ class ReportGenerator:
             yaxis_title = '分值（分）'
         else:
             # 回退：基于题目数量
-            easy_count = sum(1 for q in questions_difficulty if q.get("final_difficulty", 5.0) < 4)
-            medium_count = sum(1 for q in questions_difficulty if 4 <= q.get("final_difficulty", 5.0) < 7)
-            hard_count = sum(1 for q in questions_difficulty if q.get("final_difficulty", 5.0) >= 7)
+            easy_count = sum(1 for q in questions_difficulty if q.get("final_difficulty", 5.0) <= 3.5)
+            medium_count = sum(1 for q in questions_difficulty if 3.5 < q.get("final_difficulty", 5.0) <= 6.5)
+            hard_count = sum(1 for q in questions_difficulty if q.get("final_difficulty", 5.0) > 6.5)
 
             logger.warning(f"[图表2] 未找到score_distribution_by_difficulty，使用题目数量统计")
             logger.info(f"[图表2] 难度分布（题数）: 简单{easy_count}题, 中等{medium_count}题, 困难{hard_count}题")
 
             fig = go.Figure(data=[
                 go.Bar(
-                    x=['简单 (0-4)', '中等 (4-7)', '困难 (7-10)'],
+                    x=['简单 (0-3.5)', '中等 (3.5-6.5)', '困难 (6.5-10)'],
                     y=[easy_count, medium_count, hard_count],
                     text=[easy_count, medium_count, hard_count],
                     textposition='auto',
@@ -529,73 +529,6 @@ class ReportGenerator:
         )
         return fig
 
-
-    def generate_competency_radar(self, competency_summary: Dict) -> go.Figure:
-        """素养雷达图（4维度）"""
-        categories = ['生命观念', '科学思维', '科学探究', '社会责任']
-        values = []
-        for cat in categories:
-            data = competency_summary.get(cat, {})
-            if isinstance(data, dict):
-                values.append(data.get('avg_weight', data.get('权重', 0)) or 0)
-            else:
-                values.append(0)
-        values.append(values[0])  # 闭合
-        cats = categories + [categories[0]]
-
-        fig = go.Figure(go.Scatterpolar(r=values, theta=cats, fill='toself',
-                                          line=dict(color='#6366f1')))
-        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-                          title={'text': '核心素养分布', 'x': 0.5, 'font': {'size': 16, 'family': 'SimHei'}},
-                          showlegend=False, width=500, height=400,
-                          margin=dict(l=60, r=60, t=60, b=60))
-        return fig
-
-    def generate_knowledge_heatmap(self, questions: list) -> go.Figure:
-        """知识点x难度热力图"""
-        kp_diff = {}
-        for q in questions:
-            kps = q.get('analysis', {}).get('knowledge_points', [])[:2]
-            diff = q.get('difficulty', {}).get('final_difficulty', 5)
-            for kp in kps:
-                kp_short = kp[:8]
-                if kp_short not in kp_diff:
-                    kp_diff[kp_short] = []
-                kp_diff[kp_short].append(diff)
-
-        if not kp_diff:
-            return None
-
-        labels = list(kp_diff.keys())[:10]
-        values = [[sum(kp_diff[l])/len(kp_diff[l])] for l in labels]
-
-        fig = go.Figure(go.Heatmap(z=values, y=labels, x=['平均难度'],
-                                    colorscale='RdYlGn_r', showscale=True))
-        fig.update_layout(title={'text': '知识点难度热力图', 'x': 0.5, 'font': {'size': 16, 'family': 'SimHei'}},
-                          width=500, height=max(300, len(labels) * 35),
-                          margin=dict(l=120, r=40, t=60, b=40))
-        return fig
-
-    def generate_type_distribution(self, questions: list) -> go.Figure:
-        """题型分布饼图"""
-        type_scores = {}
-        for q in questions:
-            qtype = q.get('question_type', '未知')
-            score = q.get('analysis', {}).get('total_score', q.get('total_score', 1)) or 1
-            type_scores[qtype] = type_scores.get(qtype, 0) + score
-
-        labels = list(type_scores.keys())
-        values = list(type_scores.values())
-        colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
-
-        fig = go.Figure(go.Pie(labels=labels, values=values,
-                                marker=dict(colors=colors[:len(labels)]),
-                                textinfo='label+percent', hole=0.3))
-        fig.update_layout(title={'text': '题型分值分布', 'x': 0.5, 'font': {'size': 16, 'family': 'SimHei'}},
-                          width=500, height=400, showlegend=True,
-                          margin=dict(l=40, r=40, t=60, b=40))
-        return fig
-
     def _fig_to_base64(self, fig: go.Figure) -> str:
         """将plotly图表转为base64编码的PNG"""
         img_bytes = fig.to_image(format="png", width=800, height=400, scale=2)
@@ -654,25 +587,6 @@ def generate_pdf_report(
         charts["competency_bar"] = rg._fig_to_base64(rg.generate_competency_bar(
             report_data["competency"]["distribution"]))
 
-    # Batch 4: 新增图表
-    # 素养雷达图
-    competency_summary = report_data.get("competency", {}).get("summary", {})
-    if competency_summary:
-        radar_fig = rg.generate_competency_radar(competency_summary)
-        if radar_fig:
-            charts["competency_radar"] = rg._fig_to_base64(radar_fig)
-
-    # 知识点热力图（full 模式）
-    if mode == "full":
-        heatmap_fig = rg.generate_knowledge_heatmap(report_data["questions"])
-        if heatmap_fig:
-            charts["knowledge_heatmap"] = rg._fig_to_base64(heatmap_fig)
-
-    # 题型分值饼图
-    type_fig = rg.generate_type_distribution(report_data["questions"])
-    if type_fig:
-        charts["type_distribution"] = rg._fig_to_base64(type_fig)
-
     # 组装 HTML
     html = _render_html(report_data, insights, charts, mode)
 
@@ -687,45 +601,30 @@ def generate_pdf_report(
 def _get_report_css() -> str:
     """A4 排版 CSS 样式"""
     return """<style>
-@page { size: A4; margin: 2cm 1.5cm; @top-center { content: "试卷分析报告"; font-size: 9pt; color: #94a3b8; } @bottom-center { content: "第 " counter(page) " 页"; font-size: 9pt; color: #94a3b8; } }
-body { font-family: "SimSun", "SimHei", "Microsoft YaHei", serif; font-size: 11pt; line-height: 1.6; color: #1e293b; }
-.cover { page-break-after: always; text-align: center; padding-top: 120px; }
-.cover h1 { font-size: 28pt; color: #1e40af; margin-bottom: 20px; font-family: "SimHei"; }
-.cover .subtitle { font-size: 14pt; color: #64748b; margin-top: 10px; }
-.cover .meta { margin-top: 60px; font-size: 12pt; color: #475569; }
-h2 { font-size: 16pt; color: #1e40af; border-bottom: 2px solid #3b82f6; padding-bottom: 6px; margin-top: 30px; font-family: "SimHei"; page-break-after: avoid; }
-h3 { font-size: 13pt; color: #334155; margin-top: 20px; font-family: "SimHei"; }
-.section { margin-bottom: 25px; }
-.chart-container { text-align: center; margin: 15px 0; page-break-inside: avoid; }
-.chart-container img { max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; }
-.chart { margin: 20px 0; text-align: center; page-break-inside: avoid; }
-.chart img { max-width: 100%; height: auto; border: 1px solid #e2e8f0; border-radius: 8px; }
+@page { size: A4; margin: 2cm; }
+body { font-family: 'SimSun', 'Microsoft YaHei', sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; }
+h1 { text-align: center; color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-bottom: 30px; }
+h2 { color: #1e40af; border-left: 4px solid #3b82f6; padding-left: 10px; margin-top: 30px; page-break-after: avoid; }
+.cover { text-align: center; padding: 60px 0 40px; }
+.cover h1 { font-size: 28px; margin-bottom: 20px; }
+.cover .subtitle { font-size: 20px; color: #475569; margin: 10px 0; }
+.cover p { color: #64748b; margin: 5px 0; }
 .metrics-grid { display: flex; flex-wrap: wrap; gap: 15px; margin: 20px 0; }
 .metric-card { flex: 1; min-width: 140px; background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 15px; text-align: center; }
 .metric-value { font-size: 28px; font-weight: bold; color: #1e40af; }
 .metric-label { font-size: 12px; color: #64748b; margin-top: 5px; }
-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; page-break-inside: avoid; }
-th { background: #f1f5f9; color: #334155; padding: 8px 10px; text-align: left; border: 1px solid #cbd5e1; font-weight: bold; }
-td { padding: 6px 10px; border: 1px solid #e2e8f0; }
+.insight-box { background: #fefce8; border-left: 4px solid #eab308; padding: 12px 16px; margin: 15px 0; border-radius: 0 8px 8px 0; }
+.chart { margin: 20px 0; text-align: center; page-break-inside: avoid; }
+.chart img { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; page-break-inside: auto; }
+th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; font-size: 13px; }
+th { background: #eff6ff; font-weight: bold; color: #1e40af; }
 tr:nth-child(even) { background: #f8fafc; }
-.rating-excellent { color: #059669; font-weight: bold; }
-.rating-good { color: #2563eb; }
-.rating-fair { color: #d97706; }
-.rating-poor { color: #dc2626; font-weight: bold; }
-.diagnosis-card { background: #f0f9ff; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 10px 0; border-radius: 0 8px 8px 0; }
-.diagnosis-card h4 { margin: 0 0 6px 0; color: #1e40af; }
-.insight-box { background: #fffbeb; border: 1px solid #fbbf24; border-radius: 8px; padding: 12px 16px; margin: 15px 0; }
-.insight-box h4 { color: #92400e; margin: 0 0 6px 0; }
-.question-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 12px 0; page-break-inside: avoid; }
+tr { page-break-inside: avoid; }
+.question-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 15px 0; page-break-inside: avoid; }
 .question-card h4 { color: #1e40af; margin: 0 0 10px; }
 .question-card .meta { color: #64748b; font-size: 12px; margin-bottom: 8px; }
 .question-card .comment { background: #f0fdf4; border-left: 3px solid #22c55e; padding: 8px 12px; margin-top: 10px; font-style: italic; }
-.question-card .q-header { font-weight: bold; color: #1e40af; margin-bottom: 8px; }
-.question-card .q-difficulty { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 9pt; }
-.diff-easy { background: #dcfce7; color: #166534; }
-.diff-medium { background: #fef3c7; color: #92400e; }
-.diff-hard { background: #fee2e2; color: #991b1b; }
-.tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 12px; font-size: 9pt; margin: 2px; }
 .rec-item { border-left: 3px solid #3b82f6; padding: 8px 12px; margin: 10px 0; }
 .rec-item.high { border-left-color: #ef4444; }
 .rec-item.medium { border-left-color: #f59e0b; }
@@ -925,15 +824,54 @@ Bloom: {bloom_label} | 素养: {q.get("primary_competency", "")} ({q.get("compet
     return html
 
 
+def _render_diagnostics_summary(data: dict) -> str:
+    """渲染整卷质量诊断摘要（来自 exam_diagnostics）。"""
+    diag = data.get("diagnostics", {})
+    if not diag or diag.get("overall_rating") == "数据不足":
+        return ""
+
+    overall = diag.get("overall_rating", "N/A")
+    grad = diag.get("gradient", {})
+    bal = diag.get("competency_balance", {})
+    spread = diag.get("difficulty_spread", {})
+
+    rating_colors = {"优秀": "#16a34a", "良好": "#2563eb", "一般": "#ca8a04", "待改进": "#dc2626"}
+    color = rating_colors.get(overall, "#333")
+
+    html = f'''<div style="background:#f0f9ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;margin:16px 0">
+<h3 style="margin:0 0 12px;color:#1e40af">整卷质量诊断</h3>
+<div class="metrics-grid">
+<div class="metric-card"><div class="metric-value" style="color:{color}">{overall}</div><div class="metric-label">综合评价</div></div>
+<div class="metric-card"><div class="metric-value">{grad.get("rating", "N/A")}</div><div class="metric-label">难度梯度</div></div>
+<div class="metric-card"><div class="metric-value">{bal.get("balance", "N/A")}</div><div class="metric-label">素养均衡</div></div>
+<div class="metric-card"><div class="metric-value">{spread.get("spread_level", "N/A")}</div><div class="metric-label">难度离散度</div></div>
+</div>'''
+
+    if grad.get("actual") and grad.get("ideal"):
+        html += '<table><thead><tr><th>难度等级</th><th>实际占比</th><th>理想占比</th><th>偏差</th></tr></thead><tbody>'
+        for level in ["简单", "中等", "困难"]:
+            actual = grad["actual"].get(level, 0)
+            ideal = grad["ideal"].get(level, 0)
+            diff = actual - ideal
+            diff_color = "#dc2626" if abs(diff) > 0.15 else ("#ca8a04" if abs(diff) > 0.05 else "#16a34a")
+            html += f'<tr><td>{level}</td><td>{actual*100:.0f}%</td><td>{ideal*100:.0f}%</td><td style="color:{diff_color}">{diff:+.0%}</td></tr>'
+        html += '</tbody></table>'
+
+    if bal.get("missing"):
+        html += f'<p style="color:#dc2626"><strong>素养缺失：</strong>{"、".join(bal["missing"])}</p>'
+
+    html += '</div>'
+    return html
+
+
 def _render_quality_overview_section(data: dict) -> str:
-    """渲染命题质量总览 section — 按严重程度汇总所有题的质量问题。"""
+    """渲染命题质量总览 section — 整卷诊断 + 逐题质量问题。"""
     questions = data["questions"]
 
-    # 分类：硬伤（score 1-2）、待改进（score 3）、良好（score 4-5）、未评估
-    critical = []   # 硬伤
-    improve = []    # 待改进
-    good = []       # 良好
-    no_score = []   # 未评估
+    critical = []
+    improve = []
+    good = []
+    no_score = []
 
     for q in questions:
         qs = q.get("quality_score")
@@ -960,6 +898,7 @@ def _render_quality_overview_section(data: dict) -> str:
     avg_score = sum(q.get("quality_score", 0) for q in questions if q.get("quality_score")) / max(1, sum(1 for q in questions if q.get("quality_score")))
 
     html = '<h2>六、命题质量总览</h2>'
+    html += _render_diagnostics_summary(data)
 
     # 总评卡片
     html += f'''<div class="metrics-grid">
@@ -1011,61 +950,17 @@ def _render_recommendations_section(insights: dict, mode: str) -> str:
     recs = insights.get("recommendations", [])
 
     if mode == "brief":
-        recs = recs[:3]  # 精简档 top 3
+        recs = recs[:3]
 
     for rec in recs:
-        priority = rec.get("priority", "medium")
-        html += f'''<div class="rec-item {priority}">
-<span class="rec-category">[{rec.get("category", "")}]</span> {rec.get("content", "")}
+        if isinstance(rec, str):
+            html += f'<div class="rec-item medium"><span class="rec-category">[建议]</span> {rec}</div>'
+        elif isinstance(rec, dict):
+            priority = rec.get("priority", "medium")
+            html += f'''<div class="rec-item {priority}">
+<span class="rec-category">[{rec.get("category", "建议")}]</span> {rec.get("content", "")}
 </div>'''
 
-    return html
-
-
-def _render_diagnostics_section(data: dict, charts: dict) -> str:
-    """渲染整卷质量诊断 section"""
-    diag = data.get("diagnostics", {})
-    if not diag:
-        return ""
-    html = '<div class="section"><h2>整卷质量诊断</h2>'
-
-    # 综合评价
-    overall = diag.get("overall_rating", "未知")
-    css_map = {"优秀": "rating-excellent", "良好": "rating-good",
-               "一般": "rating-fair", "待改进": "rating-poor"}
-    css_class = css_map.get(overall, "")
-    html += f'<p>综合评价：<span class="{css_class}">{overall}</span></p>'
-
-    # 素养雷达图
-    if "competency_radar" in charts:
-        html += f'<div class="chart"><img src="{charts["competency_radar"]}" alt="素养雷达"></div>'
-
-    # 题型分布饼图
-    if "type_distribution" in charts:
-        html += f'<div class="chart"><img src="{charts["type_distribution"]}" alt="题型分布"></div>'
-
-    # 知识点热力图
-    if "knowledge_heatmap" in charts:
-        html += f'<div class="chart"><img src="{charts["knowledge_heatmap"]}" alt="知识点热力图"></div>'
-
-    # 难度梯度
-    gradient = diag.get("gradient", {})
-    if gradient.get("rating"):
-        html += f'<div class="diagnosis-card"><h4>难度梯度</h4><p>评价: {gradient["rating"]}</p>'
-        actual = gradient.get("actual", {})
-        html += f'<p>实际分布: 简单{actual.get("简单",0):.0%} / 中等{actual.get("中等",0):.0%} / 困难{actual.get("困难",0):.0%}</p></div>'
-
-    # 素养均衡
-    balance = diag.get("competency_balance", {})
-    if balance.get("balance"):
-        html += f'<div class="diagnosis-card"><h4>素养均衡度</h4><p>{balance["balance"]}</p></div>'
-
-    # 区分度
-    disc = diag.get("discrimination", {})
-    if disc.get("discrimination"):
-        html += f'<div class="diagnosis-card"><h4>区分度</h4><p>{disc["discrimination"]}（标准差: {disc.get("difficulty_stdev", 0):.2f}）</p></div>'
-
-    html += '</div>'
     return html
 
 
@@ -1101,7 +996,6 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
     sections.append(_render_knowledge_section(data, insights, charts, mode))
     sections.append(_render_bloom_section(data, insights, charts, mode))
     sections.append(_render_competency_section(data, insights, charts, mode))
-    sections.append(_render_diagnostics_section(data, charts))
     sections.append(_render_quality_overview_section(data))
     sections.append(_render_questions_section(data, insights, mode))
     sections.append(_render_recommendations_section(insights, mode))

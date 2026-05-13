@@ -261,7 +261,22 @@ async def extract_features(question_text: str, options: str = "",
         )
         result = parse_features(raw)
 
-        # 完整性评分：评分9 + 报告3 + reason9 + quality6 + bloom_dist1 + quality_score1 = 29 满分
+        # Schema 校验 + 一致性检查
+        from llm_schemas import validate_llm_output, FeatureResult, check_consistency
+        validated, ext_conf, val_errors = validate_llm_output(result, FeatureResult, "特征提取")
+        for k, v in validated.items():
+            if k in result or k in FEATURE_RANGES:
+                result[k] = v
+
+        consistency_score, consistency_flags = check_consistency(result)
+        result["_extraction_confidence"] = ext_conf
+        result["_consistency_confidence"] = consistency_score
+        if val_errors:
+            result["_validation_errors"] = val_errors
+        if consistency_flags:
+            result["_consistency_flags"] = consistency_flags
+
+        # 完整性评分
         completeness = len([k for k in FEATURE_RANGES if k in result])
         completeness += len([k for k in _REASON_KEYS if k in result])
         completeness += len([k for k in _QUALITY_KEYS if k in result])
@@ -269,18 +284,22 @@ async def extract_features(question_text: str, options: str = "",
         completeness += (1 if "quality_score" in result else 0)
 
         if completeness >= 25:
-            logger.info(f"[特征提取] 完整度={completeness}/29, wm={result.get('working_memory')}, "
-                        f"steps={result.get('reasoning_steps')}, coupling={result.get('chain_coupling')}, "
-                        f"trap={result.get('trap_density')}, qs={result.get('quality_score')}")
+            logger.info(f"[特征提取] 完整度={completeness}/29, ext_conf={ext_conf}, "
+                        f"consistency={consistency_score}, wm={result.get('working_memory')}, "
+                        f"steps={result.get('reasoning_steps')}")
         elif completeness >= 18:
-            logger.warning(f"[特征提取] 部分缺失 完整度={completeness}/29")
+            logger.warning(f"[特征提取] 部分缺失 完整度={completeness}/29, ext_conf={ext_conf}")
         else:
             logger.error(f"[特征提取] 严重不完整 完整度={completeness}/29, 原始长度={len(raw)}")
 
         return result
     except Exception as e:
         logger.error(f"特征提取 API 调用失败: {e}")
-        return dict(DEFAULT_FEATURES)
+        result = dict(DEFAULT_FEATURES)
+        result["_extraction_confidence"] = 0.0
+        result["_consistency_confidence"] = 0.0
+        result["_validation_errors"] = [f"API失败: {str(e)}"]
+        return result
 
 
 # ── 大题结构化特征提取 v3.1 ────────────────────────────────────

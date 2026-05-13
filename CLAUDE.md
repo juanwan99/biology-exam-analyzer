@@ -12,20 +12,20 @@
 
 ### 当前项目 AI 配置
 
-本项目通过 `llm_client.py` 统一管理 LLM 调用，内置三级 fallback 链：
+本项目通过 `llm_client.py` 统一管理 LLM 调用，内置双 provider fallback 链：
 
-| 优先级 | Provider | 模型 | API 格式 | 中转 |
-|--------|----------|------|----------|------|
-| 1（首选） | claude-opus | `claude-opus-4-6` | Anthropic Messages | AIProxy Kiro |
-| 2（次选） | gpt | `gpt-5.4` | OpenAI Responses | AIProxy CodeX |
-| 3（兜底） | gemini-vecto | `gemini-3-pro-preview` | OpenAI Chat | Vecto |
+| 优先级 | Provider | 模型 | API 格式 | 认证 | 备注 |
+|--------|----------|------|----------|------|------|
+| 1（主力） | vertex | `gemini-2.5-pro` | Vertex AI genai SDK | SA JSON + OAuth2 | GCP $1000 赠金，thinking_overhead=3 |
+| 2（兜底） | deepseek | `deepseek-v4-pro` | OpenAI Chat | API Key | no_proxy=True 绕过 HTTPS_PROXY |
 
 **统一入口**: `llm_client.llm_call(messages, max_tokens, temperature)`
 **配置中枢**: `llm_config.py` 定义 Provider 列表 + `get_providers()` 过滤已配置 key
-**兼容垫片**: `claude_client.py` 保留旧 import 路径，内部重导出 llm_client
+**并发控制**: 每 provider semaphore_limit=10，题目级并发由 `ANALYSIS_CONCURRENCY` 环境变量控制（默认 5）
+**代理**: Vertex AI 走 `HTTPS_PROXY=http://172.17.0.1:7890`（容器→宿主机 sing-box→DMIT）
 
-> 每次 LLM 调用独立 fallback。题 A 用 Opus 成功，题 B Opus 超时自动降级 GPT——逐调用粒度，不是整卷切换。
-> 400 Bad Request 不 fallback（prompt 问题），403 会 fallback（可能是模型 ID 过期）。
+> 每次 LLM 调用独立 fallback。题 A 用 Vertex 成功，题 B Vertex 超时自动降级 DeepSeek——逐调用粒度，不是整卷切换。
+> 400 Bad Request 不 fallback（prompt 问题），401/403 会 fallback。
 
 ---
 

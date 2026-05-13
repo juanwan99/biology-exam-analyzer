@@ -143,13 +143,20 @@ class DifficultyPipeline:
         logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
                     + (" [v3.1 大题]" if is_big_question and not big_question_fallback else ""))
 
+        # P4: LLM 难度信号一致性检查
+        consistency = self._check_llm_difficulty_consistency(score, analysis_result)
+        flags.extend(consistency.get("flags", []))
+
         confidence = self._compute_confidence(features, flags)
+        confidence -= consistency.get("confidence_penalty", 0)
         if big_question_fallback:
             confidence = max(0.2, confidence - 0.15)
+        confidence = max(0.1, round(confidence, 2))
 
-        # bloom 1-6 → cognitive_level 0-10（向后兼容旧前端/报告/预测）
+        # bloom 1-6 → cognitive_level 0-10（非线性，Anderson & Krathwohl 2001）
         bloom = features.get("bloom", 3)
-        cognitive_level = round(bloom / 6.0 * 10.0, 1)
+        _BLOOM_COGNITIVE = {1: 1.0, 2: 2.5, 3: 4.5, 4: 6.5, 5: 8.0, 6: 9.5}
+        cognitive_level = _BLOOM_COGNITIVE.get(bloom, round(bloom / 6.0 * 10.0, 1))
 
         return {
             # 旧字段（main.py / prediction_service.py / 前端 消费）
@@ -196,20 +203,58 @@ class DifficultyPipeline:
 
         return features, flags
 
+    def _check_llm_difficulty_consistency(self, rule_score: float, analysis_result: dict) -> dict:
+        """P4: 检查规则评分与 LLM 难度信号的一致性（HEURISTIC）。"""
+        result = {"flags": [], "confidence_penalty": 0.0}
+        if not analysis_result:
+            return result
+
+        # 4a: LLM 三级分类 vs rule_score 区间
+        llm_diff = analysis_result.get("difficulty", "")
+        llm_ranges = {"简单": (1, 4), "中等": (3.5, 7), "困难": (6, 10)}
+        if llm_diff in llm_ranges:
+            lo, hi = llm_ranges[llm_diff]
+            if not (lo <= rule_score <= hi):
+                result["flags"].append("rule_llm_mismatch")
+                result["confidence_penalty"] += 0.1
+                logger.info(f"[P4] rule={rule_score:.1f} vs LLM={llm_diff}({lo}-{hi}): 不一致")
+
+        # 4b: 选项难度离散度 flag
+        option_bd = analysis_result.get("option_difficulty_breakdown")
+        if isinstance(option_bd, dict) and len(option_bd) >= 2:
+            vals = [v for v in option_bd.values() if isinstance(v, (int, float))]
+            if len(vals) >= 2:
+                import statistics as stats_mod
+                stdev = stats_mod.stdev(vals)
+                if stdev > 3:
+                    trap = analysis_result.get("trap_density", 2)
+                    if isinstance(trap, (int, float)) and trap <= 1:
+                        result["flags"].append("option_spread_high_trap_low")
+                        result["confidence_penalty"] += 0.05
+
+        return result
+
     def _compute_confidence(self, features: dict, flags: list) -> float:
-        """动态 confidence 计算。"""
-        conf = 0.85
+        """分层 confidence 计算（P2 改造）。"""
+        # L1: extraction_confidence（Schema 校验结果）
+        ext_conf = features.get("_extraction_confidence", 0.85)
+        # L2: consistency_confidence（特征内部一致性）
+        cons_conf = features.get("_consistency_confidence", 1.0)
+
+        # 基础 = L1 * L2 权重混合
+        conf = ext_conf * 0.6 + cons_conf * 0.4
+
         # 触发默认值 → 降低
         default_count = sum(1 for k in ["working_memory", "reasoning_steps", "knowledge_breadth"]
                             if features.get(k) == DEFAULT_FEATURES.get(k))
-        conf -= default_count * 0.1
+        conf -= default_count * 0.08
         # 缺少 reason → 降低
         reason_count = sum(1 for k in features if k.endswith("_reason") or k == "steps_detail")
         if reason_count < 5:
-            conf -= 0.1
+            conf -= 0.08
         # 有 flag → 降低
-        conf -= len(flags) * 0.05
-        return max(0.2, round(conf, 2))
+        conf -= len(flags) * 0.04
+        return max(0.1, round(conf, 2))
 
     def _default_result(self):
         """无法评估时的默认返回。"""

@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 内置 DeepSeek + Gemini fallback 链。
+"""统一 LLM 客户端 — 内置 DeepSeek + Vertex AI fallback 链。
 
 所有 LLM 调用都通过 llm_call() 入口，自动按 llm_config.PROVIDERS 顺序尝试。
 每次调用独立 fallback，不是整卷切换。
@@ -11,36 +11,9 @@ from llm_config import get_providers
 
 logger = get_logger()
 
-# ── Token 计量 ────────────────────────────────────────────────────
-
-_token_usage: dict[str, dict] = {}
-
-
-def get_token_stats() -> dict:
-    return dict(_token_usage)
-
-
-def _record_usage(provider_name: str, data: dict, api_format: str):
-    if provider_name not in _token_usage:
-        _token_usage[provider_name] = {"input_tokens": 0, "output_tokens": 0, "call_count": 0, "unknown_count": 0}
-    stats = _token_usage[provider_name]
-    stats["call_count"] += 1
-    usage = None
-    if api_format == "anthropic":
-        usage = data.get("usage")
-    elif api_format == "openai_responses":
-        usage = data.get("usage")
-    else:  # openai_chat
-        usage = data.get("usage")
-    if usage:
-        stats["input_tokens"] += usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
-        stats["output_tokens"] += usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
-    else:
-        stats["unknown_count"] += 1
-
-
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
+_vertex_client = None
 
 
 async def close_llm_clients():
@@ -59,13 +32,14 @@ class AllProvidersFailed(Exception):
         super().__init__(f"All LLM providers failed: {names}")
 
 
-async def _get_client(proxy: str = None) -> httpx.AsyncClient:
-    key = proxy or "__direct__"
+async def _get_client(proxy: str = None, trust_env: bool = True) -> httpx.AsyncClient:
+    key = proxy or ("__direct_no_env__" if not trust_env else "__direct__")
     client = _clients.get(key)
     if client is None or client.is_closed:
         kwargs = dict(
             timeout=120.0,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            trust_env=trust_env,
         )
         if proxy:
             kwargs["proxy"] = proxy
@@ -203,22 +177,104 @@ def _extract_text(api_format: str, data: dict) -> str:
         return data["choices"][0]["message"]["content"]
 
 
+# ── Vertex AI SDK ────────────────────────────────────────────────
+
+def _get_vertex_client(provider: dict):
+    global _vertex_client
+    if _vertex_client is None:
+        from google import genai
+        project = os.environ.get(provider.get("project_env", ""), "")
+        location = provider.get("location", "us-central1")
+        _vertex_client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=location,
+        )
+    return _vertex_client
+
+
+def _convert_messages_to_gemini(messages: list) -> tuple:
+    """OpenAI Chat messages → Gemini (contents, system_instruction)。"""
+    contents = []
+    system_instruction = None
+    for msg in messages:
+        role = msg["role"]
+        if role == "system":
+            if isinstance(msg["content"], str):
+                system_instruction = msg["content"]
+            continue
+        gemini_role = "model" if role == "assistant" else "user"
+        parts = []
+        content = msg["content"]
+        if isinstance(content, str):
+            parts.append({"text": content})
+        else:
+            for item in content:
+                if item.get("type") == "text":
+                    parts.append({"text": item["text"]})
+                elif item.get("type") == "image_url":
+                    url = item["image_url"]["url"]
+                    if url.startswith("data:"):
+                        header, b64data = url.split(",", 1)
+                        mime_type = header.split(";")[0].split(":")[1]
+                        parts.append({"inline_data": {"mime_type": mime_type, "data": b64data}})
+        contents.append({"role": gemini_role, "parts": parts})
+    return contents, system_instruction
+
+
+async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
+                                temperature: float) -> str:
+    """调用 Vertex AI Gemini（google-genai SDK）。"""
+    from google.genai import types
+
+    client = _get_vertex_client(provider)
+    contents, system_instruction = _convert_messages_to_gemini(messages)
+    thinking_mult = provider.get("thinking_overhead", 1)
+    capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
+
+    config_kwargs = {
+        "max_output_tokens": capped_tokens,
+        "temperature": temperature,
+    }
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+
+    config = types.GenerateContentConfig(**config_kwargs)
+    sem = _get_semaphore(provider)
+
+    async with sem:
+        response = await client.aio.models.generate_content(
+            model=provider["model"],
+            contents=contents,
+            config=config,
+        )
+        text = response.text
+        if text is None:
+            raise RuntimeError(f"Vertex AI returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
+        return text
+
+
 # ── HTTP 调用 ─────────────────────────────────────────────────────
 
 async def _http_post(url: str, headers: dict, json: dict,
-                     timeout: float, proxy: str = None) -> httpx.Response:
+                     timeout: float, proxy: str = None,
+                     trust_env: bool = True) -> httpx.Response:
     """可被测试 mock 的 HTTP POST。"""
-    client = await _get_client(proxy)
+    client = await _get_client(proxy, trust_env=trust_env)
     return await client.post(url, headers=headers, json=json, timeout=timeout)
 
 
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float) -> str:
     """调用单个 provider（含内部重试）。"""
+    if provider["api_format"] == "vertex_genai":
+        return await _call_vertex_provider(provider, messages, max_tokens, temperature)
+
     url = _get_url(provider)
     headers = _get_headers(provider)
     body = _build_request_body(provider, messages, max_tokens, temperature)
     proxy = _get_proxy(provider)
+    no_proxy = provider.get("no_proxy", False)
     retries = provider.get("retry_count", 2)
     retryable = {429, 500, 502, 503, 529}
     sem = _get_semaphore(provider)
@@ -228,7 +284,8 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
         for attempt in range(retries + 1):
             try:
                 resp = await _http_post(url, headers=headers, json=body,
-                                        timeout=timeout, proxy=proxy)
+                                        timeout=timeout, proxy=proxy,
+                                        trust_env=not no_proxy)
                 ct = resp.headers.get("content-type", "")
                 if "text/html" in ct:
                     raise RuntimeError(
@@ -236,7 +293,6 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                     )
                 resp.raise_for_status()
                 data = resp.json()
-                _record_usage(provider["name"], data, provider["api_format"])
                 return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e

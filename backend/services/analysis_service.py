@@ -20,7 +20,7 @@ class AnalysisService:
 
     def __init__(self, analyzer, difficulty_engine, competency_analyzer,
                  knowledge_mapper, doc_processor, word_splitter, pdf_splitter,
-                 max_workers: int = 21):
+                 max_workers: int = None):
         self.analyzer = analyzer
         self.difficulty_engine = difficulty_engine
         self.competency_analyzer = competency_analyzer
@@ -28,7 +28,8 @@ class AnalysisService:
         self.doc_processor = doc_processor
         self.word_splitter = word_splitter
         self.pdf_splitter = pdf_splitter
-        self.max_workers = max_workers
+        import os
+        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
 
     # ── 单题完整分析 ──────────────────────────────────────────
 
@@ -59,42 +60,43 @@ class AnalysisService:
             if q_images:
                 q_image_b64 = base64.b64encode(q_images[0]).decode("utf-8")
 
-            difficulty_result = await self.difficulty_engine.evaluate_with_refinement(
-                question={
-                    "id": q_id,
-                    "content": question.get("content", ""),
-                    "knowledge_points": analysis.get("knowledge_points", []),
-                    "total_score": analysis.get("total_score", question.get("total_score", 0)),
-                    "num_options": analysis.get("num_options", 4),
-                    "question_type": question_type,
-                    "correct_answer": analysis.get("answer", ""),
-                    "sub_questions_count": question.get("sub_questions_count"),
-                    "sub_scores": question.get("sub_scores", []),
-                    "image_base64": q_image_b64,
-                },
-                mode=mode,
-                analysis_result=analysis,
-            )
-            question["difficulty"] = difficulty_result
+            difficulty_q = {
+                "id": q_id,
+                "content": question.get("content", ""),
+                "knowledge_points": analysis.get("knowledge_points", []),
+                "total_score": analysis.get("total_score", question.get("total_score", 0)),
+                "num_options": analysis.get("num_options", 4),
+                "question_type": question_type,
+                "correct_answer": analysis.get("answer", ""),
+                "sub_questions_count": question.get("sub_questions_count"),
+                "sub_scores": question.get("sub_scores", []),
+                "image_base64": q_image_b64,
+            }
 
             merged_competency = analysis.get("competency")
+            need_independent_competency = True
             if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
                 weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
                 weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
                 if weight_sum >= 0.9:
                     question["competency"] = merged_competency
+                    need_independent_competency = False
                     logger.info(f"[分析] 题目{q_id} 使用合并素养结果 (primary={merged_competency.get('primary_competency')})")
                 else:
                     logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
-                    competency_result = await self.competency_analyzer.analyze_competency(
-                        question={"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
-                    )
-                    question["competency"] = competency_result
-            else:
-                competency_result = await self.competency_analyzer.analyze_competency(
-                    question={"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+
+            if need_independent_competency:
+                competency_q = {"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                difficulty_result, competency_result = await asyncio.gather(
+                    self.difficulty_engine.evaluate_with_refinement(question=difficulty_q, mode=mode, analysis_result=analysis),
+                    self.competency_analyzer.analyze_competency(question=competency_q),
                 )
+                question["difficulty"] = difficulty_result
                 question["competency"] = competency_result
+            else:
+                difficulty_result = await self.difficulty_engine.evaluate_with_refinement(
+                    question=difficulty_q, mode=mode, analysis_result=analysis)
+                question["difficulty"] = difficulty_result
             # 知识点标准化映射
             if self.knowledge_mapper and analysis.get("knowledge_points"):
                 standardized = self.knowledge_mapper.map_knowledge_points(analysis["knowledge_points"])
@@ -212,10 +214,12 @@ class AnalysisService:
         from report_data import aggregate_report_data
         from report_insights import generate_insights
         from report_generator import generate_pdf_report
+        from exam_diagnostics import diagnose_exam
 
         rdata = aggregate_report_data(
             questions, competency_summary, exam_statistics, exam_info
         )
+        rdata["diagnostics"] = diagnose_exam(questions, exam_statistics)
         insights = await generate_insights(rdata, mode=mode)
         generate_pdf_report(rdata, insights, mode=mode, output_path=output_path)
         return output_path
@@ -258,8 +262,7 @@ class AnalysisService:
         if extracted_elements and self.doc_processor:
             self.doc_processor.match_elements_to_questions(questions, extracted_elements)
 
-        for q in questions:
-            q = await self.analyze_question(q, image_bytes, mode)
+        questions = await self.analyze_questions_batch(questions, image_bytes, mode)
 
         competency_summary = self.build_competency_summary(questions)
         exam_statistics = self.aggregate_statistics(questions, competency_summary)
