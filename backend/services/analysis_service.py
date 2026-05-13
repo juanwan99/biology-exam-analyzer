@@ -77,14 +77,24 @@ class AnalysisService:
             )
             question["difficulty"] = difficulty_result
 
-            competency_result = await self.competency_analyzer.analyze_competency(
-                question={
-                    "id": q_id,
-                    "content": question.get("content", ""),
-                    "knowledge_points": analysis.get("knowledge_points", []),
-                }
-            )
-            question["competency"] = competency_result
+            merged_competency = analysis.get("competency")
+            if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
+                weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
+                weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
+                if weight_sum >= 0.9:
+                    question["competency"] = merged_competency
+                    logger.info(f"[分析] 题目{q_id} 使用合并素养结果 (primary={merged_competency.get('primary_competency')})")
+                else:
+                    logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
+                    competency_result = await self.competency_analyzer.analyze_competency(
+                        question={"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                    )
+                    question["competency"] = competency_result
+            else:
+                competency_result = await self.competency_analyzer.analyze_competency(
+                    question={"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                )
+                question["competency"] = competency_result
             return question
 
         except Exception as e:

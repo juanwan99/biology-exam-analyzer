@@ -103,6 +103,11 @@ class DifficultyPipeline:
             features = await extract_features(full_text, "", correct_answer, question_type, subject=subject)
             logger.info(f"特征提取完成: {features}")
 
+            # Bloom 优先级：LLM 分析的 bloom_level 优先于特征提取推断
+            llm_bloom = kwargs.get("analysis_result", {}).get("bloom_level")
+            if isinstance(llm_bloom, (int, float)) and 1 <= llm_bloom <= 6:
+                features["bloom"] = int(llm_bloom)
+
         # Stage 2.5: 合并 Gemini representation
         flags = []
         if big_question_fallback:

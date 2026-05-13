@@ -11,6 +11,34 @@ from llm_config import get_providers
 
 logger = get_logger()
 
+# ── Token 计量 ────────────────────────────────────────────────────
+
+_token_usage: dict[str, dict] = {}
+
+
+def get_token_stats() -> dict:
+    return dict(_token_usage)
+
+
+def _record_usage(provider_name: str, data: dict, api_format: str):
+    if provider_name not in _token_usage:
+        _token_usage[provider_name] = {"input_tokens": 0, "output_tokens": 0, "call_count": 0, "unknown_count": 0}
+    stats = _token_usage[provider_name]
+    stats["call_count"] += 1
+    usage = None
+    if api_format == "anthropic":
+        usage = data.get("usage")
+    elif api_format == "openai_responses":
+        usage = data.get("usage")
+    else:  # openai_chat
+        usage = data.get("usage")
+    if usage:
+        stats["input_tokens"] += usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
+        stats["output_tokens"] += usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+    else:
+        stats["unknown_count"] += 1
+
+
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 
@@ -208,6 +236,7 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                     )
                 resp.raise_for_status()
                 data = resp.json()
+                _record_usage(provider["name"], data, provider["api_format"])
                 return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e

@@ -156,6 +156,14 @@ async def list_logs(admin_ok=Depends(verify_admin)):
     }
 
 
+# ============ Token 统计 API ============
+
+@router.get("/api/admin/token-stats")
+async def get_token_stats_api():
+    from llm_client import get_token_stats
+    return {"providers": [{"name": k, **v} for k, v in get_token_stats().items()]}
+
+
 # ============ 报告下载 API ============
 
 @router.get("/api/reports/{filename}")
