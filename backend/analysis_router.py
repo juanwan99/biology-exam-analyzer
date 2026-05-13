@@ -13,7 +13,7 @@
 - analyze_question_full      — 单题完整分析
 - generate_exam_statistics   — 整卷统计
 """
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -908,3 +908,21 @@ async def confirm_split(
     except Exception as e:
         logger.error(f"[确认拆分] 失败: {str(e)}", exc_info=True)
         raise HTTPException(500, detail="服务器内部错误")
+
+
+# ============ 教师修正 API ============
+
+@router.patch("/api/questions/{question_id}/analysis")
+async def update_question_analysis(question_id: int, body: dict = Body(...)):
+    """教师修正分析结果 — manual_override 不覆盖原始分析（ORC-007）"""
+    if not body:
+        raise HTTPException(400, detail="修正内容不能为空")
+    # 存储到 session 内存（当前无持久化需求，月均63次）
+    if not hasattr(router, '_overrides'):
+        router._overrides = {}
+    router._overrides[question_id] = {
+        "override": body,
+        "override_at": datetime.now().isoformat(),
+    }
+    logger.info(f"[修正] 题目{question_id} 分析已修正: {list(body.keys())}")
+    return {"status": "ok", "question_id": question_id, "overridden_fields": list(body.keys())}

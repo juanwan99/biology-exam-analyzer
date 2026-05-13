@@ -450,9 +450,14 @@ class KnowledgeMapper:
                 chapter_data = textbook_data.get("chapters", {}).get(chapter, {})
                 section_name = chapter_data.get("sections", {}).get(section, "")
 
+                # 完全匹配关键词给 1.0，包含关键词给 0.9
+                confidence = 1.0 if knowledge_point == keyword else 0.9
+
                 result = {
                     "original": knowledge_point,
                     "mapped": True,
+                    "standard_name": section_name or keyword,
+                    "confidence": confidence,
                     "textbook": textbook,
                     "textbook_name": textbook_data.get("name", ""),
                     "chapter": chapter,
@@ -461,15 +466,70 @@ class KnowledgeMapper:
                     "section_name": section_name
                 }
 
-                logger.debug(f"[知识点映射] '{knowledge_point}' → {textbook} {chapter} {section}")
+                logger.debug(f"[知识点映射] '{knowledge_point}' → {textbook} {chapter} {section} (confidence={confidence})")
                 return result
 
-        # 映射失败
+        # 2. 教材树路径模糊匹配（confidence: 0.3-0.7）
+        fuzzy_result = self._fuzzy_match_textbook(knowledge_point)
+        if fuzzy_result:
+            return fuzzy_result
+
+        # 3. 映射失败（confidence: 0.0）
         logger.info(f"[知识点映射] '{knowledge_point}' 映射失败，返回原始内容")
         return {
             "original": knowledge_point,
-            "mapped": False
+            "mapped": False,
+            "standard_name": knowledge_point,
+            "confidence": 0.0
         }
+
+
+    def _fuzzy_match_textbook(self, knowledge_point: str) -> Optional[Dict[str, Any]]:
+        """教材树路径模糊匹配：用知识点文本与章节名/节名做字符交集"""
+        best_match = None
+        best_score = 0.0
+
+        kp_chars = set(knowledge_point)
+
+        for textbook_key, textbook_data in self.TEXTBOOK_STRUCTURE.items():
+            for chapter_key, chapter_data in textbook_data.get("chapters", {}).items():
+                chapter_name = chapter_data.get("name", "")
+                chapter_overlap = len(kp_chars & set(chapter_name))
+
+                for section_key, section_name in chapter_data.get("sections", {}).items():
+                    section_chars = set(section_name)
+                    overlap = len(kp_chars & section_chars)
+                    union = len(kp_chars | section_chars)
+                    if union == 0:
+                        continue
+
+                    # Jaccard-like score + chapter name bonus
+                    score = (overlap + chapter_overlap * 0.3) / union
+
+                    if score > best_score and score >= 0.25:
+                        best_score = score
+                        best_match = {
+                            "textbook": textbook_key,
+                            "textbook_name": textbook_data.get("name", ""),
+                            "chapter": chapter_key,
+                            "chapter_name": chapter_name,
+                            "section": section_key,
+                            "section_name": section_name,
+                        }
+
+        if best_match and best_score >= 0.25:
+            confidence = round(min(0.7, 0.3 + best_score * 0.8), 2)
+            result = {
+                "original": knowledge_point,
+                "mapped": True,
+                "standard_name": best_match["section_name"],
+                "confidence": confidence,
+                **best_match
+            }
+            logger.debug(f"[知识点映射-模糊] \'{knowledge_point}\' → {best_match['textbook']} {best_match['section']} (confidence={confidence})")
+            return result
+
+        return None
 
     def map_knowledge_points(self, knowledge_points: List[str]) -> List[Dict[str, Any]]:
         """

@@ -95,6 +95,11 @@ class AnalysisService:
                     question={"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
                 )
                 question["competency"] = competency_result
+            # 知识点标准化映射
+            if self.knowledge_mapper and analysis.get("knowledge_points"):
+                standardized = self.knowledge_mapper.map_knowledge_points(analysis["knowledge_points"])
+                question["knowledge_mapping"] = standardized
+
             return question
 
         except Exception as e:
