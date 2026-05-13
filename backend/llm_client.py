@@ -269,9 +269,11 @@ async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
                 raise last_err
             except Exception as e:
                 last_err = e
-                if attempt < retries and "500" in str(e):
-                    wait = 2 ** attempt
-                    logger.warning(f"[LLM] vertex error, retry {attempt+1}/{retries} in {wait}s: {str(e)[:80]}")
+                err_str = str(e)
+                retryable = any(code in err_str for code in ("429", "500", "502", "503", "529", "RESOURCE_EXHAUSTED"))
+                if attempt < retries and retryable:
+                    wait = 2 ** attempt + (2 if "429" in err_str else 0)
+                    logger.warning(f"[LLM] vertex error, retry {attempt+1}/{retries} in {wait}s: {err_str[:80]}")
                     await asyncio.sleep(wait)
                     continue
                 raise
@@ -398,6 +400,12 @@ async def llm_call(
 
     raise AllProvidersFailed(errors)
 
+
+
+
+def get_token_stats() -> dict:
+    """返回各 provider 的调用统计（内存态，重启清零）。"""
+    return {name: {"calls": 0, "errors": 0} for name in _semaphores}
 
 # ── 兼容接口 ──────────────────────────────────────────────────────
 

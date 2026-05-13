@@ -159,7 +159,7 @@ async def list_logs(admin_ok=Depends(verify_admin)):
 # ============ Token 统计 API ============
 
 @router.get("/api/admin/token-stats")
-async def get_token_stats_api():
+async def get_token_stats_api(admin_ok=Depends(verify_admin)):
     from llm_client import get_token_stats
     return {"providers": [{"name": k, **v} for k, v in get_token_stats().items()]}
 
@@ -295,6 +295,8 @@ async def submit_score_rate(request: Request, admin_ok=Depends(verify_admin)):
 
             if qp:
                 qp.score_rate = sr
+                if fb.get("predicted_difficulty") is not None:
+                    qp.absolute_difficulty = fb["predicted_difficulty"]
             else:
                 qp = QuestionPerformance(
                     exam_id=exam_id,
