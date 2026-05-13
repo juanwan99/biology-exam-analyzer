@@ -9,6 +9,8 @@ const ExercisePage = React.lazy(() => import('./pages/ExercisePage'))
 const TextbookPage = React.lazy(() => import('./pages/TextbookPage'))
 const QuizGeneratorPage = React.lazy(() => import('./pages/QuizGeneratorPage'))
 const HistoryDataPage = React.lazy(() => import('./pages/HistoryDataPage'))
+const TokenStatsPage = React.lazy(() => import("./pages/admin/TokenStatsPage"))
+const CalibrationPage = React.lazy(() => import("./pages/admin/CalibrationPage"))
 
 function App() {
   const location = useLocation()
@@ -73,6 +75,8 @@ function App() {
             <Route path="/textbooks" element={<React.Suspense fallback={<div>加载中...</div>}><TextbookPage /></React.Suspense>} />
             <Route path="/quiz" element={<React.Suspense fallback={<div>加载中...</div>}><QuizGeneratorPage /></React.Suspense>} />
             <Route path="/history" element={<React.Suspense fallback={<div>加载中...</div>}><HistoryDataPage /></React.Suspense>} />
+            <Route path="/admin/tokens" element={<React.Suspense fallback={<div>加载中...</div>}><TokenStatsPage /></React.Suspense>} />
+            <Route path="/admin/calibration" element={<React.Suspense fallback={<div>加载中...</div>}><CalibrationPage /></React.Suspense>} />
             <Route path="*" element={
               <div className="min-h-[60vh] flex items-center justify-center">
                 <div className="text-center">
