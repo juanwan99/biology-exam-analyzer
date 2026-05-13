@@ -40,6 +40,21 @@ def _build_overall_prompt(data: dict) -> str:
     feature = data["feature_profile"]
     exam = data["exam_info"]
 
+    # Batch 3: 整卷质量诊断上下文
+    diag = data.get("diagnostics", {})
+    diag_section = ""
+    if diag:
+        gradient = diag.get("gradient", {})
+        comp_bal = diag.get("competency_balance", {})
+        disc = diag.get("discrimination", {})
+        diag_section = f"""
+## 整卷质量诊断
+- 难度梯度评级: {gradient.get('rating', 'N/A')}，偏差值: {gradient.get('deviation', 'N/A')}
+- 素养均衡度: {comp_bal.get('balance', 'N/A')}
+- 区分度: {disc.get('discrimination', 'N/A')}（标准差={disc.get('difficulty_stdev', 'N/A')}）
+- 综合评价: {diag.get('overall_rating', 'N/A')}
+"""
+
     return f"""你是一名资深高中生物教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
 
 ## 试卷基本信息
@@ -66,6 +81,7 @@ def _build_overall_prompt(data: dict) -> str:
 ## 素养分布
 {json.dumps(competency["distribution"], ensure_ascii=False, default=str)}
 
+{diag_section}
 请输出严格 JSON（不要多余解释）：
 {{
   "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",

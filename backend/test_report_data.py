@@ -96,6 +96,7 @@ class TestAggregateReportData:
         assert set(result.keys()) == {
             "exam_info", "metrics", "difficulty_curve", "difficulty_gradient",
             "knowledge", "competency", "feature_profile", "questions",
+            "diagnostics",
         }
 
     def test_feature_profile_averages_6_dimensions(self):

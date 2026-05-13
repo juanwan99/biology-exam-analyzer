@@ -169,5 +169,14 @@ def aggregate_report_data(
         "questions": [_extract_question_detail(q) for q in questions],
     }
 
+    # Batch 3: 整卷质量诊断
+    from exam_diagnostics import diagnose_exam
+    try:
+        diagnostics = diagnose_exam(questions, exam_statistics, exam_scope=None)
+    except Exception as e:
+        logger.warning(f"诊断失败: {e}")
+        diagnostics = {}
+    data["diagnostics"] = diagnostics
+
     logger.info(f"[报告数据] 聚合完成，总分={total_score}")
     return data
