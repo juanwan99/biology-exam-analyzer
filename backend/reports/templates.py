@@ -199,6 +199,53 @@ Bloom: {bloom_label} | 素养: {q.get("primary_competency", "")} ({q.get("compet
 
 
 
+def _render_diagnostics_section(data: dict, charts: dict) -> str:
+    """渲染整卷质量诊断 section"""
+    diag = data.get("diagnostics", {})
+    if not diag:
+        return ""
+    html = '<div class="section"><h2>整卷质量诊断</h2>'
+
+    # 综合评价
+    overall = diag.get("overall_rating", "未知")
+    css_map = {"优秀": "rating-excellent", "良好": "rating-good",
+               "一般": "rating-fair", "待改进": "rating-poor"}
+    css_class = css_map.get(overall, "")
+    html += f'<p>综合评价：<span class="{css_class}">{overall}</span></p>'
+
+    # 素养雷达图
+    if "competency_radar" in charts:
+        html += f'<div class="chart"><img src="{charts["competency_radar"]}" alt="素养雷达"></div>'
+
+    # 题型分布饼图
+    if "type_distribution" in charts:
+        html += f'<div class="chart"><img src="{charts["type_distribution"]}" alt="题型分布"></div>'
+
+    # 知识点热力图
+    if "knowledge_heatmap" in charts:
+        html += f'<div class="chart"><img src="{charts["knowledge_heatmap"]}" alt="知识点热力图"></div>'
+
+    # 难度梯度
+    gradient = diag.get("gradient", {})
+    if gradient.get("rating"):
+        html += f'<div class="diagnosis-card"><h4>难度梯度</h4><p>评价: {gradient["rating"]}</p>'
+        actual = gradient.get("actual", {})
+        html += f'<p>实际分布: 简单{actual.get("简单",0):.0%} / 中等{actual.get("中等",0):.0%} / 困难{actual.get("困难",0):.0%}</p></div>'
+
+    # 素养均衡
+    balance = diag.get("competency_balance", {})
+    if balance.get("balance"):
+        html += f'<div class="diagnosis-card"><h4>素养均衡度</h4><p>{balance["balance"]}</p></div>'
+
+    # 区分度
+    disc = diag.get("discrimination", {})
+    if disc.get("discrimination"):
+        html += f'<div class="diagnosis-card"><h4>区分度</h4><p>{disc["discrimination"]}（标准差: {disc.get("difficulty_stdev", 0):.2f}）</p></div>'
+
+    html += '</div>'
+    return html
+
+
 def _render_quality_overview_section(data: dict) -> str:
     """渲染命题质量总览 section — 按严重程度汇总所有题的质量问题。"""
     questions = data["questions"]
@@ -332,6 +379,7 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
     sections.append(_render_knowledge_section(data, insights, charts, mode))
     sections.append(_render_bloom_section(data, insights, charts, mode))
     sections.append(_render_competency_section(data, insights, charts, mode))
+    sections.append(_render_diagnostics_section(data, charts))
     sections.append(_render_quality_overview_section(data))
     sections.append(_render_questions_section(data, insights, mode))
     sections.append(_render_recommendations_section(insights, mode))
