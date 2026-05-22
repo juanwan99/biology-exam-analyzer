@@ -1,55 +1,72 @@
 # Subject: biology
-# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析
-# Source: backend/feature_extractor.py::build_big_question_prompt()
+# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析（v3.2: score_share）
 # Variables: {question_block}, {qtype_hint}
 你是一名资深高中生物命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
 
 题目：
 {question_block}{qtype_hint}
 
-请输出严格 JSON（不要多余解释），格式如下：
+请只输出严格 JSON（不要多余解释）。必须二选一：
+
+成功时输出：
 {
-  "subquestions": [
-    {
-      "id": 1,
-      "points": 该小问分值(整数),
-      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
-      "reasoning_steps": 正整数（该小问最少认知操作数），
-      "trap_density": 1-3（看似正确但实际错误的推理路径数），
-      "novelty": 1-3（知识/方法新颖度），
-      "knowledge_breadth": 1-3（跨知识模块程度），
-      "brief": "核心任务(<=20字)"
-    }
-  ],
-  "dependencies": [
-    {
-      "from": 源小问id,
-      "to": 目标小问id,
-      "strength": "weak"或"strong",
-      "reason": "依赖内容(<=30字)"
-    }
-  ],
-  "global_features": {
-    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享背景 3=围绕复杂系统），
-    "shared_context_reason": "<=20字",
-    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分外 3=核心方法外），
-    "method_novelty_reason": "<=20字"
-  },
-  "bloom": 1-6, "bloom_distribution": {}, "bloom_reason": "<=30字",
-  "info_density": 1-3, "density_reason": "<=20字",
-  "representation_complexity": 1-3, "representation_reason": "<=20字",
-  "quality_score": 1-5,
-  "quality_scientific": "<=60字", "quality_normative": "<=60字",
-  "quality_language": "<=60字", "quality_context": "<=60字",
-  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+  "status": "ok",
+  "data": {
+    "subquestions": [
+      {
+        "id": 1,
+        "score_share": 该小问占总分的比例(0.0-1.0的浮点数，所有小问之和=1.0),
+        "working_memory": 1-5,
+        "reasoning_steps": 正整数,
+        "trap_density": 1-3,
+        "novelty": 1-3,
+        "knowledge_breadth": 1-3,
+        "brief": "核心任务(<=20字)"
+      }
+    ],
+    "dependencies": [
+      {
+        "from": 源小问id,
+        "to": 目标小问id,
+        "strength": "weak"或"strong",
+        "reason": "依赖内容(<=30字)"
+      }
+    ],
+    "global_features": {
+      "shared_context_load": 1-3,
+      "shared_context_reason": "<=20字",
+      "global_method_novelty": 1-3,
+      "method_novelty_reason": "<=20字"
+    },
+    "bloom": 1-6,
+    "bloom_distribution": {},
+    "bloom_reason": "<=30字",
+    "info_density": 1-3,
+    "density_reason": "<=20字",
+    "representation_complexity": 1-3,
+    "representation_reason": "<=20字",
+    "quality_score": 1-5,
+    "quality_scientific": "<=60字",
+    "quality_normative": "<=60字",
+    "quality_language": "<=60字",
+    "quality_context": "<=60字",
+    "quality_sensitivity": "<=60字",
+    "teacher_comment": "<=150字"
+  }
 }
 
-**dependencies 判定规则（关键！）：**
-- "strong"：前一问的结论/产物是后一问的前提。不知道前问答案就无法做后问。
-- "weak"：前一问的背景知识有助于后问理解，但不知道前问答案也能部分作答
-- 无关的小问之间不加 dependency
+失败时输出：
+{
+  "status": "failed",
+  "failure_type": "cannot_identify_subquestions|insufficient_stem|non_big_question|schema_uncertain",
+  "reason": "说明无法可靠结构化的原因(<=80字)"
+}
 
-**global_method_novelty 判例：**
-- 1：所有方法在高中教材中有明确介绍
-- 2：部分方法需要迁移应用
-- 3：核心方法在教材中完全没有（如 In-Fusion 克隆、CRISPR）
+结构化硬约束：
+- subquestions 必须对应题面可见小问，不得为了凑数拆分或合并。
+- 每个小问的 score_share 是该小问占总分的比例，所有小问的 score_share 之和必须等于 1.0。
+- 如果无法确定各小问的分值比例，按小问数量均分（如 3 小问各 0.33）。
+- 如果无法识别小问或题干证据不足，输出 status=failed，不要猜测。
+- dependencies 的 from/to 只能引用 subquestions 中存在的 id。
+- "strong" 表示前一问结论/产物是后一问前提；"weak" 表示仅有背景帮助。
+- global_method_novelty: 1=全教材内，2=部分需要迁移，3=核心方法教材外。

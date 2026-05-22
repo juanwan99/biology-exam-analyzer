@@ -654,7 +654,15 @@ class TestBuildBigQuestionPrompt:
         assert '"status": "ok"' in prompt
         assert '"status": "failed"' in prompt
         assert '"failure_type"' in prompt
-        assert "points_sum" in prompt
+        assert "score_share" in prompt
+
+    def test_prompt_uses_score_share_not_points(self):
+        """v3.2: prompt 使用 score_share 而非 points。"""
+        prompt = self.build("某大题内容", question_type="实验题")
+        assert "score_share" in prompt
+        # points_sum 和 points_unknown 不应出现在新 prompt 中
+        assert "points_sum" not in prompt
+        assert "points_unknown" not in prompt
 
     def test_big_question_prompt_file_registered(self):
         from prompt_loader import PromptLoader
@@ -1052,3 +1060,237 @@ class TestQ21EndToEnd:
             )
         score = result["final_difficulty"]
         assert score < 7.0, f"全并列简单大题不应超 7.0，实际 {score}"
+
+
+class TestBigQuestionRetry:
+    """大题结构化提取 retry 机制测试。"""
+
+    def test_retry_on_points_sum_mismatch(self):
+        """首次 points_sum 不匹配时 retry 一次，第二次成功则用第二次结果。"""
+        bad_response = json.dumps({
+            "status": "ok", "points_sum": 6,
+            "data": {
+                "subquestions": [
+                    {"id": 1, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        good_response = json.dumps({
+            "status": "ok", "points_sum": 12,
+            "data": {
+                "subquestions": [
+                    {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        with patch("feature_extractor.send_message_gpt",
+                   new_callable=AsyncMock, side_effect=[bad_response, good_response]):
+            from feature_extractor import extract_big_question_features
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_big_question_features(
+                    "某大题...", total_score=12, return_failure=True
+                )
+            )
+        assert result is not None
+        assert not result.get("_big_question_failed", False)
+        assert len(result["subquestions"]) == 3
+        assert sum(sq["points"] for sq in result["subquestions"]) == 12
+
+    def test_retry_both_fail_returns_failure(self):
+        """两次都失败则返回失败 payload。"""
+        bad_response = json.dumps({
+            "status": "ok", "points_sum": 6,
+            "data": {
+                "subquestions": [
+                    {"id": 1, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        with patch("feature_extractor.send_message_gpt",
+                   new_callable=AsyncMock, side_effect=[bad_response, bad_response]):
+            from feature_extractor import extract_big_question_features
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_big_question_features(
+                    "某大题...", total_score=12, return_failure=True
+                )
+            )
+        assert result.get("_big_question_failed") is True
+        assert result["failure_type"] == "points_sum_mismatch"
+
+    def test_no_retry_on_model_reported_failure(self):
+        """模型明确报告失败（status=failed）时不 retry。"""
+        model_fail = json.dumps({
+            "status": "failed",
+            "failure_type": "cannot_identify_subquestions",
+            "reason": "subquestion structure not visible",
+        })
+        mock_send = AsyncMock(return_value=model_fail)
+        with patch("feature_extractor.send_message_gpt", mock_send):
+            from feature_extractor import extract_big_question_features
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_big_question_features(
+                    "某大题...", total_score=12, return_failure=True
+                )
+            )
+        assert result.get("_big_question_failed") is True
+        assert mock_send.call_count == 1
+
+
+class TestParseScoreShare:
+    """score_share 模式解析测试。"""
+
+    def setup_method(self):
+        from feature_extractor import parse_big_question_features
+        self.parse = parse_big_question_features
+
+    def test_score_share_parsed_and_points_derived(self):
+        """score_share 输入 → 解析成功，points 由 total_score * score_share 派生。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.25, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.25, "working_memory": 4, "reasoning_steps": 3,
+                     "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.50, "working_memory": 4, "reasoning_steps": 5,
+                     "trap_density": 2, "novelty": 3, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [{"from": 1, "to": 2, "strength": "strong", "reason": "x"}],
+                "global_features": {"shared_context_load": 2, "global_method_novelty": 1},
+                "bloom": 4,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        assert sqs[0]["points"] == 3   # 12 * 0.25 = 3
+        assert sqs[1]["points"] == 3   # 12 * 0.25 = 3
+        assert sqs[2]["points"] == 6   # 12 * 0.50 = 6
+        assert sqs[0]["score_share"] == 0.25
+        assert result["data"].get("allocation_source") == "inferred"
+
+    def test_score_share_sum_mismatch_rejected(self):
+        """score_share 之和偏离 1.0 超过 10% → 失败。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "score_share_sum_mismatch"
+
+    def test_score_share_normalized_within_tolerance(self):
+        """score_share 之和在 0.9~1.1 范围内 → 自动归一化后通过。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        total_derived = sum(sq["points"] for sq in sqs)
+        assert total_derived == 12
+
+    def test_backward_compat_absolute_points_still_work(self):
+        """旧格式（absolute points）仍然可用——向后兼容。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw, total_score=8, detailed=True)
+        assert result["ok"] is True
+        assert result["data"]["subquestions"][0]["points"] == 4
+        assert result["data"].get("allocation_source") == "explicit"
+
+    def test_score_share_rounding_adjustment(self):
+        """score_share 派生 points 时，四舍五入确保总和精确等于 total_score。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=10, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        total_derived = sum(sq["points"] for sq in sqs)
+        assert total_derived == 10, f"total points should be exactly 10, got {total_derived}"
+
+    def test_allocation_source_in_legacy_mode(self):
+        """旧格式解析结果包含 allocation_source=explicit。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 6, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw, total_score=6, detailed=True)
+        assert result["ok"] is True
+        assert result["data"].get("allocation_source") == "explicit"
