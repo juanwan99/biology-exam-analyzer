@@ -59,6 +59,30 @@ class TestComputeDifficulty:
         high_bloom = compute_difficulty(self._base(working_memory=3, reasoning_steps=3, bloom=6))
         assert low_bloom == high_bloom, f"bloom 不应影响评分: {low_bloom} vs {high_bloom}"
 
+    def test_representation_and_information_load_affect_score(self):
+        """Biology figures/tables add representation burden even when core logic is unchanged."""
+        plain = compute_difficulty(self._base(
+            working_memory=3, reasoning_steps=4, chain_coupling=1,
+            trap_density=2, novelty=1, knowledge_breadth=2,
+            representation_complexity=1, info_density=1))
+        visual = compute_difficulty(self._base(
+            working_memory=3, reasoning_steps=4, chain_coupling=1,
+            trap_density=2, novelty=1, knowledge_breadth=2,
+            representation_complexity=3, info_density=3))
+        assert visual - plain >= 0.8
+
+    def test_trap_novelty_do_not_swamp_visual_multistep_demand(self):
+        """Many traps alone should not outrank a longer visual multi-step task."""
+        trap_heavy_choice = compute_difficulty(self._base(
+            working_memory=4, reasoning_steps=5, chain_coupling=3,
+            trap_density=3, novelty=3, knowledge_breadth=2,
+            representation_complexity=1, info_density=2))
+        visual_multistep = compute_difficulty(self._base(
+            working_memory=4, reasoning_steps=8, chain_coupling=2,
+            trap_density=2, novelty=2, knowledge_breadth=2,
+            representation_complexity=3, info_density=3))
+        assert visual_multistep > trap_heavy_choice
+
 
 class TestScoreToLabel:
     def test_labels(self):
@@ -343,6 +367,89 @@ class TestNoAnswerEvaluation:
         assert result["features"] is not None
 
 
+class TestFineGrainedDifficultyEvidence:
+    """Fine-grained SEU/DU evidence should refine, not replace, rule scoring."""
+
+    def _seus(self, high_order=False):
+        if high_order:
+            return [
+                {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 4,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.4, "difficulty_estimate": 8.0, "bloom_level": 6,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 3,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 4,
+                 "allocation_confidence": 0.9},
+            ]
+        return [
+            {"score_share": 0.25, "difficulty_estimate": 5.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 5.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 5.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 5.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+        ]
+
+    def test_big_question_structure_failure_fails_closed(self):
+        flat_features = {
+            "working_memory": 4, "reasoning_steps": 8, "chain_coupling": 2,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 5, "info_density": 3, "representation_complexity": 2,
+        }
+
+        async def run():
+            with patch("difficulty_pipeline.extract_big_question_features",
+                        new_callable=AsyncMock, return_value=None), \
+                  patch("difficulty_pipeline.extract_features",
+                        new_callable=AsyncMock, return_value=dict(flat_features)):
+                pipeline = DifficultyPipeline()
+                return await pipeline.evaluate_with_refinement(
+                    {"content": "vector construction experiment", "question_type": "experiment",
+                      "correct_answer": "", "total_score": 14},
+                    analysis_result={"_fine_grained": {"scoring_units": self._seus(True)}})
+
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(run())
+
+        assert result["final_difficulty"] is None
+        assert result["difficulty_label"] == "未评估"
+        assert result["confidence"] == 0.0
+        assert result["analysis_failed"] is True
+        assert "big_question_structure_failed" in result.get("flags", [])
+
+    def test_diagnostic_burden_raises_understated_misconception_heavy_item(self):
+        base_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 3, "novelty": 1, "knowledge_breadth": 1,
+            "bloom": 3, "info_density": 1, "representation_complexity": 1,
+        }
+        diagnostic_units = [
+            {"description": "confuses screening purpose"},
+            {"description": "confuses cell source"},
+            {"description": "confuses culture condition"},
+        ]
+
+        async def run(with_diagnostics):
+            analysis = {"_fine_grained": {"diagnostic_units": diagnostic_units if with_diagnostics else []}}
+            with patch("difficulty_pipeline.extract_features",
+                       new_callable=AsyncMock, return_value=dict(base_features)):
+                pipeline = DifficultyPipeline()
+                return await pipeline.evaluate_with_refinement(
+                    {"content": "single choice misconception-heavy item",
+                     "question_type": "single_choice", "correct_answer": "B", "total_score": 2},
+                    analysis_result=analysis)
+
+        loop = asyncio.get_event_loop()
+        plain = loop.run_until_complete(run(False))
+        with_du = loop.run_until_complete(run(True))
+
+        assert with_du["final_difficulty"] - plain["final_difficulty"] >= 0.5
+        assert "diagnostic_burden_adjustment" in with_du.get("flags", [])
+
+
 class TestParseBigQuestion:
     """大题结构化 JSON 解析测试。"""
 
@@ -451,6 +558,71 @@ class TestParseBigQuestion:
         assert "quality_scientific" in result["report"]
         assert "teacher_comment" in result["report"]
 
+    def test_detailed_parse_reports_json_failure_type(self):
+        result = self.parse("not json", detailed=True)
+        assert result["ok"] is False
+        assert result["data"] is None
+        assert result["failure_type"] == "json_parse_failed"
+        assert result["raw_length"] == len("not json")
+
+    def test_detailed_parse_reports_points_sum_mismatch(self):
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 2, "points": 2, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "points_sum_mismatch"
+        assert any("points_sum" in item for item in result["errors"])
+
+    def test_detailed_parse_accepts_schema_wrapper(self):
+        wrapped = json.dumps({"status": "ok", "data": json.loads(self._valid_input())})
+        result = self.parse(wrapped, total_score=8, detailed=True)
+        assert result["ok"] is True
+        assert result["failure_type"] is None
+        assert len(result["data"]["subquestions"]) == 2
+
+    def test_detailed_parse_reports_model_failure_payload(self):
+        raw = json.dumps({
+            "status": "failed",
+            "failure_type": "cannot_identify_subquestions",
+            "reason": "subquestion labels are not visible",
+        })
+        result = self.parse(raw, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "cannot_identify_subquestions"
+        assert result["errors"] == ["subquestion labels are not visible"]
+
+    def test_detailed_parse_rejects_missing_scoring_fields(self):
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "points": 4, "working_memory": 3},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=4, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "invalid_subquestion_schema"
+        assert any("missing reasoning_steps" in item for item in result["errors"])
+
+    def test_detailed_parse_rejects_truncated_json(self):
+        raw = '{"status":"ok","data":{"subquestions":[{"id":1,"points":4'
+        result = self.parse(raw, total_score=4, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "json_truncated"
+
 
 class TestBuildBigQuestionPrompt:
     """大题专用 prompt 构建测试。"""
@@ -476,6 +648,26 @@ class TestBuildBigQuestionPrompt:
         prompt = self.build("番茄红素PSY融合蛋白实验", correct_answer="见解析")
         assert "番茄红素PSY融合蛋白实验" in prompt
         assert "见解析" in prompt
+
+    def test_contains_strict_status_contract(self):
+        prompt = self.build("某大题内容", question_type="实验题")
+        assert '"status": "ok"' in prompt
+        assert '"status": "failed"' in prompt
+        assert '"failure_type"' in prompt
+        assert "points_sum" in prompt
+
+    def test_big_question_prompt_file_registered(self):
+        from prompt_loader import PromptLoader
+
+        loader = PromptLoader("biology")
+        assert loader.exists("big_question_extractor")
+        prompt = loader.load(
+            "big_question_extractor",
+            question_block="题干文本",
+            qtype_hint="\n题型：实验题",
+        )
+        assert "题干文本" in prompt
+        assert "{question_block}" not in prompt
 
 
 
@@ -584,8 +776,8 @@ class TestBigQuestionPipeline:
         assert result["features"] is not None
         assert "_big_question" not in result["features"], "total_score=7 不应走大题路径"
 
-    def test_fallback_on_parse_failure(self):
-        """结构化解析失败 → fallback 到 v3 原路径。"""
+    def test_fails_closed_on_parse_failure(self):
+        """结构化解析失败 → 不得 fallback 到普通特征路径生成假难度。"""
         mock_flat = {
             "working_memory": 4, "reasoning_steps": 6, "chain_coupling": 2,
             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
@@ -599,12 +791,44 @@ class TestBigQuestionPipeline:
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
                     "content": "某大题...", "question_type": "实验题",
+                 "correct_answer": "", "total_score": 12,
+                })
+            )
+        assert result["features"]["_feature_status"] == "failed"
+        assert result["final_difficulty"] is None
+        assert result["analysis_failed"] is True
+        assert "big_question_structure_failed" in result.get("flags", [])
+
+    def test_big_question_parse_failure_reason_is_preserved(self):
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "json_parse_failed",
+            "errors": ["JSON parse failed"],
+            "_llm_calls": [{
+                "purpose": "big_question_feature_extraction",
+                "prompt_id": "biology.big_question_feature_extraction",
+                "metadata": {
+                    "status": "parse_failed",
+                    "failure_type": "json_parse_failed",
+                    "response_length": 8,
+                },
+            }],
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "实验题",
                     "correct_answer": "", "total_score": 12,
                 })
             )
-        assert result["features"] is not None
-        assert "big_question_fallback" in result.get("flags", [])
-        assert result["confidence"] < 0.7
+        assert result["final_difficulty"] is None
+        assert result["analysis_failed"] is True
+        assert result["failure_reason"] == "json_parse_failed"
+        assert "big_question_structure_failed" in result.get("flags", [])
+        assert "json_parse_failed" in result.get("flags", [])
+        assert result["features"]["_llm_calls"][0]["metadata"]["failure_type"] == "json_parse_failed"
 
     def test_full_chain_with_raw_json(self):
         """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""
@@ -650,29 +874,15 @@ class TestBigQuestionPipeline:
         assert result["final_difficulty"] >= 9.0, f"全链路 Q21 应 >=9.0，实际 {result['final_difficulty']}"
         assert "_big_question" in result["features"]
 
-    def test_points_sum_mismatch_triggers_fallback(self):
-        """A-003: points 总和与 total_score 偏差 >20% → fallback。"""
-        structured = {
-            "subquestions": [
-                {"id": 1, "points": 2, "working_memory": 3, "reasoning_steps": 3,
-                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
-                {"id": 2, "points": 2, "working_memory": 3, "reasoning_steps": 3,
-                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2},
-            ],
-            "dependencies": [],
-            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
-            "report": {"bloom": 3},
+    def test_points_sum_mismatch_fails_closed(self):
+        """A-003: points 总和与 total_score 偏差 >20% → parse 阶段阻断。"""
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "points_sum_mismatch",
+            "errors": ["points_sum=4, total_score=12"],
         }
-        mock_flat = {
-            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 2,
-            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
-            "bloom": 3, "info_density": 2, "representation_complexity": 1,
-        }
-        # total_score=12, sum(points)=4, 偏差=67% > 20%
         with patch("difficulty_pipeline.extract_big_question_features",
-                   new_callable=AsyncMock, return_value=structured), \
-             patch("difficulty_pipeline.extract_features",
-                   new_callable=AsyncMock, return_value=mock_flat):
+                   new_callable=AsyncMock, return_value=failure_payload):
             pipeline = DifficultyPipeline()
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
@@ -680,9 +890,9 @@ class TestBigQuestionPipeline:
                     "correct_answer": "", "total_score": 12,
                 })
             )
-        assert "big_question_fallback" in result.get("flags", [])
-        assert "_big_question" not in result["features"], "points 偏差 fallback 后不应有 _big_question"
-        assert result["confidence"] < 0.7, f"fallback 后 confidence 应 <0.7，实际 {result['confidence']}"
+        assert result["analysis_failed"] is True
+        assert result["final_difficulty"] is None
+        assert "points_sum_mismatch" in result.get("flags", [])
 
 
 
@@ -752,6 +962,58 @@ class TestQ21EndToEnd:
         assert score <= 10.0
         assert "_big_question" in result["features"]
         assert len(result["features"]["_big_question"]["subquestions"]) == 3
+
+    def test_q21_four_part_visual_question_keeps_chain_and_visual_burden(self):
+        """四小问图表大题不应因单小问宽度较低而被压低。"""
+        structured = {
+            "subquestions": [
+                {"id": 1, "points": 2, "working_memory": 2, "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 1},
+                {"id": 2, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 3, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 3, "points": 4, "working_memory": 3, "reasoning_steps": 4,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+                {"id": 4, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            ],
+            "dependencies": [
+                {"from": 1, "to": 2, "strength": "strong", "reason": "定位失败原因决定改造方案"},
+                {"from": 3, "to": 4, "strength": "weak", "reason": "共用三引物PCR图示"},
+            ],
+            "global_features": {"shared_context_load": 3, "global_method_novelty": 3},
+            "report": {"bloom": 5, "info_density": 3, "representation_complexity": 2},
+        }
+        analysis = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 4,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.4, "difficulty_estimate": 8.0, "bloom_level": 6,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 3,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.2, "difficulty_estimate": 5.5, "bloom_level": 4,
+                     "allocation_confidence": 0.9},
+                ]
+            }
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=structured):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "番茄红素PSY融合蛋白实验，含表1、图2和电泳鉴定。",
+                    "question_type": "实验题",
+                    "correct_answer": "见解析",
+                    "total_score": 14,
+                    "image_base64": "image",
+                }, analysis_result=analysis)
+            )
+        assert result["features"]["chain_coupling"] == 2
+        assert result["features"]["knowledge_breadth"] == 3
+        assert result["features"]["representation_complexity"] == 3
+        assert "media_representation_adjustment" in result["flags"]
+        assert result["final_difficulty"] >= 9.0, result
 
     def test_parallel_big_question_not_overscored(self):
         """A-005: 并列大题不应被过度提升。
