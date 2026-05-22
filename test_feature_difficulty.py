@@ -1432,3 +1432,136 @@ class TestSEUFallback:
                 }, analysis_result=analysis_result)
             )
         assert result.get("cognitive_level_source") == "linear_approximation"
+
+
+class TestQualityScoreGate:
+    """quality_score <= 2 时阻断难度评估。"""
+
+    def test_quality_score_1_blocks_difficulty(self):
+        """quality_score=1（内容缺失）→ 阻断。"""
+        mock_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+            "quality_score": 1,
+            "_feature_status": "ok", "_raw_core_count": 9,
+            "_extraction_confidence": 1.0, "_consistency_confidence": 1.0,
+        }
+        with patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "A. A B. B C. C D. D",
+                    "question_type": "single_choice",
+                    "correct_answer": "", "total_score": 2,
+                })
+            )
+        assert result["analysis_failed"] is True
+        assert result["final_difficulty"] is None
+        assert "quality_score_too_low" in result.get("flags", [])
+
+    def test_quality_score_3_passes(self):
+        """quality_score=3 → 正常评分。"""
+        mock_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+            "quality_score": 3,
+            "_feature_status": "ok", "_raw_core_count": 9,
+            "_extraction_confidence": 1.0, "_consistency_confidence": 1.0,
+        }
+        with patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "正常题目...",
+                    "question_type": "single_choice",
+                    "correct_answer": "A", "total_score": 2,
+                })
+            )
+        assert result.get("analysis_failed") is not True
+        assert result["final_difficulty"] is not None
+
+    def test_quality_score_absent_passes(self):
+        """quality_score 不存在 → 正常评分（向后兼容）。"""
+        mock_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
+            "bloom": 3, "info_density": 2, "representation_complexity": 1,
+            "_feature_status": "ok", "_raw_core_count": 9,
+            "_extraction_confidence": 1.0, "_consistency_confidence": 1.0,
+        }
+        with patch("difficulty_pipeline.extract_features",
+                   new_callable=AsyncMock, return_value=mock_features):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "正常题目...",
+                    "question_type": "single_choice",
+                    "correct_answer": "A", "total_score": 2,
+                })
+            )
+        assert result.get("analysis_failed") is not True
+
+
+class TestCriticalPathWeighted:
+    """Critical path should select by score-weighted difficulty, not raw steps."""
+
+    def test_high_value_hard_subquestion_selected(self):
+        """High-value + high-step subquestion should be on critical path."""
+        from rule_scorer import find_critical_path
+        subquestions = [
+            {"id": 1, "points": 6, "reasoning_steps": 4, "working_memory": 4,
+             "trap_density": 3, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 2, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+            {"id": 3, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+        ]
+        dependencies = [
+            {"from": 2, "to": 3, "strength": "strong", "reason": "sequential"},
+        ]
+        path_nodes, path_steps = find_critical_path(subquestions, dependencies)
+        path_ids = [n["id"] for n in path_nodes]
+        # sq1 (6pts, weighted=4*0.5=2.0) should beat sq2->sq3 chain (weighted=2*0.25+2*0.25=1.0)
+        assert 1 in path_ids, f"High-value sq1 should be on critical path, got {path_ids}"
+
+    def test_small_outlier_does_not_hijack(self):
+        """1-point high-difficulty subquestion should not hijack the whole question."""
+        from rule_scorer import find_critical_path
+        subquestions = [
+            {"id": 1, "points": 1, "reasoning_steps": 8, "working_memory": 5,
+             "trap_density": 3, "novelty": 3, "knowledge_breadth": 1},
+            {"id": 2, "points": 5, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 3, "points": 6, "reasoning_steps": 4, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+        ]
+        dependencies = [
+            {"from": 2, "to": 3, "strength": "strong", "reason": "builds on"},
+        ]
+        path_nodes, path_steps = find_critical_path(subquestions, dependencies)
+        path_ids = [n["id"] for n in path_nodes]
+        # sq2->sq3 chain (weighted=(3*5/12)+(4*6/12)=1.25+2.0=3.25) should beat
+        # sq1 alone (weighted=8*1/12=0.67)
+        assert 1 not in path_ids or len(path_ids) > 1, \
+            f"1-point outlier sq1 should not be sole critical path, got {path_ids}"
+
+    def test_breadth_upgrade_with_3_subquestions(self):
+        """3 subquestions + method_novelty>=3 should upgrade breadth to 3."""
+        from rule_scorer import aggregate_big_question
+        subquestions = [
+            {"id": 1, "points": 5, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 2, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+            {"id": 3, "points": 4, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 2},
+        ]
+        dependencies = [{"from": 1, "to": 2, "strength": "strong", "reason": "x"}]
+        global_features = {"shared_context_load": 2, "global_method_novelty": 3}
+        result = aggregate_big_question(subquestions, dependencies, global_features)
+        assert result["knowledge_breadth"] == 3, \
+            f"3 sqs + method_novelty=3 should upgrade breadth, got {result['knowledge_breadth']}"
