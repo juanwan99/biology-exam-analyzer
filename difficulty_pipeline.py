@@ -140,6 +140,7 @@ class DifficultyPipeline:
                             "final_difficulty": fallback_score,
                             "difficulty_label": label,
                             "cognitive_level": round(fallback_score * 0.9, 1),
+                            "cognitive_level_source": "linear_approximation",
                             "score_distribution_by_difficulty": self._score_distribution(fallback_score, total_score),
                             "features": {
                                 "_feature_status": "seu_fallback",

@@ -1296,6 +1296,32 @@ class TestParseScoreShare:
         assert result["data"].get("allocation_source") == "explicit"
 
 
+    def test_score_share_extreme_small_value(self):
+        """极小 score_share 强制最低1分后 sum 仍等于 total_score。"""
+        from feature_extractor import parse_big_question_features
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.01, "working_memory": 2, "reasoning_steps": 2,
+                     "trap_density": 1, "novelty": 1, "knowledge_breadth": 1, "brief": "x"},
+                    {"id": 2, "score_share": 0.01, "working_memory": 2, "reasoning_steps": 2,
+                     "trap_density": 1, "novelty": 1, "knowledge_breadth": 1, "brief": "y"},
+                    {"id": 3, "score_share": 0.98, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = parse_big_question_features(raw, total_score=8, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        total_pts = sum(sq["points"] for sq in sqs)
+        assert total_pts == 8, f"sum(points)={total_pts}, expected 8"
+        assert all(sq["points"] >= 1 for sq in sqs)
+
 class TestSEUFallback:
     """大题结构化失败时的 SEU fallback 测试。"""
 
@@ -1376,3 +1402,33 @@ class TestSEUFallback:
                 }, analysis_result=analysis_result)
             )
         assert result["analysis_failed"] is True
+
+    def test_seu_fallback_marks_cognitive_level_source(self):
+        """SEU fallback 标注 cognitive_level_source。"""
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "points_sum_mismatch",
+            "errors": ["points_sum=6, total_score=12"],
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.33, "difficulty_estimate": 7.0, "bloom_level": 4,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.33, "difficulty_estimate": 6.0, "bloom_level": 3,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.34, "difficulty_estimate": 8.0, "bloom_level": 5,
+                     "allocation_confidence": 0.8},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 12,
+                }, analysis_result=analysis_result)
+            )
+        assert result.get("cognitive_level_source") == "linear_approximation"

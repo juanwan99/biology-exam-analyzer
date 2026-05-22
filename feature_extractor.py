@@ -409,7 +409,7 @@ async def extract_features(question_text: str, options: str = "",
 def build_big_question_prompt(question_text: str, options: str = "",
                               correct_answer: str = "",
                               question_type: str = "") -> str:
-    """构建大题结构化特征提取 prompt（v3.1）。"""
+    """构建大题结构化特征提取 prompt（v3.2: score_share 替代 absolute points）。"""
     parts = [question_text]
     if options:
         parts.append(f"选项：{options}")
@@ -428,12 +428,11 @@ def build_big_question_prompt(question_text: str, options: str = "",
 成功时输出：
 {{
   "status": "ok",
-  "points_sum": 全部小问 points 之和,
   "data": {{
   "subquestions": [
     {{
       "id": 1,
-      "points": 该小问分值(整数),
+      "score_share": 该小问占总分的比例(0.0-1.0的浮点数，所有小问之和=1.0),
       "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
       "reasoning_steps": 正整数（该小问最少认知操作数），
       "trap_density": 1-3（看似正确但实际错误的推理路径数），
@@ -469,14 +468,15 @@ def build_big_question_prompt(question_text: str, options: str = "",
 失败时输出：
 {{
   "status": "failed",
-  "failure_type": "cannot_identify_subquestions|points_unknown|insufficient_stem|non_big_question|schema_uncertain",
+  "failure_type": "cannot_identify_subquestions|insufficient_stem|non_big_question|schema_uncertain",
   "reason": "说明无法可靠结构化的原因(<=80字)"
 }}
 
 **结构化硬约束：**
 - subquestions 必须对应题面可见小问，不得为了凑数拆分或合并。
-- 每个小问必须有可解释的 points；points_sum 必须等于题面总分或参考答案总分。
-- 如果无法识别小问、无法确定分值或题干证据不足，输出 status=failed，不要猜测。
+- 每个小问的 score_share 是该小问占总分的比例，所有小问的 score_share 之和必须等于 1.0。
+- 如果无法确定各小问的分值比例，按小问数量均分（如 3 小问各 0.33）。
+- 如果无法识别小问或题干证据不足，输出 status=failed，不要猜测。
 - dependencies 的 from/to 只能引用 subquestions 中存在的 id。
 
 **dependencies 判定规则（关键！）：**
@@ -500,9 +500,56 @@ _SQ_RANGES = {
 }
 
 
+def _derive_points_from_score_share(subquestions: list, total_score: float) -> list:
+    """Derive integer points from score_share, ensuring sum == total_score exactly.
+
+    Uses largest-remainder method for fair rounding, then enforces minimum 1 point
+    per subquestion while preserving the sum==total_score invariant by reducing
+    points from the largest subquestions.
+    """
+    raw_points = [sq["score_share"] * total_score for sq in subquestions]
+    floored = [int(p) for p in raw_points]
+    remainders = [(raw_points[i] - floored[i], i) for i in range(len(subquestions))]
+    deficit = round(total_score) - sum(floored)
+    # Sort by remainder descending, distribute extra points
+    remainders.sort(key=lambda x: -x[0])
+    for j in range(int(deficit)):
+        if j < len(remainders):
+            floored[remainders[j][1]] += 1
+    # Ensure minimum 1 point per subquestion.
+    # Any point added here creates excess that must be removed from the largest
+    # subquestions so that sum(points) == round(total_score) is preserved.
+    for i in range(len(floored)):
+        if floored[i] < 1:
+            floored[i] = 1
+    target = round(total_score)
+    excess = sum(floored) - target
+    if excess > 0:
+        # Reduce from subquestions with the most points, never below 1
+        for _ in range(excess):
+            # Find index of largest subquestion that still has > 1 point
+            best_idx = -1
+            best_val = 0
+            for i, v in enumerate(floored):
+                if v > 1 and v > best_val:
+                    best_val = v
+                    best_idx = i
+            if best_idx == -1:
+                # Cannot reduce further (all at 1); sum invariant cannot be satisfied
+                # with min-1 and the given total_score — leave as-is
+                break
+            floored[best_idx] -= 1
+    return floored
+
+
 def parse_big_question_features(raw: str, total_score: float | None = None,
                                 detailed: bool = False) -> dict | None:
     """解析大题结构化 JSON。
+
+    支持两种格式：
+    - score_share 模式（v3.2+）: 小问用 score_share (0-1.0) 表示分值比例，
+      points 由 total_score * score_share 派生
+    - points 模式（向后兼容）: 小问用 absolute points 表示分值
 
     默认返回兼容旧接口的 payload/None；detailed=True 时返回带 failure_type
     的结构化结果，供上游显式失败而不是生成看似正常的回退数据。
@@ -607,6 +654,13 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
         logger.warning("[大题解析] subquestions 缺失或为空")
         return fail("missing_subquestions", ["subquestions is missing or empty"])
 
+    # Detect mode: score_share vs points
+    has_score_share = any(
+        isinstance(sq, dict) and "score_share" in sq for sq in sqs_raw
+    )
+    use_score_share = has_score_share
+    allocation_source = "inferred" if use_score_share else "explicit"
+
     subquestions = []
     invalid_schema_errors = []
     for sq in sqs_raw:
@@ -625,17 +679,35 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
                 invalid_schema_errors.extend(item_errors)
                 continue
             sq_id = len(subquestions) + 1
-        if "points" not in sq and detailed:
-            item_errors.append(f"missing points for subquestion {raw_id}")
-        raw_points = sq.get("points", 2)
-        try:
-            points = max(1, int(float(raw_points)))
-        except (ValueError, TypeError):
-            item_errors.append(f"invalid points for subquestion {raw_id}: {raw_points}")
-            if detailed:
-                invalid_schema_errors.extend(item_errors)
-                continue
-            points = 2
+
+        # score_share mode: parse score_share, defer points derivation
+        if use_score_share:
+            if "score_share" not in sq and detailed:
+                item_errors.append(f"missing score_share for subquestion {raw_id}")
+            raw_share = sq.get("score_share", 1.0 / max(len(sqs_raw), 1))
+            try:
+                score_share = float(raw_share)
+                score_share = max(0.0, min(1.0, score_share))
+            except (ValueError, TypeError):
+                item_errors.append(f"invalid score_share for subquestion {raw_id}: {raw_share}")
+                if detailed:
+                    invalid_schema_errors.extend(item_errors)
+                    continue
+                score_share = 1.0 / max(len(sqs_raw), 1)
+        else:
+            # points mode (backward compat)
+            if "points" not in sq and detailed:
+                item_errors.append(f"missing points for subquestion {raw_id}")
+            raw_points = sq.get("points", 2)
+            try:
+                points = max(1, int(float(raw_points)))
+            except (ValueError, TypeError):
+                item_errors.append(f"invalid points for subquestion {raw_id}: {raw_points}")
+                if detailed:
+                    invalid_schema_errors.extend(item_errors)
+                    continue
+                points = 2
+
         cleaned_values = {}
         for key, (lo, hi) in _SQ_RANGES.items():
             if key not in sq and detailed:
@@ -654,9 +726,12 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
             continue
         cleaned = {
             "id": sq_id,
-            "points": points,
             "brief": str(sq.get("brief", ""))[:20],
         }
+        if use_score_share:
+            cleaned["score_share"] = score_share
+        else:
+            cleaned["points"] = points
         cleaned.update(cleaned_values)
         subquestions.append(cleaned)
     if not subquestions:
@@ -669,18 +744,42 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
     if len(set(ids)) != len(ids):
         return fail("duplicate_subquestion_ids", ["subquestion ids must be unique"])
 
-    if total_score is not None:
-        try:
-            expected_total = float(total_score)
-        except (ValueError, TypeError):
-            expected_total = 0
-        if expected_total > 0:
-            points_sum = sum(float(sq["points"]) for sq in subquestions)
-            if abs(points_sum - expected_total) / expected_total > 0.2:
-                return fail(
-                    "points_sum_mismatch",
-                    [f"points_sum={points_sum:g}, total_score={expected_total:g}"],
-                )
+    # score_share mode: validate sum, normalize, derive points
+    if use_score_share:
+        share_sum = sum(sq["score_share"] for sq in subquestions)
+        if abs(share_sum - 1.0) > 0.1:
+            return fail(
+                "score_share_sum_mismatch",
+                [f"score_share_sum={share_sum:.3f}, expected=1.0"],
+            )
+        # Normalize to exactly 1.0 if within tolerance
+        if share_sum != 1.0:
+            for sq in subquestions:
+                sq["score_share"] = sq["score_share"] / share_sum
+
+        # Derive points from score_share * total_score
+        if total_score is not None and total_score > 0:
+            derived = _derive_points_from_score_share(subquestions, float(total_score))
+            for i, sq in enumerate(subquestions):
+                sq["points"] = derived[i]
+        else:
+            # No total_score: assign equal default points
+            for sq in subquestions:
+                sq["points"] = 2
+    else:
+        # points mode: existing validation
+        if total_score is not None:
+            try:
+                expected_total = float(total_score)
+            except (ValueError, TypeError):
+                expected_total = 0
+            if expected_total > 0:
+                points_sum = sum(float(sq["points"]) for sq in subquestions)
+                if abs(points_sum - expected_total) / expected_total > 0.2:
+                    return fail(
+                        "points_sum_mismatch",
+                        [f"points_sum={points_sum:g}, total_score={expected_total:g}"],
+                    )
 
     # dependencies
     deps_raw = data.get("dependencies", [])
@@ -761,6 +860,7 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
         "dependencies": dependencies,
         "global_features": global_features,
         "report": report,
+        "allocation_source": allocation_source,
     }
     if dropped_deps > 0:
         result["_dropped_deps"] = dropped_deps
