@@ -12,10 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 确保环境变量 - 优先使用 KEY_2
-api_key = os.environ.get("GEMINI_API_KEY_2") or os.environ.get("GEMINI_API_KEY", "")
-os.environ["GEMINI_API_KEY"] = api_key
-os.environ["GEMINI_API_KEY_2"] = api_key
-# GEMINI_API_BASE from environment
+api_key = os.environ.get("DEEPSEEK_API_KEY_2") or os.environ.get("DEEPSEEK_API_KEY", "")
+os.environ["DEEPSEEK_API_KEY"] = api_key
+os.environ["DEEPSEEK_API_KEY_2"] = api_key
+# DEEPSEEK_API_BASE from environment
 
 from vision_processor import VisionProcessor
 

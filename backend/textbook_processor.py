@@ -1,6 +1,6 @@
 """
 教材智能处理服务
-使用 Gemini 分析教材内容，提取知识点结构
+使用 AI 分析教材内容，提取知识点结构
 """
 import os
 import json
@@ -17,18 +17,18 @@ from logger import get_logger
 
 logger = get_logger()
 
-# Gemini API 配置 - 使用新的API Key
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
-GEMINI_API_BASE = os.environ.get("GEMINI_API_BASE", "")
+# 视觉模型 API 配置
+QWEN_API_KEY = os.environ.get("QWEN_API_KEY_2", os.environ.get("QWEN_API_KEY", ""))
+QWEN_API_BASE = os.environ.get("QWEN_API_BASE", "")
 
 
 class TextbookProcessor:
     """教材智能处理器"""
 
     def __init__(self):
-        self.api_key = GEMINI_API_KEY
-        self.api_base = GEMINI_API_BASE
-        self.model = "gemini-2.5-flash"  # 使用Flash模型，成本更低
+        self.api_key = QWEN_API_KEY
+        self.api_base = QWEN_API_BASE
+        self.model = "qwen-vl-max"  # 使用Flash模型，成本更低
         self.client = httpx.AsyncClient(timeout=120.0)
 
     async def close(self):
@@ -157,8 +157,8 @@ class TextbookProcessor:
         with open(page_img_path, "wb") as f:
             f.write(img_bytes)
 
-        # 5. 调用Gemini分析获取标签信息
-        analysis = await self._analyze_page_with_gemini(text, img_base64, page_num + 1)
+        # 5. 调用AI分析获取标签信息
+        analysis = await self._analyze_page_with_vision(text, img_base64, page_num + 1)
 
         return {
             "page": page_num + 1,
@@ -170,13 +170,13 @@ class TextbookProcessor:
             **analysis  # AI分析的标签信息
         }
 
-    async def _analyze_page_with_gemini(
+    async def _analyze_page_with_vision(
         self,
         text: str,
         image_base64: str,
         page_num: int
     ) -> Dict[str, Any]:
-        """使用Gemini分析页面内容"""
+        """使用AI分析页面内容"""
 
         # 提供教材的章节结构参考
         textbook_structure = """
@@ -281,7 +281,7 @@ class TextbookProcessor:
             )
 
             if response.status_code != 200:
-                logger.error(f"[Gemini] API错误: {response.status_code} - {response.text}")
+                logger.error(f"[Vision] API错误: {response.status_code} - {response.text}")
                 return {"error": f"API错误: {response.status_code}"}
 
             result = response.json()
@@ -316,7 +316,7 @@ class TextbookProcessor:
             # 策略1: 直接解析
             analysis = try_parse_json(content)
             if analysis:
-                logger.info(f"[Gemini] 解析成功，chapter_num={analysis.get('chapter_info', {}).get('chapter_num')}")
+                logger.info(f"[Vision] 解析成功，chapter_num={analysis.get('chapter_info', {}).get('chapter_num')}")
                 return analysis
 
             # 策略2: 修复尾随逗号
@@ -324,7 +324,7 @@ class TextbookProcessor:
             fixed_content = re.sub(r',\s*]', ']', fixed_content)
             analysis = try_parse_json(fixed_content)
             if analysis:
-                logger.info(f"[Gemini] 修复后解析成功，chapter_num={analysis.get('chapter_info', {}).get('chapter_num')}")
+                logger.info(f"[Vision] 修复后解析成功，chapter_num={analysis.get('chapter_info', {}).get('chapter_num')}")
                 return analysis
 
             # 策略3: 修复可能被截断的JSON
@@ -344,14 +344,14 @@ class TextbookProcessor:
                 truncated_content = content[:last_valid_pos]
                 analysis = try_parse_json(truncated_content)
                 if analysis:
-                    logger.info(f"[Gemini] 截断修复后解析成功")
+                    logger.info(f"[Vision] 截断修复后解析成功")
                     return analysis
 
-            logger.warning(f"[Gemini] JSON解析失败，原始内容长度: {len(content)}, 前200字符: {content[:200]}...")
+            logger.warning(f"[Vision] JSON解析失败，原始内容长度: {len(content)}, 前200字符: {content[:200]}...")
             return {"raw_response": content}
 
         except Exception as e:
-            logger.error(f"[Gemini] 请求失败: {e}")
+            logger.error(f"[Vision] 请求失败: {e}")
             return {"error": str(e)}
 
 

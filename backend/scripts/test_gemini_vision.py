@@ -2,14 +2,14 @@ import os as _os
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    not _os.environ.get("GEMINI_API_KEY"),
-    reason="需要 GEMINI_API_KEY 环境变量（集成测试）"
+    not _os.environ.get("DEEPSEEK_API_KEY"),
+    reason="需要 DEEPSEEK_API_KEY 环境变量（集成测试）"
 )
 
 # -*- coding: utf-8 -*-
 """
-测试 Gemini 视觉模型对教材页面的文本提取效果
-对比 gemini-1.5-pro 和 gemini-2.5-pro
+测试 AI 视觉模型对教材页面的文本提取效果
+对比 deepseek-1.5-pro 和 deepseek-2.5-pro
 """
 import os
 import base64
@@ -19,11 +19,11 @@ import fitz  # PyMuPDF
 from pathlib import Path
 
 # API配置 - 使用第二个API Key
-API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
-API_BASE = os.environ.get("GEMINI_API_BASE", "")
+API_KEY = os.environ.get("DEEPSEEK_API_KEY_2", os.environ.get("DEEPSEEK_API_KEY", ""))
+API_BASE = os.environ.get("DEEPSEEK_API_BASE", "")
 
 # 测试的模型 - 使用flash版本（更便宜且通常可用）
-MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"]
+MODELS = ["deepseek-2.5-flash", "deepseek-1.5-flash"]
 
 # 优化后的提示词
 PROMPT = """你是一个专业的教材数字化专家。请阅读这张图片，将其内容转换为标准的 Markdown 格式。

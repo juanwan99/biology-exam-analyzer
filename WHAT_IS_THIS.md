@@ -4,14 +4,14 @@
 试卷智能分析系统。上传 PDF/DOCX 试卷 → AI 拆题 + 分析 + 难度评估 + 分数预估。
 
 ## 技术栈
-- 后端: FastAPI + PostgreSQL(pgvector) + DeepSeek V4(首选) + Claude/GPT/Gemini(fallback)
+- 后端: FastAPI + PostgreSQL(pgvector) + DeepSeek V4(首选) + DeepSeek/Qwen-VL(fallback)
 - 前端: React 18 + Vite + Tailwind CSS + Lucide React
 - LLM: DeepSeek 直连(首选) + AIProxy(fallback)，`llm_config.py` 一键切换 Claude/GPT
 - 部署: Docker Compose
 
 ## 核心模块
 - 文档处理: PDF/DOCX → 图片 → 题目提取（rule_splitter + document_processor）
-- AI 分析: Claude Sonnet 多模态（知识点、认知层级、素养）— gemini_analyzer.py（类名历史遗留）
+- AI 分析: Claude Sonnet 多模态（知识点、认知层级、素养）— question_analyzer.py（类名历史遗留）
 - 难度量化: 7 维特征提取(feature_extractor) + 非线性规则评分(rule_scorer) → 2-10 分制
 - 报告生成: 数据聚合(report_data) + LLM 分析(report_insights) + PDF 渲染(report_generator)
 - 分数预估: 难度-得分率映射 → 班级成绩预测
@@ -27,7 +27,7 @@
 
 ## 当前状态（2026-05-12）
 - 核心功能完整可用（3 容器运行中）
-- AI 已从 Gemini 全面切换为 Claude Sonnet 4.5（AIProxy 中转）
+- AI 已从 AI 全面切换为 Claude Sonnet 4.5（AIProxy 中转）
 - 难度 Pipeline v2 已实现（7 维特征 + 非线性评分）
 - 前端精简为单页应用 + momowan 设计系统
 - 安全加固已完成（路径穿越/认证/限流）

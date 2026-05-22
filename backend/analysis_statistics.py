@@ -1,4 +1,10 @@
-"""整卷统计分析 — 从 analysis_router 独立出来。"""
+"""整卷统计分析 — 从 analysis_router 独立出来。
+
+v4.1: SEU 精确加权聚合（知识点 + Bloom）。
+当 question["analysis"]["_fine_grained"]["scoring_units"] 存在时，
+从 SEU score_share × knowledge_links.share 精确加权；
+否则 fallback 到旧的等分逻辑。
+"""
 from typing import List, Dict, Any
 from deps import get_knowledge_mapper
 from logger import get_logger
@@ -6,6 +12,80 @@ from logger import get_logger
 logger = get_logger()
 
 BLOOM_LABELS = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
+
+
+def _get_knowledge_mapper_for_statistics():
+    """Keep the legacy analysis_router patch point working after extraction."""
+    import sys
+
+    router = sys.modules.get("analysis_router")
+    if router is not None and hasattr(router, "get_knowledge_mapper"):
+        return router.get_knowledge_mapper()
+    return get_knowledge_mapper()
+
+
+def _analysis_dict(q: Dict) -> Dict:
+    analysis = q.get("analysis")
+    return analysis if isinstance(analysis, dict) else {}
+
+
+def _score_record(q: Dict) -> tuple[float, Dict[str, Any] | None]:
+    analysis = _analysis_dict(q)
+    candidates = (
+        ("total_score", q.get("total_score")),
+        ("analysis.total_score", analysis.get("total_score")),
+    )
+    for source, value in candidates:
+        if isinstance(value, (int, float)):
+            if value > 0:
+                return float(value), None
+            return 0.0, {
+                "id": q.get("id"),
+                "reason": "non_positive_score",
+                "source": source,
+                "value": value,
+            }
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = float(value)
+            except ValueError:
+                return 0.0, {
+                    "id": q.get("id"),
+                    "reason": "invalid_score",
+                    "source": source,
+                    "value": value,
+                }
+            if parsed > 0:
+                return parsed, None
+            return 0.0, {
+                "id": q.get("id"),
+                "reason": "non_positive_score",
+                "source": source,
+                "value": parsed,
+            }
+    return 0.0, {
+        "id": q.get("id"),
+        "reason": "missing_score",
+        "source": "total_score",
+        "value": None,
+    }
+
+
+def _usable_difficulty(q: Dict) -> float | None:
+    difficulty = q.get("difficulty")
+    if not isinstance(difficulty, dict):
+        return None
+    score = difficulty.get("final_difficulty")
+    if not isinstance(score, (int, float)):
+        return None
+    features = difficulty.get("features")
+    feature_status = features.get("_feature_status") if isinstance(features, dict) else None
+    source = difficulty.get("source") or difficulty.get("difficulty_source")
+    fine_grained = _analysis_dict(q).get("_fine_grained")
+    if feature_status == "failed" and source not in {"seu_fallback", "structured_big_question"}:
+        if not (fine_grained and fine_grained.get("scoring_units")):
+            return None
+    return float(score)
 
 
 def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) -> Dict:
@@ -20,7 +100,7 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
     5. 知识点教材分布（分值加权）
     6. Bloom 认知层级分布（分值加权）
     """
-    knowledge_mapper = get_knowledge_mapper()
+    knowledge_mapper = _get_knowledge_mapper_for_statistics()
 
     BLOOM_LABELS = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
 
@@ -38,13 +118,24 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
         knowledge_points_weighted = {} # 知识点分值加权
         kp_with_weights = []           # (kp, weight) 对，用于教材映射
         bloom_score_accum = {label: 0.0 for label in BLOOM_LABELS.values()}
+        cognitive_levels = []
+        kp_with_weights = []
+        score_issue_questions = []
+        valid_score_questions = 0
+        missing_bloom_questions = []
 
         for q in questions:
-            total_score_val = q.get("total_score", q.get("analysis", {}).get("total_score", 0)) or 1  # fallback 等权
+            total_score_val, score_issue = _score_record(q)
+            if score_issue:
+                score_issue_questions.append(score_issue)
+            else:
+                valid_score_questions += 1
+            analysis = _analysis_dict(q)
+            difficulty = q.get("difficulty") if isinstance(q.get("difficulty"), dict) else {}
 
             # 1. 难度分布
-            if "difficulty" in q and "final_difficulty" in q["difficulty"]:
-                diff_score = q["difficulty"]["final_difficulty"]
+            diff_score = _usable_difficulty(q)
+            if diff_score is not None:
                 difficulty_curve.append({
                     "question_id": q.get("id"),
                     "difficulty": diff_score,
@@ -54,61 +145,93 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 # 分类统计（题目数量）
                 if diff_score <= 3.5:
                     difficulty_distribution["简单"] += 1
+                    primary_diff_level = "简单"
                 elif diff_score <= 6.5:
                     difficulty_distribution["中等"] += 1
+                    primary_diff_level = "中等"
                 else:
                     difficulty_distribution["困难"] += 1
+                    primary_diff_level = "困难"
 
-                # 聚合分值分布
-                if "score_distribution_by_difficulty" in q["difficulty"]:
-                    score_dist = q["difficulty"]["score_distribution_by_difficulty"]
+                # 聚合分值分布 + count
+                difficulty_distribution_by_score[primary_diff_level]["count"] += 1
+                if "score_distribution_by_difficulty" in difficulty:
+                    score_dist = difficulty["score_distribution_by_difficulty"]
                     difficulty_distribution_by_score["简单"]["total_score"] += score_dist.get("简单", 0.0)
                     difficulty_distribution_by_score["中等"]["total_score"] += score_dist.get("中等", 0.0)
                     difficulty_distribution_by_score["困难"]["total_score"] += score_dist.get("困难", 0.0)
 
                 # 2. 认知层级（带分值）
-                if "cognitive_level" in q["difficulty"]:
+                if "cognitive_level" in difficulty:
                     cognitive_levels.append({
-                        "level": q["difficulty"]["cognitive_level"],
+                        "level": difficulty["cognitive_level"],
                         "total_score": total_score_val,
                     })
 
-                # 3. Bloom 分值累计（优先使用 bloom_distribution 细粒度分布）
-                features = q.get("difficulty", {}).get("features", {})
-                bloom_dist = features.get("bloom_distribution")
-                if bloom_dist and total_score_val > 0:
-                    dist_total = sum(bloom_dist.values())
-                    if dist_total > 0:
-                        dist_detail = []
-                        for label, count in bloom_dist.items():
-                            if label in bloom_score_accum and count > 0:
-                                bloom_score_accum[label] += total_score_val * (count / dist_total)
-                                dist_detail.append(f"{label}:{count}")
-                        logger.info(f"[Bloom诊断] 题目{q.get('id')}: 分布={{{','.join(dist_detail)}}}, 分值={total_score_val}")
+                # 3. Bloom 分值累计
+                # 优先级：SEU bloom_level > bloom_distribution > 单值 bloom
+                fine_grained = analysis.get("_fine_grained")
+                if fine_grained and fine_grained.get("scoring_units") and total_score_val > 0:
+                    # === SEU 精确路径 ===
+                    seu_detail = []
+                    for seu in fine_grained["scoring_units"]:
+                        bl = seu.get("bloom_level", 3)
+                        bloom_label = BLOOM_LABELS.get(bl)
+                        if bloom_label:
+                            bloom_score_accum[bloom_label] += total_score_val * seu.get("score_share", 0)
+                            seu_detail.append(f"{bloom_label}:{seu.get('score_share', 0):.2f}")
+                    logger.info(f"[Bloom诊断] 题目{q.get('id')}: SEU路径 [{','.join(seu_detail)}], 分值={total_score_val}")
+                else:
+                    # === fallback: bloom_distribution 或单值 bloom ===
+                    features = difficulty.get("features") if isinstance(difficulty.get("features"), dict) else {}
+                    bloom_dist = features.get("bloom_distribution")
+                    if bloom_dist and total_score_val > 0:
+                        dist_total = sum(bloom_dist.values())
+                        if dist_total > 0:
+                            dist_detail = []
+                            for label, count in bloom_dist.items():
+                                if label in bloom_score_accum and count > 0:
+                                    bloom_score_accum[label] += total_score_val * (count / dist_total)
+                                    dist_detail.append(f"{label}:{count}")
+                            logger.info(f"[Bloom诊断] 题目{q.get('id')}: 分布={{{','.join(dist_detail)}}}, 分值={total_score_val}")
+                        else:
+                            bloom_val = features.get("bloom")
+                            if bloom_val is not None:
+                                bloom_label = BLOOM_LABELS.get(int(round(bloom_val)))
+                                if bloom_label:
+                                    bloom_score_accum[bloom_label] += total_score_val
+                                    logger.info(f"[Bloom诊断] 题目{q.get('id')}: bloom={bloom_val} ({bloom_label}), 分值={total_score_val}")
                     else:
-                        # bloom_distribution 全零，fallback 到单值
                         bloom_val = features.get("bloom")
-                        if bloom_val is not None:
+                        if bloom_val is not None and total_score_val > 0:
                             bloom_label = BLOOM_LABELS.get(int(round(bloom_val)))
                             if bloom_label:
                                 bloom_score_accum[bloom_label] += total_score_val
                                 logger.info(f"[Bloom诊断] 题目{q.get('id')}: bloom={bloom_val} ({bloom_label}), 分值={total_score_val}")
-                else:
-                    # 无 bloom_distribution，使用单值 bloom
-                    bloom_val = features.get("bloom")
-                    if bloom_val is not None and total_score_val > 0:
-                        bloom_label = BLOOM_LABELS.get(int(round(bloom_val)))
-                        if bloom_label:
-                            bloom_score_accum[bloom_label] += total_score_val
-                            logger.info(f"[Bloom诊断] 题目{q.get('id')}: bloom={bloom_val} ({bloom_label}), 分值={total_score_val}")
-                    else:
-                        logger.warning(f"[Bloom诊断] 题目{q.get('id')}: bloom缺失或分值为0")
+                        else:
+                            logger.warning(f"[Bloom诊断] 题目{q.get('id')}: bloom缺失或分值为0")
 
             # 4. 知识点分值加权
-            if "analysis" in q and "knowledge_points" in q["analysis"]:
-                kp_list = q["analysis"]["knowledge_points"]
-                kp_weight = total_score_val / len(kp_list) if kp_list else 0
-                for kp in kp_list:
+            # 优先级：SEU knowledge_links > 旧等分逻辑
+            _KP_ABILITY_BLACKLIST = {"数据处理", "数据分析", "实验设计", "信息获取", "信息处理",
+                                     "逻辑推理", "模型建构", "批判性思维", "科学探究能力"}
+            fg = analysis.get("_fine_grained")
+            if fg and fg.get("scoring_units"):
+                # === SEU 精确路径 ===
+                for seu in fg["scoring_units"]:
+                    seu_score = total_score_val * seu.get("score_share", 0)
+                    for kl in seu.get("knowledge_links", []):
+                        kp = kl.get("knowledge_point", "")
+                        if kp and kp not in _KP_ABILITY_BLACKLIST:
+                            w = seu_score * kl.get("share", 1.0)
+                            knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + w
+                            kp_with_weights.append((kp, w))
+            elif "knowledge_points" in analysis:
+                # === fallback: 旧逻辑等分（同样过滤能力词） ===
+                kp_list = analysis["knowledge_points"]
+                kp_list_filtered = [kp for kp in kp_list if kp not in _KP_ABILITY_BLACKLIST]
+                kp_weight = total_score_val / len(kp_list_filtered) if kp_list_filtered else 0
+                for kp in kp_list_filtered:
                     knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + kp_weight
                     kp_with_weights.append((kp, kp_weight))
 
@@ -174,7 +297,8 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 if total_mapped_weight > 0 else 0
             )
 
-        logger.info(f"[知识点映射] 完成映射，加权总分 {total_mapped_weight:.1f}")
+        unmapped_count = sum(1 for m in mapped_points if not m["mapped"])
+        logger.info(f"[知识点映射] 完成映射，加权总分 {total_mapped_weight:.1f}，未映射 {unmapped_count}/{len(all_knowledge_points)}")
 
         # 知识点排序（前10，按分值加权）
         top_knowledge_points = sorted(
@@ -183,10 +307,8 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             reverse=True
         )[:10]
 
-        # 置信度统计
-        confidences = [q.get("analysis_confidence", 0) for q in questions if "analysis_confidence" in q]
-        low_confidence_count = sum(1 for c in confidences if c < 0.6)
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+        # 细粒度分配统计
+        allocation_stats = _compute_allocation_stats(questions)
 
         return {
             "difficulty_distribution": difficulty_distribution,
@@ -198,28 +320,74 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 {"name": kp, "weighted_score": round(score, 1)} for kp, score in top_knowledge_points
             ],
             "knowledge_textbook_distribution": textbook_distribution,
+            "knowledge_unmapped_count": unmapped_count,
+            "knowledge_total_count": len(all_knowledge_points),
             "competency_distribution": competency_summary,
             "bloom_distribution": bloom_distribution,
-            "confidence_stats": {
-                "average": round(avg_confidence, 2),
-                "low_confidence_count": low_confidence_count,
-                "total_analyzed": len(confidences),
+            "allocation_stats": allocation_stats,
+            "score_quality": {
+                "valid_score_questions": valid_score_questions,
+                "invalid_score_questions": len(score_issue_questions),
+                "score_issue_questions": score_issue_questions,
+            },
+            "bloom_quality": {
+                "missing_bloom_questions": missing_bloom_questions,
             },
         }
 
     except Exception as e:
         logger.error(f"[整卷统计] 失败: {str(e)}", exc_info=True)
-        return {"error": str(e)}
+        raise RuntimeError(f"exam statistics generation failed: {e}") from e
 
+
+
+def _compute_allocation_stats(questions: List[Dict]) -> Dict:
+    """计算 SEU 分配置信度统计。
+
+    返回 dict 包含:
+    - total_seus: SEU 总数
+    - total_dus: DU 总数
+    - avg_allocation_confidence: 平均分配置信度
+    - inferred_score_pct: 推断（非 explicit）分配的分值占比 (%)
+    """
+    total_seus = 0
+    total_dus = 0
+    confidence_sum = 0.0
+    inferred_score = 0.0
+    total_score = 0.0
+
+    for q in questions:
+        fg = _analysis_dict(q).get("_fine_grained")
+        if not fg or not fg.get("scoring_units"):
+            continue
+        q_score, _ = _score_record(q)
+        for seu in fg["scoring_units"]:
+            total_seus += 1
+            confidence_sum += seu.get("allocation_confidence", 0.5)
+            share = seu.get("score_share", 0)
+            if seu.get("allocation_source") == "inferred":
+                inferred_score += q_score * share
+            total_score += q_score * share
+        total_dus += len(fg.get("diagnostic_units", []))
+
+    return {
+        "total_seus": total_seus,
+        "total_dus": total_dus,
+        "avg_allocation_confidence": round(confidence_sum / total_seus, 2) if total_seus > 0 else 0,
+        "inferred_score_pct": round(inferred_score / total_score * 100, 1) if total_score > 0 else 0,
+    }
 
 
 def _build_competency_list(questions):
-    """构建带 _total_score 的素养列表，供分值加权聚合"""
+    """构建带 _total_score 和 _fine_grained 的素养列表，供分值加权聚合"""
     result = []
     for q in questions:
         if "error" not in q.get("competency", {}):
             comp = dict(q.get("competency", {}))
-            comp["_total_score"] = q.get("total_score", q.get("analysis", {}).get("total_score", 0)) or 1  # fallback 等权
+            comp["_total_score"], score_issue = _score_record(q)
+            comp["_score_status"] = score_issue["reason"] if score_issue else "valid"
+            fg = _analysis_dict(q).get("_fine_grained")
+            if fg:
+                comp["_fine_grained"] = fg
             result.append(comp)
     return result
-

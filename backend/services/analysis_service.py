@@ -5,14 +5,39 @@ Router 只负责 HTTP 边界（鉴权、参数校验、文件读写、HTTPExcept
 """
 import asyncio
 import base64
+import copy
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
+from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
 
 logger = get_logger()
+
+
+def _score_record(question: Dict, analysis: Dict | None = None) -> tuple[float, Dict[str, Any] | None]:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    candidates = (
+        ("total_score", question.get("total_score")),
+        ("analysis.total_score", analysis.get("total_score")),
+    )
+    for source, value in candidates:
+        if isinstance(value, (int, float)):
+            if value > 0:
+                return float(value), None
+            return 0.0, {"id": question.get("id"), "reason": "non_positive_score", "source": source, "value": value}
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = float(value)
+            except ValueError:
+                return 0.0, {"id": question.get("id"), "reason": "invalid_score", "source": source, "value": value}
+            if parsed > 0:
+                return parsed, None
+            return 0.0, {"id": question.get("id"), "reason": "non_positive_score", "source": source, "value": parsed}
+    return 0.0, {"id": question.get("id"), "reason": "missing_score", "source": "total_score", "value": None}
 
 
 class AnalysisService:
@@ -29,7 +54,7 @@ class AnalysisService:
         self.word_splitter = word_splitter
         self.pdf_splitter = pdf_splitter
         import os
-        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "10"))
+        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
 
     # ── 单题完整分析 ──────────────────────────────────────────
 
@@ -56,6 +81,14 @@ class AnalysisService:
             )
             question["analysis"] = analysis
 
+            if "total_score" not in question or question.get("total_score") is None:
+                question["total_score"] = analysis.get("total_score")
+            total_score, score_issue = _score_record(question, analysis)
+            question["total_score"] = total_score
+            question["score_status"] = score_issue["reason"] if score_issue else "valid"
+            if score_issue:
+                question["_score_issue"] = score_issue
+
             q_image_b64 = ""
             if q_images:
                 q_image_b64 = base64.b64encode(q_images[0]).decode("utf-8")
@@ -64,26 +97,89 @@ class AnalysisService:
                 "id": q_id,
                 "content": question.get("content", ""),
                 "knowledge_points": analysis.get("knowledge_points", []),
-                "total_score": analysis.get("total_score") or question.get("total_score") or 0,
+                "total_score": total_score,
                 "num_options": analysis.get("num_options", 4),
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
                 "sub_scores": question.get("sub_scores", []),
                 "image_base64": q_image_b64,
+                "media_integrity": question.get("media_integrity"),
             }
 
-            merged_competency = analysis.get("competency")
+            # v2 细粒度路径：从 SEU 派生权重 + 独立素养调用补充具体维度/分析说明
+            fine_grained = analysis.get("_fine_grained")
             need_independent_competency = True
-            if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
-                weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
-                weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
-                if weight_sum >= 0.9:
-                    question["competency"] = merged_competency
-                    need_independent_competency = False
-                    logger.info(f"[分析] 题目{q_id} 使用合并素养结果 (primary={merged_competency.get('primary_competency')})")
+            v2_seu_competency = None  # SEU 派生的权重数据（F-003: 保留用于合并）
+            if fine_grained and fine_grained.get("scoring_units"):
+                try:
+                    from llm_schemas import FineGrainedResult, compute_summary_from_units
+                    fg = FineGrainedResult(
+                        scoring_units=fine_grained["scoring_units"],
+                        diagnostic_units=fine_grained.get("diagnostic_units", []),
+                        stimulus_units=fine_grained.get("stimulus_units", []),
+                    )
+                    summary = compute_summary_from_units(fg)
+                    # R2-002 + R2R-001 修复：归一化权重严格合计=1.0
+                    raw_weights = summary["competency_details"]
+                    weight_sum = sum(raw_weights.values())
+                    if weight_sum > 0:
+                        items = list(raw_weights.items())
+                        norm_weights = {k: round(v / weight_sum, 2) for k, v in items}
+                        remainder = round(1.0 - sum(norm_weights.values()), 2)
+                        if remainder != 0:
+                            max_key = max(norm_weights, key=norm_weights.get)
+                            norm_weights[max_key] = round(norm_weights[max_key] + remainder, 2)
+                    else:
+                        norm_weights = {k: 0.25 for k in raw_weights}
+                    v2_seu_competency = {
+                        "primary_competency": summary["primary_competency"],
+                        "competency_level": summary["competency_level"],
+                        **{k: {"涉及": v > 0, "权重": v}
+                           for k, v in norm_weights.items()},
+                    }
+                    logger.info(f"[分析] 题目{q_id} 从v2 SEU派生素养权重 (primary={summary['primary_competency']})")
+                except Exception as e:
+                    logger.warning(f"[分析] 题目{q_id} v2素养派生失败: {e}，fallback独立分析")
+
+            if v2_seu_competency:
+                # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
+                competency_q = {"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                difficulty_result, supplement = await asyncio.gather(
+                    self.difficulty_engine.evaluate_with_refinement(
+                        question=difficulty_q, mode=mode, analysis_result=analysis),
+                    self.competency_analyzer.analyze_competency(question=competency_q),
+                )
+                question["difficulty"] = difficulty_result
+                merged = dict(v2_seu_competency)
+                if isinstance(supplement, dict) and "error" not in supplement:
+                    for dim in ["生命观念", "科学思维", "科学探究", "社会责任"]:
+                        sup_dim = supplement.get(dim, {})
+                        if isinstance(sup_dim, dict) and isinstance(merged.get(dim), dict):
+                            if sup_dim.get("具体维度"):
+                                merged[dim]["具体维度"] = sup_dim["具体维度"]
+                            if sup_dim.get("分析说明"):
+                                merged[dim]["分析说明"] = sup_dim["分析说明"]
+                    logger.info(f"[分析] 题目{q_id} v2素养合并完成 (SEU权重+独立分析文字)")
                 else:
-                    logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
+                    logger.info(f"[分析] 题目{q_id} v2素养独立补充失败，仅使用SEU权重")
+                question["competency"] = merged
+                if isinstance(supplement, dict) and supplement.get("_llm_calls"):
+                    question["competency"]["_llm_calls"] = supplement["_llm_calls"]
+                need_independent_competency = False
+
+            if need_independent_competency:
+                # v1 路径：尝试合并素养或独立调用
+                merged_competency = analysis.get("competency")
+                if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
+                    weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
+                    weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
+                    if weight_sum >= 0.9:
+                        question["competency"] = merged_competency
+                        need_independent_competency = False
+                        logger.info(f"[分析] 题目{q_id} 使用合并素养结果 (primary={merged_competency.get('primary_competency')})")
+                    else:
+                        logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
 
             if need_independent_competency:
                 competency_q = {"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
@@ -93,36 +189,98 @@ class AnalysisService:
                 )
                 question["difficulty"] = difficulty_result
                 question["competency"] = competency_result
-            else:
-                difficulty_result = await self.difficulty_engine.evaluate_with_refinement(
-                    question=difficulty_q, mode=mode, analysis_result=analysis)
-                question["difficulty"] = difficulty_result
             # 知识点标准化映射
             if self.knowledge_mapper and analysis.get("knowledge_points"):
                 standardized = self.knowledge_mapper.map_knowledge_points(analysis["knowledge_points"])
                 question["knowledge_mapping"] = standardized
 
-            # 置信度计算（5维度加权，0-1）
+            # 置信度计算（基础 + 质量信号）
             confidence = 0.0
             if "error" not in analysis:
-                confidence += 0.3  # JSON 解析成功
+                confidence += 0.2
             if analysis.get("knowledge_points"):
-                confidence += 0.2
+                confidence += 0.15
             if analysis.get("answer"):
-                confidence += 0.2
+                confidence += 0.15
             if question.get("competency") and "error" not in question.get("competency", {}):
-                confidence += 0.15
+                confidence += 0.1
             if analysis.get("bloom_level"):
-                confidence += 0.15
-            question["analysis_confidence"] = round(confidence, 2)
+                confidence += 0.1
+            # 质量信号：特征提取状态
+            diff_data = question.get("difficulty", {})
+            if isinstance(diff_data, dict):
+                feat = diff_data.get("features", {})
+                if isinstance(feat, dict):
+                    fs = feat.get("_feature_status", "ok")
+                    if fs == "ok":
+                        confidence += 0.15
+                    elif fs == "partial":
+                        confidence += 0.08
+                    # failed/unknown: +0
+                # 质量信号：难度置信度
+                d_conf = diff_data.get("confidence", 0.5)
+                if isinstance(d_conf, (int, float)):
+                    confidence += 0.15 * d_conf
+            question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
+            self._attach_metadata_envelope(question)
 
             return question
 
         except Exception as e:
             logger.error(f"[分析] 题目{q_id} 分析失败: {e}")
+            question["analysis_failed"] = True
+            question["analysis_failure_reason"] = str(e)
+            question["analysis_confidence"] = 0.0
             question["analysis"] = {"error": str(e), "knowledge_points": [], "answer": "分析失败"}
             question["difficulty"] = {"error": str(e)}
             question["competency"] = {"error": str(e)}
+            if not question.get("total_score"):
+                import re as _re
+                content = question.get("content", "")
+                header = question.get("_section_header", "")
+                score_found = None
+                m = _re.search(r'[（(]\s*(\d+)\s*分\s*[）)]', content)
+                if m:
+                    score_found = int(m.group(1))
+                elif header:
+                    m2 = _re.search(r'每小题\s*(\d+)\s*分', header)
+                    if m2:
+                        score_found = int(m2.group(1))
+                    else:
+                        m3 = _re.search(r'共\s*(\d+)\s*分', header)
+                        if m3:
+                            score_found = int(m3.group(1))
+                if score_found:
+                    question["total_score"] = score_found
+                    logger.info(f"[分析] 题目{q_id} 分析失败，兜底恢复 total_score={score_found}")
+            question["_llm_calls"] = []
+            question["_metadata_envelope"] = {
+                "status": "analysis_failed",
+                "question": {
+                    "id": question.get("id"),
+                    "content": question.get("content", ""),
+                    "question_type": question.get("question_type"),
+                    "total_score": question.get("total_score"),
+                },
+                "llm_calls": [],
+                "analysis_units": {},
+                "derived": {
+                    "knowledge_points": [],
+                    "difficulty": None,
+                    "competency": None,
+                },
+                "confidence": {
+                    "overall": 0.0,
+                    "analysis": 0.0,
+                    "features": 0.0,
+                    "competency": 0.0,
+                },
+                "lineage": {
+                    "status": "analysis_failed",
+                    "failure_reason": "analysis_failure_reason",
+                },
+                "warnings": ["analysis_failed"],
+            }
             return question
 
     # ── 批量并发分析 ──────────────────────────────────────────
@@ -141,8 +299,22 @@ class AnalysisService:
             async with sem:
                 return await self.analyze_question(q, image_bytes, mode)
 
+        originals = [copy.deepcopy(q) for q in questions]
         tasks = [_analyze_one(q) for q in questions]
-        return await asyncio.gather(*tasks)
+        results = list(await asyncio.gather(*tasks))
+
+        for idx, result in enumerate(results):
+            if not self._metadata_retry_needed(result):
+                continue
+            q_id = result.get("id", idx + 1) if isinstance(result, dict) else idx + 1
+            logger.warning(f"[元数据] 题目{q_id} 关键元数据不完整，顺序重试一次")
+            retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
+            if not self._metadata_retry_needed(retry):
+                results[idx] = retry
+            elif self._metadata_retry_needed(result) and isinstance(retry.get("_metadata_envelope"), dict):
+                results[idx] = retry
+
+        return results
 
     # ── 统计聚合 ──────────────────────────────────────────────
 
@@ -155,8 +327,11 @@ class AnalysisService:
         for q in questions:
             if "error" not in q.get("competency", {}):
                 comp = dict(q.get("competency", {}))
-                comp["_total_score"] = q.get("total_score",
-                    q.get("analysis", {}).get("total_score", 0)) or 1
+                comp["_total_score"], score_issue = _score_record(q, q.get("analysis", {}))
+                comp["_score_status"] = score_issue["reason"] if score_issue else "valid"
+                fg = (q.get("analysis") or {}).get("_fine_grained")
+                if fg:
+                    comp["_fine_grained"] = fg
                 competency_list.append(comp)
         return self.competency_analyzer.aggregate_exam_competencies(competency_list)
 
@@ -195,6 +370,51 @@ class AnalysisService:
             raise RuntimeError("AI 分析服务未配置")
         return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
 
+    @staticmethod
+    def _main_question_ids_from_text(text: str | None) -> List[int]:
+        if not text:
+            return []
+        ids: List[int] = []
+        for line in str(text).splitlines():
+            match = re.match(r"^\s*(\d{1,2})[.、．]\s+", line)
+            if match:
+                ids.append(int(match.group(1)))
+        return ids
+
+    def validate_split_integrity(self, questions: List[Dict], source_text: str | None = None) -> None:
+        ids = [q.get("id") for q in questions if isinstance(q.get("id"), int)]
+        if not ids:
+            raise ValueError("split integrity failed: no question ids")
+
+        expected_from_result = list(range(min(ids), max(ids) + 1))
+        if ids != expected_from_result:
+            raise ValueError(
+                "split integrity failed: non-contiguous result ids "
+                f"{ids[:5]}...{ids[-5:]}"
+            )
+
+        source_ids = self._main_question_ids_from_text(source_text)
+        if source_ids:
+            expected_from_source = list(range(min(source_ids), max(source_ids) + 1))
+            missing = sorted(set(expected_from_source) - set(ids))
+            if missing or max(source_ids) > max(ids):
+                raise ValueError(
+                    "split integrity failed: source/result question ids mismatch "
+                    f"missing={missing}, source_max={max(source_ids)}, result_max={max(ids)}"
+                )
+
+        id_set = set(ids)
+        for question in questions:
+            qid = question.get("id")
+            content = str(question.get("content") or "")
+            for match in re.finditer(r"(?m)^\s*(\d{1,2})[.、．]\s+", content):
+                embedded = int(match.group(1))
+                if embedded != qid and embedded in id_set:
+                    raise ValueError(
+                        "split integrity failed: question content contains another main id "
+                        f"Q{qid}->Q{embedded}"
+                    )
+
     async def split_questions_rule(self, file_bytes: bytes, filename: str,
                                     subject: str = "biology") -> List[Dict]:
         if filename.lower().endswith(".docx"):
@@ -213,16 +433,17 @@ class AnalysisService:
                                output_path: str = None) -> Optional[str]:
         from report_data import aggregate_report_data
         from report_insights import generate_insights
-        from report_generator import generate_pdf_report
+        from report_product_publish import write_report_artifacts
         from exam_diagnostics import diagnose_exam
 
+        self.validate_report_metadata(questions)
         rdata = aggregate_report_data(
             questions, competency_summary, exam_statistics, exam_info
         )
         rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
             exam_type=exam_info.get("exam_type", "高考"))
         insights = await generate_insights(rdata, mode=mode)
-        generate_pdf_report(rdata, insights, mode=mode, output_path=output_path)
+        write_report_artifacts(rdata, insights, mode=mode, pdf_path=output_path)
         return output_path
 
     # ── 内部工具 ──────────────────────────────────────────────
@@ -238,12 +459,261 @@ class AnalysisService:
                     if b64:
                         try:
                             result.append(base64.b64decode(b64))
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning(f"[media] base64 decode failed for question media item: {exc}")
             return result
 
         indices = question.get("image_indices", [])
         return [image_bytes[i] for i in indices if 0 <= i < len(image_bytes)]
+
+    def validate_report_metadata(self, questions: List[Dict],
+                                 min_overall_confidence: float = 0.7) -> Dict:
+        blocked = []
+        low_confidence = []
+        warning_questions = []
+        required = {"question_analysis"}
+        feature_purposes = {"feature_extraction", "big_question_feature_extraction"}
+        required_call_fields = {
+            "call_id", "purpose", "prompt_id", "prompt_hash", "provider",
+            "model", "input_refs", "parsed_schema", "confidence",
+        }
+
+        for q in questions:
+            q_id = q.get("id")
+            envelope = q.get("_metadata_envelope")
+            if not isinstance(envelope, dict):
+                blocked.append({"id": q_id, "reason": "metadata envelope missing"})
+                continue
+            if envelope.get("status") == "analysis_failed" or q.get("analysis_failed"):
+                blocked.append({"id": q_id, "reason": "analysis failed"})
+                continue
+
+            calls = envelope.get("llm_calls", [])
+            if not isinstance(calls, list) or not calls:
+                blocked.append({"id": q_id, "reason": "llm_calls missing"})
+                continue
+
+            purposes = {call.get("purpose") for call in calls if isinstance(call, dict)}
+            missing_purposes = sorted(required - purposes)
+            if not (purposes & feature_purposes):
+                missing_purposes.append("feature_extraction|big_question_feature_extraction")
+            if missing_purposes:
+                blocked.append({
+                    "id": q_id,
+                    "reason": "required llm purpose missing",
+                    "missing": missing_purposes,
+                })
+            has_competency_source = (
+                "competency_analysis" in purposes
+                or self._has_seu_derived_competency(envelope)
+            )
+            if not has_competency_source:
+                blocked.append({
+                    "id": q_id,
+                    "reason": "required metadata source missing",
+                    "missing": ["competency_analysis|v2_seu_derived_competency"],
+                })
+
+            for idx, call in enumerate(calls):
+                if not isinstance(call, dict):
+                    blocked.append({"id": q_id, "reason": f"llm_call[{idx}] invalid"})
+                    continue
+                missing_fields = sorted(required_call_fields - set(call))
+                if missing_fields:
+                    blocked.append({
+                        "id": q_id,
+                        "reason": f"llm_call[{idx}] required fields missing",
+                        "missing": missing_fields,
+                    })
+
+            confidence = envelope.get("confidence", {})
+            overall = confidence.get("overall", 0) if isinstance(confidence, dict) else 0
+            if isinstance(overall, (int, float)) and overall < min_overall_confidence:
+                low_confidence.append(q_id)
+
+            warnings = envelope.get("warnings", [])
+            if warnings:
+                warning_questions.append({"id": q_id, "warnings": list(warnings)})
+
+        if blocked:
+            detail = "; ".join(f"Q{b.get('id')}: {b.get('reason')}" for b in blocked[:5])
+            raise ValueError(f"metadata envelope missing or invalid: {detail}")
+
+        return {
+            "total_questions": len(questions),
+            "blocked_questions": blocked,
+            "low_confidence_questions": low_confidence,
+            "warning_questions": warning_questions,
+        }
+
+    @staticmethod
+    def _has_seu_derived_competency(envelope: Dict) -> bool:
+        analysis_units = envelope.get("analysis_units", {})
+        derived = envelope.get("derived", {})
+        if not isinstance(analysis_units, dict) or not isinstance(derived, dict):
+            return False
+
+        scoring_units = analysis_units.get("scoring_units", [])
+        competency = derived.get("competency") or derived.get("primary_competency")
+        return bool(scoring_units) and bool(competency)
+
+    @staticmethod
+    def _metadata_retry_needed(question: Dict) -> bool:
+        if not isinstance(question, dict):
+            return True
+        envelope = question.get("_metadata_envelope")
+        if not isinstance(envelope, dict):
+            return True
+
+        calls = envelope.get("llm_calls", [])
+        if not isinstance(calls, list) or not calls:
+            return True
+
+        purposes = {call.get("purpose") for call in calls if isinstance(call, dict)}
+        if "question_analysis" not in purposes:
+            return True
+        if not (purposes & {"feature_extraction", "big_question_feature_extraction"}):
+            return True
+        if "competency_analysis" not in purposes:
+            return True
+        warnings = envelope.get("warnings", [])
+        if isinstance(warnings, list) and any(
+            warning in {
+                "diagnostic_units_missing",
+                "stimulus_units_missing",
+                "stimulus_units_blank",
+            }
+            or str(warning).startswith("llm_parse_failure:")
+            for warning in warnings
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _valid_llm_call(call: Dict) -> Optional[Dict]:
+        try:
+            return LLMCallRecord.model_validate(call).model_dump()
+        except Exception as e:
+            logger.warning(f"[元数据] 丢弃无效 LLM 调用记录: {e}")
+            return None
+
+    def _collect_llm_calls(self, question: Dict) -> List[Dict]:
+        buckets = [
+            question,
+            question.get("analysis"),
+            question.get("difficulty"),
+            (question.get("difficulty") or {}).get("features")
+            if isinstance(question.get("difficulty"), dict) else None,
+            question.get("competency"),
+        ]
+        calls = []
+        seen = set()
+        for bucket in buckets:
+            if not isinstance(bucket, dict):
+                continue
+            for raw_call in bucket.get("_llm_calls", []):
+                if not isinstance(raw_call, dict):
+                    continue
+                call = self._valid_llm_call(raw_call)
+                if not call:
+                    continue
+                key = (
+                    call.get("call_id"),
+                    call.get("purpose"),
+                    call.get("prompt_hash"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                calls.append(call)
+        return calls
+
+    def _attach_metadata_envelope(self, question: Dict) -> None:
+        calls = self._collect_llm_calls(question)
+        question["_llm_calls"] = calls
+
+        analysis = question.get("analysis") if isinstance(question.get("analysis"), dict) else {}
+        difficulty = question.get("difficulty") if isinstance(question.get("difficulty"), dict) else {}
+        features = difficulty.get("features") if isinstance(difficulty.get("features"), dict) else {}
+        competency = question.get("competency") if isinstance(question.get("competency"), dict) else {}
+        fine_grained = analysis.get("_fine_grained") if isinstance(analysis, dict) else None
+
+        confidence = {
+            "overall": question.get("analysis_confidence", 0.0),
+            "analysis": analysis.get("_extraction_confidence", 0.0),
+            "features": features.get("_extraction_confidence", 0.0),
+            "competency": competency.get("_extraction_confidence", 0.0),
+        }
+        warnings = []
+        def add_warning(value: str) -> None:
+            if value and value not in warnings:
+                warnings.append(value)
+
+        if not calls:
+            add_warning("missing_llm_calls")
+        if features.get("_feature_status") in ("partial", "failed"):
+            add_warning(f"feature_status:{features.get('_feature_status')}")
+        if difficulty.get("analysis_failed"):
+            add_warning(f"analysis_failed:{difficulty.get('failure_reason') or 'unknown'}")
+        for flag in difficulty.get("flags", []) if isinstance(difficulty.get("flags"), list) else []:
+            if flag in {
+                "big_question_structure_failed",
+                "big_question_points_mismatch",
+                "feature_extraction_failed",
+                "big_question_fallback",
+                "no_evaluation",
+            }:
+                add_warning(f"difficulty_blocked:{flag}")
+        for call in calls:
+            metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+            prompt_id = str(call.get("prompt_id") or "").lower()
+            retry_count = call.get("retry_count") or metadata.get("retry_count") or 0
+            if "compact_retry" in prompt_id or retry_count:
+                add_warning(f"llm_retry:{call.get('purpose') or 'unknown'}")
+            if (
+                metadata.get("initial_parse_error")
+                or metadata.get("validation_errors")
+                or call.get("validation_errors")
+            ):
+                add_warning(f"llm_parse_failure:{call.get('purpose') or 'unknown'}")
+        if float(question.get("total_score") or 0) >= 8 and isinstance(fine_grained, dict):
+            if not fine_grained.get("diagnostic_units"):
+                add_warning("diagnostic_units_missing")
+            stimulus_units = fine_grained.get("stimulus_units") or []
+            if not stimulus_units:
+                add_warning("stimulus_units_missing")
+            elif all(
+                not str(unit.get("description") or "").strip()
+                and not bool(unit.get("is_core"))
+                and float(unit.get("complexity") or 0) <= 1
+                for unit in stimulus_units
+                if isinstance(unit, dict)
+            ):
+                add_warning("stimulus_units_blank")
+
+        envelope = AnalyzedQuestionEnvelope(
+            question={
+                "id": question.get("id"),
+                "content": question.get("content", ""),
+                "question_type": question.get("question_type"),
+                "total_score": question.get("total_score"),
+            },
+            llm_calls=[LLMCallRecord.model_validate(call) for call in calls],
+            analysis_units=fine_grained or {},
+            derived={
+                "knowledge_points": analysis.get("knowledge_points", []),
+                "difficulty": difficulty.get("final_difficulty"),
+                "competency": competency.get("primary_competency"),
+            },
+            confidence=confidence,
+            lineage={
+                "knowledge_points": "analysis.knowledge_points",
+                "difficulty_features": "difficulty.features",
+                "competency": "competency",
+            },
+            warnings=warnings,
+        )
+        question["_metadata_envelope"] = envelope.model_dump()
 
 
     # ── 完整端点编排（从 router 提取）────────────────────────
@@ -258,7 +728,14 @@ class AnalysisService:
         extracted_text = doc["extracted_text"]
         extracted_elements = doc["extracted_elements"]
 
-        questions = await self.split_questions_llm(image_bytes, extracted_text)
+        if filename.lower().endswith(".docx") and self.word_splitter:
+            loop = asyncio.get_event_loop()
+            split_result = await loop.run_in_executor(None, self.word_splitter.split, file_path)
+            questions = split_result.get("questions", [])
+        else:
+            questions = await self.split_questions_llm(image_bytes, extracted_text)
+
+        self.validate_split_integrity(questions, extracted_text)
 
         if extracted_elements and self.doc_processor:
             self.doc_processor.match_elements_to_questions(questions, extracted_elements)
@@ -267,8 +744,11 @@ class AnalysisService:
 
         competency_summary = self.build_competency_summary(questions)
         exam_statistics = self.aggregate_statistics(questions, competency_summary)
+        from report_data import compute_metadata_quality
+        metadata_quality = compute_metadata_quality(questions)
 
         report_url = None
+        html_report_url = None
         report_error = None
         if generate_report and reports_dir:
             try:
@@ -280,14 +760,19 @@ class AnalysisService:
                     mode=report_mode, output_path=pdf_path,
                 )
                 report_url = f"/api/reports/{exam_id}.pdf"
+                if Path(pdf_path).with_suffix(".html").exists():
+                    html_report_url = f"/api/reports/{exam_id}.html"
             except Exception as e:
-                report_error = f"报告生成失败: {e}"
+                logger.exception("[报告生成] 自动分析报告生成失败")
+                raise RuntimeError(f"report generation failed: {e}") from e
 
         return {
             "questions": questions,
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
+            "metadata_quality": metadata_quality,
             "report_url": report_url,
+            "html_report_url": html_report_url,
             "report_error": report_error,
         }
 
@@ -307,6 +792,7 @@ class AnalysisService:
                 None, self.word_splitter.split, file_path
             )
             questions = split_result.get("questions", [])
+            self.validate_split_integrity(questions)
             images = await loop.run_in_executor(
                 None, self.doc_processor.process_docx, file_path
             )
@@ -320,6 +806,7 @@ class AnalysisService:
                 None, self.pdf_splitter.split, file_path
             )
             questions = split_result.get("questions", [])
+            self.validate_split_integrity(questions)
             image_bytes = []
         else:
             raise ValueError(f"不支持的文件格式: {filename}")
@@ -327,8 +814,11 @@ class AnalysisService:
         analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
         competency_summary = self.build_competency_summary(analyzed)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
+        from report_data import compute_metadata_quality
+        metadata_quality = compute_metadata_quality(analyzed)
 
         report_url = None
+        html_report_url = None
         report_error = None
         if generate_report and reports_dir:
             try:
@@ -340,14 +830,19 @@ class AnalysisService:
                     mode=report_mode, output_path=pdf_path,
                 )
                 report_url = f"/api/reports/{exam_id}.pdf"
+                if Path(pdf_path).with_suffix(".html").exists():
+                    html_report_url = f"/api/reports/{exam_id}.html"
             except Exception as e:
-                report_error = f"报告生成失败: {e}"
+                logger.exception("[报告生成] 确认拆分报告生成失败")
+                raise RuntimeError(f"report generation failed: {e}") from e
 
         return {
             "questions": analyzed,
             "split_result": split_result,
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
+            "metadata_quality": metadata_quality,
             "report_url": report_url,
+            "html_report_url": html_report_url,
             "report_error": report_error,
         }

@@ -41,6 +41,35 @@ from report_data import aggregate_report_data
 
 class TestAggregateReportData:
 
+    def test_failed_exam_statistics_is_not_silently_rendered_as_zero_metrics(self):
+        q = _make_question(1, 5.0, 3, 2)
+        with pytest.raises(ValueError, match="exam statistics failed"):
+            aggregate_report_data(
+                [q],
+                {},
+                {"error": "difficulty aggregation crashed"},
+                {"name": "t", "total": 1, "mode": "deep"},
+            )
+
+    def test_score_status_reports_non_positive_without_defaulting_to_one(self):
+        q = _make_question(1, 5.0, 3, 0)
+        statistics = {
+            "avg_difficulty": 0,
+            "avg_cognitive_level": 0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        assert result["exam_info"]["total_score"] == 0
+        assert result["questions"][0]["total_score"] == 0
+        assert result["questions"][0]["score_status"] == "non_positive_score"
+        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["metadata_quality"]["score_issue_questions"]
+
     def test_total_score_from_analysis_fallback(self):
         """total_score 在 analysis 子字典中时也能正确取到"""
         # 模拟实际数据结构：total_score 在 analysis 中，不在顶层
@@ -74,6 +103,335 @@ class TestAggregateReportData:
         assert result["exam_info"]["total_score"] == 6  # 不是 0
         assert result["questions"][0]["total_score"] == 6  # 不是 0
 
+    def test_fine_grained_summary_tolerates_none_analysis(self):
+        """analysis=None 不应阻断报告数据聚合。"""
+        q = _make_question(1, 5.0, 3, 2)
+        q["analysis"] = None
+        statistics = {
+            "avg_difficulty": 5.0, "avg_cognitive_level": 5.0,
+            "difficulty_distribution": {}, "difficulty_distribution_by_score": {},
+            "bloom_distribution": {}, "difficulty_curve": [],
+            "top_knowledge_points": [], "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics,
+                                       {"name": "t", "total": 1, "mode": "fast"})
+
+        assert result["questions"][0]["knowledge_points"] == []
+        assert result["fine_grained_summary"]["total_seus"] == 0
+
+    def test_preserves_full_fine_grained_units_for_report_model(self):
+        """完整 SEU/DU/SU 元数据必须穿透 report_data，不能只保留题目级摘要。"""
+        q = _make_question(1, 6.0, 4, 10)
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [
+                {
+                    "seu_id": "seu_1",
+                    "label": "multi knowledge unit",
+                    "score_share": 0.6,
+                    "allocation_source": "rubric",
+                    "allocation_confidence": 0.9,
+                    "knowledge_links": [
+                        {"knowledge_point": "K1", "share": 0.7},
+                        {"knowledge_point": "K2", "share": 0.3},
+                    ],
+                    "competency_weights": {
+                        "生命观念": 0.2,
+                        "科学思维": 0.6,
+                        "科学探究": 0.2,
+                        "社会责任": 0.0,
+                    },
+                    "bloom_level": 4,
+                    "difficulty_estimate": 6.5,
+                    "reasoning_brief": "evidence note",
+                },
+                {
+                    "seu_id": "seu_2",
+                    "label": "second unit",
+                    "score_share": 0.4,
+                    "allocation_confidence": 0.8,
+                    "knowledge_links": [{"knowledge_point": "K3", "share": 1.0}],
+                    "competency_weights": {"科学探究": 1.0},
+                    "bloom_level": 5,
+                    "difficulty_estimate": 7.0,
+                },
+            ],
+            "diagnostic_units": [
+                {
+                    "du_id": "du_1",
+                    "option_or_trap": "trap_a",
+                    "misconception": "misread graph",
+                    "trap_strength": 3,
+                    "knowledge_boundary": "K1/K2",
+                }
+            ],
+            "stimulus_units": [
+                {"su_id": "su_1", "stimulus_type": "chart", "complexity": 3}
+            ],
+        }
+        statistics = {
+            "avg_difficulty": 6.0,
+            "avg_cognitive_level": 5.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        detail = result["questions"][0]
+
+        assert detail["scoring_units_count"] == 2
+        assert detail["diagnostic_units_count"] == 1
+        assert detail["stimulus_units_count"] == 1
+        assert detail["fine_grained_units"]["scoring_units"][0]["competency_weights"]["科学思维"] == 0.6
+        assert detail["fine_grained_units"]["scoring_units"][0]["difficulty_estimate"] == 6.5
+        assert detail["fine_grained_units"]["diagnostic_units"][0]["misconception"] == "misread graph"
+        assert detail["seu_knowledge_breakdown"][0]["knowledge_links"][1]["knowledge_point"] == "K2"
+        assert detail["seu_knowledge_breakdown"][0]["allocation_confidence"] == 0.9
+
+    def test_does_not_infer_metadata_envelope_from_structured_analysis_outputs(self):
+        """真实分析结果没有 envelope 时，也应从结构化产物恢复元数据口径。"""
+        q = _make_question(1, 6.0, 4, 10)
+        q["analysis_confidence"] = 0.94
+        q["confidence"] = 0.91
+        q["analysis"]["_extraction_confidence"] = 0.92
+        q["analysis"]["allocation_confidence_avg"] = 0.86
+        q["warnings"] = ["structured_warning"]
+        statistics = {
+            "avg_difficulty": 6.0,
+            "avg_cognitive_level": 5.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+
+        detail = result["questions"][0]
+        assert detail["metadata_confidence"] == 0
+        assert detail["metadata_call_purposes"] == []
+        assert detail["metadata_warnings"] == []
+
+        quality = result["metadata_quality"]
+        assert quality["missing_envelope_questions"] == [1]
+        assert quality["inferred_envelope_questions"] == []
+        assert quality["llm_call_counts"] == {}
+
+    def test_missing_difficulty_is_not_rendered_as_default_middle_score(self):
+        q = _make_question(21, 6.0, 4, 14)
+        q["difficulty"] = {"error": "provider failed"}
+        statistics = {
+            "avg_difficulty": 0,
+            "avg_cognitive_level": 0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        detail = result["questions"][0]
+
+        assert detail["difficulty"] is None
+        assert detail["difficulty_label"] == "未评估"
+        assert detail["feature_status"] == "missing"
+
+    def test_final_difficulty_is_marked_authoritative_for_report_model(self):
+        q = _make_question(20, 9.4, 5, 12)
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [
+                {"label": "routine setup", "score_share": 0.5, "difficulty_estimate": 4.0},
+                {"label": "routine explanation", "score_share": 0.5, "difficulty_estimate": 5.0},
+            ],
+            "diagnostic_units": [],
+            "stimulus_units": [],
+        }
+        statistics = {
+            "avg_difficulty": 9.4,
+            "avg_cognitive_level": 8.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        detail = result["questions"][0]
+
+        assert detail["difficulty"] == 9.4
+        assert detail["_difficulty_authoritative"] is True
+
+    def test_preserves_source_text_answer_and_difficulty_flags_for_report_audit(self):
+        q = _make_question(21, 9.1, 5, 14)
+        q["question_text"] = "第21题原题文本"
+        q["correct_answer"] = "参考答案示例"
+        q["difficulty"]["flags"] = ["big_question_fallback", "seu_high_order_adjustment"]
+        q["difficulty"]["difficulty_source"] = "pipeline.final"
+        statistics = {
+            "avg_difficulty": 9.1,
+            "avg_cognitive_level": 8.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        detail = result["questions"][0]
+
+        assert detail["question_text"] == "第21题原题文本"
+        assert detail["answer"] == "参考答案示例"
+        assert detail["difficulty_flags"] == ["big_question_fallback", "seu_high_order_adjustment"]
+        assert detail["difficulty_source"] == "pipeline.final"
+
+    def test_metadata_quality_reports_missing_prompt_purposes_and_source_gaps(self):
+        q1 = _make_question(1, 5.0, 3, 2)
+        q1["question_text"] = "题干"
+        q1["correct_answer"] = "A"
+        q1["_metadata_envelope"] = {
+            "confidence": {"overall": 0.92},
+            "llm_calls": [{"purpose": "question_analysis"}],
+            "warnings": [],
+        }
+        q2 = _make_question(2, 5.0, 3, 2)
+        q2["_metadata_envelope"] = {
+            "confidence": {"overall": 0.91},
+            "llm_calls": [
+                {"purpose": "question_analysis"},
+                {"purpose": "feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+        statistics = {
+            "avg_difficulty": 5.0,
+            "avg_cognitive_level": 5.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q1, q2], {}, statistics, {"name": "t", "total": 2, "mode": "deep"})
+        quality = result["metadata_quality"]
+
+        assert {"id": 1, "purpose": "feature_extraction"} in quality["missing_purpose_questions"]
+        assert {"id": 1, "purpose": "competency_analysis"} in quality["missing_purpose_questions"]
+        assert quality["question_text_missing_count"] == 1
+        assert quality["answer_missing_count"] == 1
+
+    def test_metadata_quality_accepts_big_question_feature_and_scoring_unit_competency(self):
+        q = _make_question(21, 8.7, 5, 14)
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.93},
+            "llm_calls": [
+                {"purpose": "question_analysis"},
+                {"purpose": "big_question_feature_extraction"},
+            ],
+            "warnings": [],
+        }
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [
+                {
+                    "label": "实验设计与结果解释",
+                    "score_share": 1.0,
+                    "difficulty_estimate": 8.8,
+                    "competency_tags": ["科学探究", "科学思维"],
+                }
+            ],
+            "diagnostic_units": [{"misconception": "忽略对照变量", "trap_strength": 3}],
+            "stimulus_units": [
+                {"description": "实验装置与结果图", "complexity": 3, "is_core": True}
+            ],
+        }
+        statistics = {
+            "avg_difficulty": 8.7,
+            "avg_cognitive_level": 8.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        missing = result["metadata_quality"]["missing_purpose_questions"]
+
+        assert {"id": 21, "purpose": "feature_extraction"} not in missing
+        assert {"id": 21, "purpose": "competency_analysis"} not in missing
+        assert result["metadata_quality"]["llm_call_counts"]["big_question_feature_extraction"] == 1
+
+    def test_metadata_quality_blocks_failed_difficulty_and_missing_big_question_evidence(self):
+        q = _make_question(21, 5.0, 4, 14)
+        q["difficulty"] = {
+            "final_difficulty": None,
+            "difficulty_label": "未评估",
+            "confidence": 0.0,
+            "analysis_failed": True,
+            "failure_reason": "big_question_structure_failed",
+            "features": {"_feature_status": "failed"},
+            "flags": ["big_question_structure_failed"],
+        }
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [
+                {"label": "experiment design", "score_share": 1.0, "difficulty_estimate": 8.0}
+            ],
+            "diagnostic_units": [],
+            "stimulus_units": [
+                {"su_id": "21-S1", "stimulus_type": "text", "description": "", "complexity": 1, "is_core": False}
+            ],
+        }
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {"purpose": "question_analysis"},
+                {"purpose": "feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+        statistics = {
+            "avg_difficulty": 0,
+            "avg_cognitive_level": 0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        quality = result["metadata_quality"]
+
+        assert {"id": 21, "reason": "big_question_structure_failed"} in quality["blocked_questions"]
+        assert {"id": 21, "reason": "diagnostic_units_missing"} in quality["evidence_gap_questions"]
+        assert {"id": 21, "reason": "stimulus_units_blank"} in quality["evidence_gap_questions"]
+
     def test_returns_all_top_level_keys(self):
         """返回值包含所有必需的顶层 key"""
         questions = [_make_question(1, 5.0, 3, 6)]
@@ -96,7 +454,7 @@ class TestAggregateReportData:
         assert set(result.keys()) == {
             "exam_info", "metrics", "difficulty_curve", "difficulty_gradient",
             "knowledge", "competency", "feature_profile", "questions",
-            "diagnostics",
+            "metadata_quality", "fine_grained_summary",
         }
 
     def test_feature_profile_averages_6_dimensions(self):

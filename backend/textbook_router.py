@@ -495,7 +495,7 @@ async def upload_smart(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    智能上传教材（使用Gemini AI分析）
+    智能上传教材（使用AI分析）
 
     - 逐页分析PDF，使用AI提取知识点和章节信息
     - 支持指定页码范围进行测试
@@ -522,7 +522,7 @@ async def upload_smart(
             f.write(content)
         logger.info(f"[智能教材处理] 文件已保存: {pdf_path}")
 
-        # 使用Gemini处理
+        # 使用AI处理
         processor = TextbookProcessor()
         try:
             result = await processor.process_pdf(

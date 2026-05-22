@@ -6,10 +6,31 @@ GPT 失败直接 raise，不降级。
 """
 import json
 import re
+from hashlib import sha256
 from llm_client import send_message_gpt
 from logger import get_logger
+from metadata_contracts import LLMCallRecord
 
 logger = get_logger()
+
+
+def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
+                 input_refs: dict, parsed_schema: str, confidence: float,
+                 validation_errors: list = None, metadata: dict = None) -> dict:
+    call = LLMCallRecord(
+        call_id=call_id,
+        purpose=purpose,
+        prompt_id=prompt_id,
+        prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
+        provider="llm_client",
+        model="configured_provider_chain",
+        input_refs=input_refs,
+        parsed_schema=parsed_schema,
+        confidence=confidence,
+        validation_errors=validation_errors or [],
+        metadata=metadata or {},
+    )
+    return call.model_dump()
 
 
 def _parse_json_response(text: str) -> dict:
@@ -39,6 +60,7 @@ def _build_overall_prompt(data: dict) -> str:
     competency = data["competency"]
     feature = data["feature_profile"]
     exam = data["exam_info"]
+    metadata_quality = data.get("metadata_quality", {})
 
     diag = data.get("diagnostics", {})
     diag_section = ""
@@ -52,6 +74,15 @@ def _build_overall_prompt(data: dict) -> str:
 - 素养均衡度: {comp_bal.get('balance', 'N/A')}（方差={comp_bal.get('variance', 'N/A')}，缺失={comp_bal.get('missing', [])}）
 - 难度离散度: {spread.get('spread_level', 'N/A')}（标准差={spread.get('difficulty_stdev', 'N/A')}，极差={spread.get('difficulty_range', 'N/A')}）
 - 综合评价: {diag.get('overall_rating', 'N/A')}
+"""
+
+    metadata_section = ""
+    if metadata_quality:
+        metadata_section = f"""
+## 元数据治理
+- 低置信度题目: {metadata_quality.get('low_confidence_questions', [])}
+- 元数据警告: {json.dumps(metadata_quality.get('warning_questions', []), ensure_ascii=False)}
+- LLM 调用计数: {json.dumps(metadata_quality.get('llm_call_counts', {}), ensure_ascii=False)}
 """
 
     return f"""你是一名资深高中生物教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
@@ -81,6 +112,7 @@ def _build_overall_prompt(data: dict) -> str:
 {json.dumps(competency["distribution"], ensure_ascii=False, default=str)}
 
 {diag_section}
+{metadata_section}
 请输出严格 JSON（不要多余解释）：
 {{
   "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
@@ -186,18 +218,37 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
     logger.info(f"[LLM分析] 开始生成 mode={mode}")
 
     try:
+        llm_calls = []
+        input_refs = {
+            "mode": mode,
+            "exam_name": data.get("exam_info", {}).get("name"),
+            "question_count": len(data.get("questions", [])),
+            "total_score": data.get("exam_info", {}).get("total_score"),
+        }
+
         # 调用 1: 整卷综合分析
+        overall_prompt = _build_overall_prompt(data)
         overall_text = await send_message_gpt(
-            prompt=_build_overall_prompt(data),
+            prompt=overall_prompt,
             max_tokens=2000,
             temperature=0.3,
-            stage="report_overall",
         )
         result = _parse_json_response(overall_text)
         from llm_schemas import validate_llm_output, InsightsResult
         result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
         if val_errors:
             logger.warning(f"[LLM分析] 整卷分析 schema 校验: {val_errors[:3]}")
+        llm_calls.append(_call_record(
+            call_id="report-overall-insights",
+            purpose="report_insights",
+            prompt_id="biology.report_insights",
+            prompt=overall_prompt,
+            input_refs=input_refs,
+            parsed_schema="InsightsResult",
+            confidence=ext_conf,
+            validation_errors=val_errors,
+            metadata={"response_length": len(overall_text)},
+        ))
         logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议 (confidence={ext_conf})")
 
         # 逐题点评和质量审查已移入 feature_extractor（v3 合并优化）
@@ -220,88 +271,112 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                 prompt=teaching_prompt,
                 max_tokens=2048,
                 temperature=0.3,
-                stage="report_teaching",
             )
             teaching = _parse_json_response(teaching_text)
+            llm_calls.append(_call_record(
+                call_id="report-teaching-suggestions",
+                purpose="report_teaching_suggestions",
+                prompt_id="biology.report_teaching_suggestions",
+                prompt=teaching_prompt,
+                input_refs=input_refs,
+                parsed_schema="TeachingSuggestions",
+                confidence=1.0,
+                metadata={"response_length": len(teaching_text)},
+            ))
             logger.info(f"[LLM分析] 教学建议生成完成")
         except Exception as e:
             logger.warning(f"[LLM分析] 教学建议生成失败: {e}")
             teaching = {"error_categories": [], "lecture_outline": [], "remedial_exercises": []}
+            llm_calls.append(_call_record(
+                call_id="report-teaching-suggestions",
+                purpose="report_teaching_suggestions",
+                prompt_id="biology.report_teaching_suggestions",
+                prompt=teaching_prompt,
+                input_refs=input_refs,
+                parsed_schema="TeachingSuggestions",
+                confidence=0.0,
+                validation_errors=[str(e)],
+                metadata={"fallback": "empty_teaching_suggestions"},
+            ))
 
         result["teaching_suggestions"] = teaching
+        result["_llm_calls"] = llm_calls
 
         return result
 
     except Exception as e:
-        logger.error(f"[LLM分析] 失败，使用数据降级模板: {e}", exc_info=True)
-        return _build_fallback_insights(data)
+        logger.error(f"[LLM分析] 失败，不使用静默降级: {e}", exc_info=True)
+        raise RuntimeError("LLM 分析生成失败") from e
 
 
 def _build_fallback_insights(data: dict) -> dict:
-    """基于 rdata 数值生成降级分析（无 LLM）。"""
+    """数据驱动的降级建议（不依赖 LLM）"""
+    recs = []
     metrics = data.get("metrics", {})
-    avg_diff = metrics.get("avg_difficulty", 0)
-    avg_cog = metrics.get("avg_cognitive_level", 0)
-    dist = metrics.get("difficulty_distribution", {})
-    bloom = metrics.get("bloom_distribution", {})
-    gradient = data.get("difficulty_gradient", {})
-    diag = data.get("diagnostics", {})
     knowledge = data.get("knowledge", {})
     competency = data.get("competency", {})
+    questions = data.get("questions", [])
 
-    diff_label = "偏易" if avg_diff < 4 else ("偏难" if avg_diff > 7 else "适中")
-    overall_rating = diag.get("overall_rating", "")
-    rating_text = f"整卷质量评价为「{overall_rating}」。" if overall_rating and overall_rating != "数据不足" else ""
+    # 难度分布建议
+    diff_dist = metrics.get("difficulty_distribution", {})
+    total_q = sum(diff_dist.values()) if diff_dist else 0
+    if total_q > 0:
+        hard_pct = diff_dist.get("困难", 0) / total_q * 100
+        easy_pct = diff_dist.get("简单", 0) / total_q * 100
+        if hard_pct > 50:
+            recs.append({"priority": "high", "category": "难度结构",
+                        "content": f"困难题占比 {hard_pct:.0f}%，偏高。建议适当降低 2-3 道中等以上难度题的综合性或信息量。"})
+        elif easy_pct > 40:
+            recs.append({"priority": "medium", "category": "难度结构",
+                        "content": f"简单题占比 {easy_pct:.0f}%，区分度可能不足。建议增加情境化命题以提升思维考查深度。"})
 
-    overall = (
-        f"本卷共{data.get('exam_info', {}).get('total_questions', '?')}题，"
-        f"总分{data.get('exam_info', {}).get('total_score', '?')}分。"
-        f"分值加权平均难度{avg_diff:.1f}（{diff_label}），"
-        f"平均认知层级{avg_cog:.1f}。"
-        f"难度分布：简单{dist.get('简单', 0)}题、中等{dist.get('中等', 0)}题、困难{dist.get('困难', 0)}题。"
-        f"{rating_text}"
-    )
+    # 教材覆盖建议
+    tb_dist = knowledge.get("textbook_distribution", {})
+    if tb_dist:
+        for tb_name, tb_data in tb_dist.items():
+            if isinstance(tb_data, dict):
+                pct = tb_data.get("percentage", 0)
+                if pct < 5 and tb_data.get("weighted_score", 0) > 0:
+                    recs.append({"priority": "medium", "category": "知识覆盖",
+                                "content": f"{tb_name} 占比仅 {pct:.1f}%，覆盖不足。建议增加该模块相关试题。"})
+                elif pct == 0:
+                    recs.append({"priority": "low", "category": "知识覆盖",
+                                "content": f"{tb_name} 未涉及。如非刻意取舍，建议补充该模块基础题目。"})
 
-    grad_type = gradient.get("gradient_type", "")
-    diff_analysis = (
-        f"难度梯度类型为「{grad_type}」（前段{gradient.get('front', 0)}、"
-        f"中段{gradient.get('middle', 0)}、后段{gradient.get('back', 0)}）。"
-    )
-    if diag.get("gradient", {}).get("rating"):
-        diff_analysis += f"梯度评级：{diag['gradient']['rating']}（偏差{diag['gradient'].get('deviation', '?')}）。"
+    # 素养均衡建议
+    primary_dist = competency.get("primary_distribution", {})
+    if isinstance(primary_dist, dict):
+        for comp_name in ["科学探究", "社会责任"]:
+            if primary_dist.get(comp_name, 0) == 0:
+                recs.append({"priority": "medium", "category": "素养覆盖",
+                            "content": f"核心素养 '{comp_name}' 在题目主素养维度缺失。虽然 SEU 加权分析显示有涉及，但建议增设以该素养为主考目标的题目。"})
 
-    top_kps = [kp.get("name", "") for kp in knowledge.get("top_points", [])[:5]]
-    know_analysis = f"高频知识点：{'、'.join(top_kps)}。" if top_kps else "知识点数据不足。"
+    # 特征提取失败建议
+    failed = sum(1 for q in questions if isinstance(q, dict) and
+                 isinstance(q.get("feature_status"), str) and q["feature_status"] == "failed")
+    if failed > 0:
+        recs.append({"priority": "low", "category": "分析质量",
+                    "content": f"{failed} 道题的特征提取未完成，相关质量评分缺失。建议检查这些题目是否包含复杂图表或特殊格式。"})
 
-    comp_dist = competency.get("distribution", {})
-    comp_bal = diag.get("competency_balance", {})
-    balance_text = comp_bal.get("balance", "未知")
-    comp_analysis = f"素养均衡度：{balance_text}。"
-    if comp_bal.get("missing"):
-        comp_analysis += f"缺失维度：{'、'.join(comp_bal['missing'])}。"
-
-    high_order = sum(bloom.get(k, 0) for k in ["分析", "评价", "创造"])
-    bloom_analysis = f"高阶思维（分析+评价+创造）占比{high_order*100:.1f}%。"
-
-    recs = []
-    if avg_diff > 7:
-        recs.append({"category": "难度", "content": "整卷偏难，建议增加基础题占比。", "priority": "high"})
-    elif avg_diff < 3.5:
-        recs.append({"category": "难度", "content": "整卷偏易，建议增加中等及以上难度题目。", "priority": "high"})
-    if comp_bal.get("missing"):
-        recs.append({"category": "素养", "content": f"缺失{'、'.join(comp_bal['missing'])}相关题目，建议补充。", "priority": "high"})
-    if high_order < 0.2:
-        recs.append({"category": "认知", "content": "高阶思维题目占比偏低，建议增加分析、评价类题目。", "priority": "medium"})
     if not recs:
-        recs.append({"category": "综合", "content": "各项指标基本达标，建议参考详细数据进一步优化。", "priority": "low"})
+        recs.append({"priority": "low", "category": "总评",
+                    "content": "各项指标基本均衡，建议对照课程标准做进一步的覆盖度分析。"})
+
+    # 整体评价
+    avg_diff = metrics.get("avg_difficulty", 0)
+    overall = f"本卷共 {total_q} 题，分值加权平均难度 {avg_diff:.2f}。"
+    if avg_diff > 7:
+        overall += "整体偏难，适合用于选拔性考试或一模摸底。"
+    elif avg_diff > 5:
+        overall += "难度适中，适合阶段性检测。"
+    else:
+        overall += "整体偏易，适合基础巩固练习。"
 
     return {
         "overall_assessment": overall,
         "recommendations": recs,
-        "difficulty_analysis": diff_analysis,
-        "knowledge_analysis": know_analysis,
-        "competency_analysis": comp_analysis,
-        "bloom_analysis": bloom_analysis,
-        "question_comments": {},
-        "teaching_suggestions": {"error_categories": [], "lecture_outline": [], "remedial_exercises": []},
+        "difficulty_analysis": "",
+        "knowledge_analysis": "",
+        "bloom_analysis": "",
+        "competency_analysis": "",
     }

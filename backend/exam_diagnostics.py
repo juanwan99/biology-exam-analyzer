@@ -12,6 +12,10 @@ DIFFICULTY_PROFILES = {
 }
 
 
+def _safe_dict(value: Any) -> Dict:
+    return value if isinstance(value, dict) else {}
+
+
 def diagnose_exam(questions: List[Dict], statistics: Dict,
                   exam_scope: Optional[Dict] = None,
                   exam_type: str = "高考") -> Dict:
@@ -24,7 +28,8 @@ def diagnose_exam(questions: List[Dict], statistics: Dict,
         exam_type: 考试类型（高考/月考/模拟考/期中期末），决定理想难度分布
 
     Returns:
-        {gradient, coverage, competency_balance, difficulty_spread, overall_rating}
+        {gradient, coverage, competency_balance, difficulty_spread,
+         allocation_reliability, overall_rating}
     """
     if not questions:
         return {"gradient": {}, "coverage": {}, "competency_balance": {},
@@ -37,6 +42,7 @@ def diagnose_exam(questions: List[Dict], statistics: Dict,
     result["coverage"] = _analyze_coverage(questions, exam_scope)
     result["competency_balance"] = _analyze_competency_balance(questions)
     result["difficulty_spread"] = _analyze_difficulty_spread(questions, statistics)
+    result["allocation_reliability"] = _analyze_allocation_reliability(questions)
     result["overall_rating"] = _compute_overall(result)
     return result
 
@@ -92,9 +98,21 @@ def _analyze_coverage(questions: List[Dict], exam_scope: Optional[Dict]) -> Dict
                 ch = m.get("chapter") or m.get("textbook")
                 if ch:
                     covered.add(ch)
-        kps = q.get("analysis", {}).get("knowledge_points", [])
-        for kp in kps:
-            covered.add(kp)
+
+        # SEU 路径优先：从 scoring_units knowledge_links 获取更精确的知识点
+        analysis = _safe_dict(q.get("analysis"))
+        fg = analysis.get("_fine_grained")
+        if fg and fg.get("scoring_units"):
+            for seu in fg["scoring_units"]:
+                for kl in seu.get("knowledge_links", []):
+                    kp = kl.get("knowledge_point", "")
+                    if kp:
+                        covered.add(kp)
+        else:
+            # fallback: 旧逻辑从 analysis.knowledge_points 收集
+            kps = analysis.get("knowledge_points", [])
+            for kp in kps:
+                covered.add(kp)
 
     # 从 exam_scope 获取应覆盖的范围
     volumes = exam_scope.get("volumes", [])
@@ -126,14 +144,37 @@ def _analyze_competency_balance(questions: List[Dict]) -> Dict:
     valid_count = 0
 
     for q in questions:
-        comp = q.get("competency", {})
-        if isinstance(comp, dict) and "error" not in comp:
+        # SEU 路径优先：从 scoring_units competency 按 score_share 加权
+        analysis = _safe_dict(q.get("analysis"))
+        fg = analysis.get("_fine_grained")
+        if fg and fg.get("scoring_units"):
             valid_count += 1
-            for key in competencies:
-                if isinstance(comp.get(key), dict) and comp[key].get("涉及"):
-                    weight = comp[key].get("权重", 0)
-                    if isinstance(weight, (int, float)):
-                        competencies[key] += weight
+            q_score = q.get("total_score") or 1
+            for seu in fg["scoring_units"]:
+                score_share = seu.get("score_share", 0)
+                weights = seu.get("competency_weights")
+                if isinstance(weights, dict):
+                    for name in competencies:
+                        weight = weights.get(name, 0)
+                        if isinstance(weight, (int, float)):
+                            competencies[name] += q_score * score_share * weight
+                    continue
+
+                comp_link = _safe_dict(seu.get("competency"))
+                c = comp_link.get("primary", "")
+                if c in competencies:
+                    comp_weight = comp_link.get("weight", 1.0)
+                    competencies[c] += q_score * score_share * comp_weight
+        else:
+            # fallback: 旧逻辑从题目级 competency 统计
+            comp = q.get("competency", {})
+            if isinstance(comp, dict) and "error" not in comp:
+                valid_count += 1
+                for key in competencies:
+                    if isinstance(comp.get(key), dict) and comp[key].get("涉及"):
+                        weight = comp[key].get("权重", 0)
+                        if isinstance(weight, (int, float)):
+                            competencies[key] += weight
 
     if valid_count == 0:
         return {"balance": "数据不足", "distribution": competencies}
@@ -164,10 +205,18 @@ def _analyze_competency_balance(questions: List[Dict]) -> Dict:
 def _analyze_difficulty_spread(questions: List[Dict], statistics: Dict) -> Dict:
     """难度离散度分析（注：基于预估难度，非基于学生实际作答的区分度）。"""
     difficulties = []
+    unavailable = []
     for q in questions:
         d = q.get("difficulty", {})
+        value = None
         if isinstance(d, dict) and "final_difficulty" in d:
-            difficulties.append(d["final_difficulty"])
+            value = d["final_difficulty"]
+        elif isinstance(d, (int, float)):
+            value = d
+        if isinstance(value, (int, float)):
+            difficulties.append(float(value))
+        else:
+            unavailable.append(q.get("id"))
 
     if len(difficulties) < 3:
         return {"spread_level": "数据不足", "detail": "至少需要3题"}
@@ -189,7 +238,57 @@ def _analyze_difficulty_spread(questions: List[Dict], statistics: Dict) -> Dict:
         "difficulty_stdev": round(stdev_d, 2),
         "difficulty_range": round(spread, 2),
         "difficulty_mean": round(mean_d, 2),
+        "unavailable_questions": [qid for qid in unavailable if qid is not None],
         "note": "本指标基于预估难度计算，非基于学生实际作答的区分度",
+    }
+
+
+def _analyze_allocation_reliability(questions: List[Dict]) -> Dict:
+    """分析 SEU 分配的可靠性。
+
+    统计 inferred vs explicit 的比例和低置信度 SEU，给出可靠性评级。
+    无 SEU 数据时返回 status=no_fine_grained_data。
+    """
+    total_seus = 0
+    inferred_count = 0
+    low_confidence_seus = []
+
+    for q in questions:
+        analysis = _safe_dict(q.get("analysis"))
+        fg = analysis.get("_fine_grained")
+        if not fg or not fg.get("scoring_units"):
+            continue
+        for seu in fg["scoring_units"]:
+            total_seus += 1
+            if seu.get("allocation_source") == "inferred":
+                inferred_count += 1
+            conf = seu.get("allocation_confidence", 0.5)
+            if conf < 0.5:
+                low_confidence_seus.append({
+                    "question_id": q.get("id"),
+                    "seu_id": seu.get("seu_id"),
+                    "confidence": conf,
+                })
+
+    if total_seus == 0:
+        return {"status": "no_fine_grained_data"}
+
+    inferred_pct = round(inferred_count / total_seus * 100, 1)
+
+    # 可靠性评级
+    if inferred_pct <= 30:
+        rating = "高"
+    elif inferred_pct <= 60:
+        rating = "中"
+    else:
+        rating = "低"
+
+    return {
+        "total_seus": total_seus,
+        "inferred_count": inferred_count,
+        "inferred_pct": inferred_pct,
+        "rating": rating,
+        "low_confidence_seus": low_confidence_seus[:5],
     }
 
 

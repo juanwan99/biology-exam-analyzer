@@ -1,6 +1,7 @@
 """
 可视化报告生成器
-使用 plotly 生成交互式图表，导出为 PDF 报告
+使用 plotly 生成交互式图表，导出为 PDF 报告。
+SVG 图表（svg_charts 模块）在可用时优先内联，兼容 WeasyPrint。
 """
 import plotly.graph_objects as go
 import plotly.express as px
@@ -12,6 +13,13 @@ import base64
 from io import BytesIO
 from weasyprint import HTML, CSS
 from logger import get_logger
+
+try:
+    from svg_charts import (render_radar_chart, render_heatmap, render_horizontal_bars,
+                            render_line_scatter, render_donut_chart, render_grouped_bars)
+    HAS_SVG_CHARTS = True
+except ImportError:
+    HAS_SVG_CHARTS = False
 
 logger = get_logger()
 
@@ -634,13 +642,34 @@ tr { page-break-inside: avoid; }
 .difficulty-medium { color: #ea580c; }
 .difficulty-low { color: #16a34a; }
 .footer { margin-top: 40px; text-align: center; color: #64748b; font-size: 11px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+.chart-container { margin: 12px 0; text-align: center; }
+.chart-inline { display: inline-block; vertical-align: top; margin: 8px; }
+.seu-table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin: 8px 0; }
+.seu-table th { background: #f0f2f6; padding: 6px 8px; text-align: left; border: 1px solid #dde1ea; }
+.seu-table td { padding: 6px 8px; border: 1px solid #dde1ea; }
+.diagnostics { margin: 8px 0; }
+.trap-item { padding: 4px 8px; margin: 2px 0; border-radius: 4px; font-size: 0.85em; }
+.trap-item.high { background: #fee2e2; color: #dc2626; }
+.trap-item.med { background: #fef3c7; color: #d97706; }
+.trap-option { font-weight: 700; margin-right: 8px; }
+.fg-summary { background: #eff6ff; border-left: 3px solid #2563eb; padding: 8px 12px; margin: 12px 0; font-size: 0.85em; border-radius: 0 6px 6px 0; }
 </style>"""
 
 
 def _render_difficulty_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
     """渲染难度分析 section"""
     html = '<h2>二、难度分析</h2>'
-    html += f'<div class="chart"><img src="{charts["curve"]}" alt="难度曲线"></div>'
+
+    # SVG 难度折线+散点图（优先，内联不依赖外部图片）
+    if HAS_SVG_CHARTS and data.get("difficulty_curve"):
+        points = [{"x": p["question_id"], "y": p["difficulty"],
+                   "label": f"Q{p['question_id']}", "size": p.get("total_score", 2)}
+                  for p in data["difficulty_curve"]]
+        line_svg = render_line_scatter(points, width=700, height=200, title="难度曲线")
+        html += f'<div class="chart-container">{line_svg}</div>'
+    else:
+        html += f'<div class="chart"><img src="{charts["curve"]}" alt="难度曲线"></div>'
+
     html += f'<div class="chart"><img src="{charts["distribution"]}" alt="难度分布"></div>'
 
     if mode == "full":
@@ -688,6 +717,14 @@ def _render_knowledge_section(data: dict, insights: dict, charts: dict, mode: st
                 html += f'<tr><td>{book}</td><td>{score:.1f}</td><td>{pct:.1f}%</td></tr>'
         html += '</tbody></table>'
 
+    # 未映射率提示
+    unmapped = data["knowledge"].get("unmapped_count", 0)
+    total_kp = data["knowledge"].get("total_knowledge_points", 0)
+    if unmapped > 0 and total_kp > 0:
+        unmapped_pct = round(unmapped / total_kp * 100, 1)
+        color = "#dc2626" if unmapped_pct > 30 else "#ca8a04"
+        html += f'<p style="color:{color};font-size:0.9em">知识点映射覆盖率：{total_kp - unmapped}/{total_kp}（{unmapped}个未映射，{unmapped_pct}%）</p>'
+
     analysis = insights.get("knowledge_analysis", "")
     if analysis:
         html += f'<div class="insight-box">{analysis}</div>'
@@ -710,10 +747,44 @@ def _render_bloom_section(data: dict, insights: dict, charts: dict, mode: str) -
 def _render_competency_section(data: dict, insights: dict, charts: dict, mode: str) -> str:
     """渲染核心素养 section"""
     html = '<h2>五、核心素养</h2>'
-    html += f'<div class="chart"><img src="{charts["competency_pie"]}" alt="素养分布"></div>'
+
+    # SVG 环形图（优先）
+    comp_dist = data.get("competency", {}).get("distribution", {})
+    if HAS_SVG_CHARTS and comp_dist:
+        comp_colors = {"生命观念": "#7c3aed", "科学思维": "#2563eb",
+                       "科学探究": "#0891b2", "社会责任": "#db2777"}
+        valid_competencies = ["生命观念", "科学思维", "科学探究", "社会责任"]
+        slices = []
+        for name in valid_competencies:
+            entry = comp_dist.get(name)
+            if isinstance(entry, dict):
+                pct = entry.get("占比", 0)
+                if pct > 0:
+                    slices.append({"label": name, "value": pct,
+                                   "color": comp_colors.get(name, "#6b7385")})
+        if slices:
+            donut_svg = render_donut_chart(slices, size=200, title="素养分布")
+            html += f'<div class="chart-container">{donut_svg}</div>'
+        else:
+            html += f'<div class="chart"><img src="{charts["competency_pie"]}" alt="素养分布"></div>'
+    else:
+        html += f'<div class="chart"><img src="{charts["competency_pie"]}" alt="素养分布"></div>'
 
     if mode == "full" and "competency_bar" in charts:
         html += f'<div class="chart"><img src="{charts["competency_bar"]}" alt="素养细分"></div>'
+
+    # SEU 级素养分布（如果有且与题级不同）
+    seu_pd = data.get("competency", {}).get("seu_primary_distribution", {})
+    if seu_pd and any(v > 0 for v in seu_pd.values()):
+        q_pd = data.get("competency", {}).get("primary_distribution", {})
+        html += '<div style="margin-top:12px"><p><strong>采分单元级素养分布：</strong></p>'
+        html += '<table><tr><th>维度</th><th>题级 primary</th><th>SEU级 primary</th></tr>'
+        for dim in ["生命观念", "科学思维", "科学探究", "社会责任"]:
+            q_val = q_pd.get(dim, 0)
+            s_val = seu_pd.get(dim, 0)
+            highlight = ' style="color:#0891b2;font-weight:bold"' if s_val > 0 and q_val == 0 else ''
+            html += f'<tr><td>{dim}</td><td>{q_val}</td><td{highlight}>{s_val}</td></tr>'
+        html += '</table></div>'
 
     analysis = insights.get("competency_analysis", "")
     if analysis:
@@ -765,8 +836,10 @@ def _render_questions_section(data: dict, insights: dict, mode: str) -> str:
                 qs_colors = {1: "#dc2626", 2: "#ea580c", 3: "#ca8a04", 4: "#16a34a", 5: "#16a34a"}
                 qs_text = f' | <span style="color:{qs_colors.get(qs, "#333")}">质量: {qs}/5 {qs_labels.get(qs, "")}</span>'
 
+            qtype_label = q.get("question_type", "")
+            qtype_display = f" · {qtype_label}" if qtype_label and qtype_label != "unknown" else ""
             html += f'''<div class="question-card">
-<h4>题目 {q["id"]}（{q["total_score"]}分）</h4>
+<h4>题目 {q["id"]}（{q["total_score"]}分{qtype_display}）</h4>
 <div class="meta">
 难度: <span class="{diff_class}">{q["difficulty"]:.1f} {q["difficulty_label"]}</span> |
 Bloom: {bloom_label} | 素养: {q.get("primary_competency", "")} ({q.get("competency_level", "")}){qs_text}
@@ -798,16 +871,56 @@ Bloom: {bloom_label} | 素养: {q.get("primary_competency", "")} ({q.get("compet
                     html += f'<li style="font-size:12px;color:#475569">{r}</li>'
                 html += '</ul>'
 
+            # 特征状态提示
+            feat_status = q.get("feature_status", "ok")
+            if feat_status == "partial":
+                html += '<p style="color:#ca8a04;font-size:0.85em">⚠ 部分特征数据（核心维度可用，质量审查缺失）</p>'
+            elif feat_status == "failed":
+                html += '<p style="color:#dc2626;font-size:0.85em">⚠ 特征提取未成功，难度评估可能不准确</p>'
+
+            # SVG 单题雷达图（6 维难度因子）
+            if HAS_SVG_CHARTS and q.get("features"):
+                feats = q["features"]
+                dims = {
+                    "信息负荷": feats.get("working_memory", 2),
+                    "推理步数": feats.get("reasoning_steps", 3),
+                    "推理耦合": feats.get("chain_coupling", 1),
+                    "陷阱密度": feats.get("trap_density", 1),
+                    "情境新颖": feats.get("novelty", 1),
+                    "知识跨度": feats.get("knowledge_breadth", 1),
+                }
+                q_radar = render_radar_chart(dims, size=160)
+                html += f'<div class="chart-inline">{q_radar}</div>'
+
+            # 诊断高亮（细粒度干扰项）
+            if q.get("diagnostic_highlights"):
+                html += '<div class="diagnostics">'
+                for dh in q["diagnostic_highlights"]:
+                    strength_class = "high" if dh.get("trap_strength", 0) >= 3 else "med"
+                    html += f'<div class="trap-item {strength_class}">'
+                    html += f'<span class="trap-option">{dh.get("option", "?")}</span>'
+                    html += f'<span class="trap-desc">{dh.get("misconception", "")}</span>'
+                    html += '</div>'
+                html += '</div>'
+
+            # SEU 知识点拆分表
+            if q.get("seu_knowledge_breakdown"):
+                bloom_labels = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
+                html += '<table class="seu-table"><tr><th>采分点</th><th>分值占比</th><th>知识点</th><th>认知</th><th>素养</th></tr>'
+                for seu in q["seu_knowledge_breakdown"]:
+                    kps = ", ".join(kl.get("knowledge_point", "") for kl in seu.get("knowledge_links", []))
+                    bl = bloom_labels.get(seu.get("bloom_level", 3), "应用")
+                    pct = f"{seu.get('score_share', 0) * 100:.0f}%"
+                    html += f'<tr><td>{seu.get("label", "")}</td><td>{pct}</td><td>{kps}</td><td>{bl}</td><td>{seu.get("competency", "")}</td></tr>'
+                html += '</table>'
+
             # 命题质量审查（v3: 从 feature_extractor 合并）
             quality_items = []
-            if q.get("quality_scientific"):
-                quality_items.append(f"科学性: {q['quality_scientific']}")
-            if q.get("quality_normative"):
-                quality_items.append(f"规范性: {q['quality_normative']}")
-            if q.get("quality_language"):
-                quality_items.append(f"语言表述: {q['quality_language']}")
-            if q.get("quality_context"):
-                quality_items.append(f"情境设计: {q['quality_context']}")
+            for qk, ql in [("quality_scientific", "科学性"), ("quality_normative", "规范性"),
+                            ("quality_language", "语言表述"), ("quality_context", "情境设计")]:
+                qv = q.get(qk, "")
+                if qv and "无明显问题" not in qv and "无问题" not in qv:
+                    quality_items.append(f"{ql}: {qv}")
             if quality_items:
                 html += '<p><strong>命题质量:</strong></p><ul>'
                 for qi in quality_items:
@@ -860,6 +973,17 @@ def _render_diagnostics_summary(data: dict) -> str:
     if bal.get("missing"):
         html += f'<p style="color:#dc2626"><strong>素养缺失：</strong>{"、".join(bal["missing"])}</p>'
 
+    alloc = diag.get("allocation_reliability", {})
+    if alloc.get("rating"):
+        r = alloc["rating"]
+        r_color = {"高": "#16a34a", "中": "#ca8a04", "低": "#dc2626"}.get(r, "#333")
+        html += f'<p><strong>分值归因可靠性：</strong><span style="color:{r_color}">{r}</span>'
+        html += f'（共 {alloc.get("total_seus", 0)} 个采分单元，推断占比 {alloc.get("inferred_pct", 0):.1f}%）</p>'
+        lc = alloc.get("low_confidence_seus", [])
+        if lc:
+            labels = [f'Q{s.get("question_id", "?")}-{s.get("seu_id", "?")}({s.get("confidence", 0):.0%})' for s in lc[:3]]
+            html += f'<p style="color:#6b7280;font-size:0.9em">低置信度单元：{"、".join(labels)}</p>'
+
     html += '</div>'
     return html
 
@@ -899,6 +1023,19 @@ def _render_quality_overview_section(data: dict) -> str:
 
     html = '<h2>六、命题质量总览</h2>'
     html += _render_diagnostics_summary(data)
+
+    # SVG 质量评分条形图
+    if HAS_SVG_CHARTS and questions:
+        bar_items = []
+        for q in questions:
+            qs = q.get("quality_score")
+            if qs:
+                score_val = qs * 20  # 1-5 -> 20-100
+                color = "#059669" if score_val >= 80 else "#d97706" if score_val >= 60 else "#dc2626"
+                bar_items.append({"label": f"Q{q.get('id', '?')}", "value": score_val, "color": color})
+        if bar_items:
+            bars_svg = render_horizontal_bars(bar_items, max_val=100, width=600, title="命题质量评分")
+            html += f'<div class="chart-container">{bars_svg}</div>'
 
     # 总评卡片
     html += f'''<div class="metrics-grid">
@@ -944,6 +1081,63 @@ def _render_quality_overview_section(data: dict) -> str:
     return html
 
 
+
+def _render_specification_table(data: dict, mode: str) -> str:
+    """渲染双向细目表：知识点(行) x Bloom层级(列) → 分值"""
+    BLOOM_COLS = ["识记", "理解", "应用", "分析", "评价", "创造"]
+    BLOOM_MAP = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
+    table = {}  # {kp: {bloom: score}}
+    for q in data.get("questions", []):
+        fg = q.get("fine_grained") or q.get("_fine_grained") or {}
+        if not fg:
+            a = q.get("analysis") if isinstance(q, dict) else {}
+            if isinstance(a, dict):
+                fg = a.get("_fine_grained", {})
+        q_score = q.get("total_score", 0) or 1
+        for seu in (fg.get("scoring_units") or []):
+            bloom = BLOOM_MAP.get(seu.get("bloom_level", 3), "应用")
+            seu_score = q_score * seu.get("score_share", 0)
+            for kl in seu.get("knowledge_links", []):
+                kp = kl.get("knowledge_point", kl.get("point", ""))
+                if not kp:
+                    continue
+                score = seu_score * kl.get("share", 1.0)
+                if kp not in table:
+                    table[kp] = {}
+                table[kp][bloom] = round(table[kp].get(bloom, 0) + score, 2)
+    if not table:
+        return ""
+    # Sort by total score desc
+    sorted_kps = sorted(table.items(), key=lambda x: sum(x[1].values()), reverse=True)
+    html = '<h2 style="page-break-before:always">附、双向细目表（知识点 × 认知层级）</h2>'
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:10px">'
+    html += '<tr style="background:#1e293b;color:white"><th style="padding:6px;text-align:left">知识点</th>'
+    for col in BLOOM_COLS:
+        html += f'<th style="padding:6px;text-align:center;min-width:45px">{col}</th>'
+    html += '<th style="padding:6px;text-align:center">合计</th></tr>'
+    col_totals = {c: 0 for c in BLOOM_COLS}
+    for i, (kp, scores) in enumerate(sorted_kps[:30]):
+        bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+        row_total = sum(scores.values())
+        html += f'<tr style="background:{bg}"><td style="padding:4px 6px;border-bottom:1px solid #e2e8f0">{kp[:25]}</td>'
+        for col in BLOOM_COLS:
+            v = scores.get(col, 0)
+            col_totals[col] += v
+            cell = f"{v:.1f}" if v > 0 else ""
+            html += f'<td style="padding:4px;text-align:center;border-bottom:1px solid #e2e8f0">{cell}</td>'
+        html += f'<td style="padding:4px;text-align:center;border-bottom:1px solid #e2e8f0;font-weight:600">{row_total:.1f}</td></tr>'
+    # Total row
+    grand = sum(col_totals.values())
+    html += '<tr style="background:#f1f5f9;font-weight:600"><td style="padding:6px">合计</td>'
+    for col in BLOOM_COLS:
+        html += f'<td style="padding:4px;text-align:center">{col_totals[col]:.1f}</td>'
+    html += f'<td style="padding:4px;text-align:center">{grand:.1f}</td></tr>'
+    html += '</table>'
+    if len(sorted_kps) > 30:
+        html += f'<p style="font-size:11px;color:#94a3b8">（仅展示分值最高的 30 项，共 {len(sorted_kps)} 项）</p>'
+    return html
+
+
 def _render_recommendations_section(insights: dict, mode: str) -> str:
     """渲染综合建议 section"""
     html = '<h2>八、综合建议</h2>'
@@ -962,6 +1156,38 @@ def _render_recommendations_section(insights: dict, mode: str) -> str:
 </div>'''
 
     return html
+
+
+def _render_metadata_quality_summary(data: dict) -> str:
+    """Render metadata governance quality signals."""
+    quality = data.get("metadata_quality") or {}
+    if not quality:
+        return ""
+
+    low = quality.get("low_confidence_questions", [])
+    warnings = quality.get("warning_questions", [])
+    call_counts = quality.get("llm_call_counts", {})
+    missing = quality.get("missing_envelope_questions", [])
+
+    low_text = "、".join(f"Q{qid}" for qid in low) if low else "无"
+    missing_text = "、".join(f"Q{qid}" for qid in missing) if missing else "无"
+    warning_items = []
+    for item in warnings[:5]:
+        if not isinstance(item, dict):
+            continue
+        warning_items.append(
+            f"Q{item.get('id', '?')}: {', '.join(str(w) for w in item.get('warnings', []))}"
+        )
+    warning_text = "；".join(warning_items) if warning_items else "无"
+    calls_text = "，".join(f"{k}: {v}" for k, v in sorted(call_counts.items())) if call_counts else "无"
+
+    return f'''<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:14px;margin:14px 0">
+<h3 style="margin:0 0 8px;color:#334155">元数据治理</h3>
+<p><strong>低置信度题目：</strong>{low_text}</p>
+<p><strong>元数据警告：</strong>{warning_text}</p>
+<p><strong>缺失 Envelope：</strong>{missing_text}</p>
+<p style="font-size:12px;color:#64748b"><strong>LLM 调用计数：</strong>{calls_text}</p>
+</div>'''
 
 
 def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
@@ -988,8 +1214,43 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
 <div class="metric-card"><div class="metric-value">{metrics["avg_cognitive_level"]:.2f}</div><div class="metric-label">平均认知层级</div></div>
 <div class="metric-card"><div class="metric-value">{exam["total_score"]}</div><div class="metric-label">总分</div></div>
 <div class="metric-card"><div class="metric-value">{exam["total_questions"]}</div><div class="metric-label">题目数</div></div>
-</div>
-<div class="insight-box">{insights.get("overall_assessment", "")}</div>'''
+	</div>
+	<div class="insight-box">{insights.get("overall_assessment", "")}</div>'''
+    section1 += _render_metadata_quality_summary(data)
+
+    # SVG 6 维全卷均值雷达图
+    fp = data.get("feature_profile", {})
+    avg_dims = fp.get("avg_per_dimension", {})
+    has_valid_features = avg_dims and any(v > 0 for v in avg_dims.values())
+    if HAS_SVG_CHARTS and has_valid_features:
+        _DIM_MAP = {
+            "bloom": "认知层级",
+            "reasoning_steps": "推理步数",
+            "knowledge_breadth": "知识跨度",
+            "info_density": "信息负荷",
+            "novelty": "情境新颖",
+            "representation_complexity": "表征复杂度",
+        }
+        radar_dims: Dict[str, float] = {}
+        for eng_key, val in avg_dims.items():
+            cn = _DIM_MAP.get(eng_key)
+            if cn:
+                radar_dims[cn] = max(radar_dims.get(cn, 0), val)
+        if radar_dims:
+            radar_svg = render_radar_chart(radar_dims, size=220, title="难度因子全卷均值")
+            section1 += f'<div class="chart-container">{radar_svg}</div>'
+    elif not has_valid_features:
+        section1 += '<p style="color:#ca8a04">⚠ 特征提取未成功，难度因子雷达图暂不可用</p>'
+
+    # 细粒度汇总
+    fgs = data.get("fine_grained_summary", {})
+    if fgs.get("total_seus", 0) > 0:
+        section1 += '<div class="fg-summary">'
+        section1 += f'<p>细粒度分析：共识别 {fgs["total_seus"]} 个采分证据单元、{fgs["total_dus"]} 个诊断干扰单元</p>'
+        section1 += f'<p>分析置信度：{fgs["avg_allocation_confidence"]:.0%}'
+        if fgs.get("inferred_score_pct", 0) > 0:
+            section1 += f' | 推断分配占比：{fgs["inferred_score_pct"]:.1f}%'
+        section1 += '</p></div>'
 
     sections = [css, cover, section1]
     sections.append(_render_difficulty_section(data, insights, charts, mode))
@@ -998,6 +1259,7 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
     sections.append(_render_competency_section(data, insights, charts, mode))
     sections.append(_render_quality_overview_section(data))
     sections.append(_render_questions_section(data, insights, mode))
+    sections.append(_render_specification_table(data, mode))
     sections.append(_render_recommendations_section(insights, mode))
 
     # Footer

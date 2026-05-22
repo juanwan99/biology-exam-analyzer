@@ -26,7 +26,7 @@ class GaokaoExtractorV2:
         self.api_key = api_key
         self.api_base = api_base or "https://www.chataiapi.com/v1"
         self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
-        self.model = "gemini-2.5-flash-preview-05-20-nothinking"
+        self.model = "deepseek-chat"
         self.parser = WordParserV2()
 
         # API 频率控制
@@ -300,7 +300,7 @@ class GaokaoExtractorV2:
         return [{"role": "user", "content": content}]
 
     def _call_api(self, messages: list) -> List[Dict]:
-        """调用 Gemini API"""
+        """调用 AI API"""
         self._wait_if_needed()
 
         try:
@@ -395,11 +395,11 @@ class GaokaoExtractorV2:
 
 def test_extractor():
     """测试提取器"""
-    api_key = os.environ.get("GEMINI_API_KEY")
-    api_base = os.environ.get("GEMINI_API_BASE")
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_base = os.environ.get("DEEPSEEK_API_BASE")
 
     if not api_key:
-        print("请设置 GEMINI_API_KEY 环境变量")
+        print("请设置 DEEPSEEK_API_KEY 环境变量")
         return
 
     extractor = GaokaoExtractorV2(api_key, api_base)

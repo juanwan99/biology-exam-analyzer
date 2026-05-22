@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 批量处理所有教材 PDF
-使用 Gemini 2.5 Flash 视觉模型提取Markdown并生成向量
+使用 AI 2.5 Flash 视觉模型提取Markdown并生成向量
 """
 import asyncio
 import os
@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 # 设置环境变量
-os.environ.setdefault('GEMINI_API_KEY_2', os.environ.get('GEMINI_API_KEY', ''))
-os.environ.setdefault('GEMINI_API_BASE', os.environ.get('GEMINI_API_BASE', ''))
+os.environ.setdefault('DEEPSEEK_API_KEY_2', os.environ.get('DEEPSEEK_API_KEY', ''))
+os.environ.setdefault('DEEPSEEK_API_BASE', os.environ.get('DEEPSEEK_API_BASE', ''))
 
 from vision_processor import VisionProcessor
 

@@ -1,6 +1,6 @@
 """难度量化 Pipeline 主控 — 特征分析评分。
 
-v2: 特征提取 + 规则评分 + Gemini representation 合并 + 动态 confidence
+v2: 特征提取 + 规则评分 + 多模态 representation 合并 + 动态 confidence
 v3.1: 大题结构化拆分评估（total_score >= 8 → 结构化提取 → 聚合 → 评分）
 设计文档: docs/plans/2026-03-28-difficulty-v3.1-design.md
 """
@@ -53,7 +53,7 @@ class DifficultyPipeline:
     """难度量化 Pipeline。v3.1: 大题结构化拆分评估。"""
 
     def __init__(self, **kwargs):
-        """初始化。接受 kwargs 以兼容旧调用方 DifficultyEngine(gemini_analyzer=...) 签名。"""
+        """初始化。接受 kwargs 以兼容旧调用方签名。"""
         pass
 
     async def _evaluate_single(self, question: dict, **kwargs) -> dict:
@@ -61,7 +61,7 @@ class DifficultyPipeline:
 
         Args:
             question: dict，需包含 content, question_type, correct_answer, total_score
-            **kwargs: analysis_result=Gemini 分析结果（含 representation 字段）
+            **kwargs: analysis_result=多模态分析结果（含 representation 字段）
 
         Returns:
             dict: 兼容旧接口 + 新增 features/flags/confidence 字段
@@ -134,28 +134,38 @@ class DifficultyPipeline:
                         fallback_score = seu_metrics["score"]
                         fallback_score = max(2.0, min(10.0, round(fallback_score, 1)))
                         label = score_to_label(fallback_score)
-                        logger.info(f"[v3.1] SEU fallback 评分: {fallback_score} ({label})")
-                        return {
-                            "base_difficulty": fallback_score,
-                            "final_difficulty": fallback_score,
-                            "difficulty_label": label,
-                            "cognitive_level": round(fallback_score * 0.9, 1),
-                            "cognitive_level_source": "linear_approximation",
-                            "score_distribution_by_difficulty": self._score_distribution(fallback_score, total_score),
-                            "features": {
-                                "_feature_status": "seu_fallback",
-                                "big_question_failure_type": failure_type,
-                                "seu_count": len(seus),
-                            },
-                            "raw_score": fallback_score,
-                            "source": "seu_fallback",
-                            "difficulty_source": "seu_fallback",
-                            "confidence": min(0.5, round(seu_metrics["avg_confidence"] * 0.5, 2)),
-                            "predicted_score_rate": None,
-                            "flags": ["seu_fallback", f"original_failure:{failure_type}"],
-                            "calibration_status": "not_configured",
-                            "calibration_error": None,
-                        }
+                        # Quality gate: block SEU fallback for suspiciously short content.
+                        # quality_score is unavailable when big_question extraction fails;
+                        # content length is a pragmatic proxy for parse-failure detection.
+                        content_len = len(question_text.strip())
+                        if content_len < 30:
+                            logger.error(
+                                f"[v3.1] SEU fallback 内容过短({content_len}字)，"
+                                "疑似解析失败，阻断"
+                            )
+                        else:
+                            logger.info(f"[v3.1] SEU fallback 评分: {fallback_score} ({label})")
+                            return {
+                                "base_difficulty": fallback_score,
+                                "final_difficulty": fallback_score,
+                                "difficulty_label": label,
+                                "cognitive_level": round(fallback_score * 0.9, 1),
+                                "cognitive_level_source": "linear_approximation",
+                                "score_distribution_by_difficulty": self._score_distribution(fallback_score, total_score),
+                                "features": {
+                                    "_feature_status": "seu_fallback",
+                                    "big_question_failure_type": failure_type,
+                                    "seu_count": len(seus),
+                                },
+                                "raw_score": fallback_score,
+                                "source": "seu_fallback",
+                                "difficulty_source": "seu_fallback",
+                                "confidence": min(0.5, round(seu_metrics["avg_confidence"] * 0.5, 2)),
+                                "predicted_score_rate": None,
+                                "flags": ["seu_fallback", f"original_failure:{failure_type}"],
+                                "calibration_status": "not_configured",
+                                "calibration_error": None,
+                            }
                     else:
                         logger.warning("[v3.1] SEU fallback 置信度不足，仍阻断")
 
@@ -211,7 +221,7 @@ class DifficultyPipeline:
             if isinstance(llm_bloom, (int, float)) and 1 <= llm_bloom <= 6:
                 features["bloom"] = int(llm_bloom)
 
-        # Stage 2.5: 合并 Gemini representation
+        # Stage 2.5: 合并多模态 representation
         flags = []
         if is_big_question and structured and structured.get("_dropped_deps", 0) > 0:
             flags.append("dep_partial_invalid")
@@ -407,31 +417,31 @@ class DifficultyPipeline:
 
     def _merge_representation(self, features: dict, analysis_result: dict,
                               flags: list) -> tuple:
-        """合并 Gemini 的 representation 数据到 Claude 特征中。
+        """合并多模态分析的 representation 数据到特征中。
 
-        只有当 Gemini 说 representation_is_core_to_solving=True 时才覆盖。
+        只有当多模态分析确认 representation_is_core_to_solving=True 时才覆盖。
         """
         if not analysis_result:
             return features, flags
 
-        gemini_repr = analysis_result.get("representation_complexity")
-        gemini_core = analysis_result.get("representation_is_core_to_solving", False)
+        mm_repr = analysis_result.get("representation_complexity")
+        mm_core = analysis_result.get("representation_is_core_to_solving", False)
 
-        if gemini_repr is None:
+        if mm_repr is None:
             return features, flags
 
-        claude_repr = features.get("representation_complexity", 1)
+        text_repr = features.get("representation_complexity", 1)
 
-        if gemini_core:
-            # Gemini 确认表征参与核心推理 → 用 Gemini 值
-            if abs(gemini_repr - claude_repr) > 1:
+        if mm_core:
+            # 多模态确认表征参与核心推理 → 用多模态值
+            if abs(mm_repr - text_repr) > 1:
                 flags.append("repr_divergence")
                 logger.warning(
-                    f"Gemini/Claude representation 分歧: Gemini={gemini_repr} Claude={claude_repr}")
-            features["representation_complexity"] = gemini_repr
+                    f"多模态/文本 representation 分歧: mm={mm_repr} text={text_repr}")
+            features["representation_complexity"] = mm_repr
         else:
-            # Gemini 说不参与核心推理 → 取两者较低值
-            features["representation_complexity"] = min(claude_repr, gemini_repr)
+            # 多模态分析说不参与核心推理 → 取两者较低值
+            features["representation_complexity"] = min(text_repr, mm_repr)
 
         return features, flags
 

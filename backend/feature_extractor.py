@@ -435,7 +435,7 @@ def build_big_question_prompt(question_text: str, options: str = "",
       "score_share": 该小问占总分的比例(0.0-1.0的浮点数，所有小问之和=1.0),
       "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
       "reasoning_steps": 正整数（该小问最少认知操作数），
-      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径或答题方向数。选择题：有效干扰选项数。非选择题：需排除的错误假设/机制/解释的数量。例如蛋白不在上清需排除2+原因(包涵体/未分泌/降解)→trap>=2；PCR引物方向判断需从多个引物中选配→trap>=2），
       "novelty": 1-3（知识/方法新颖度），
       "knowledge_breadth": 1-3（跨知识模块程度），
       "brief": "核心任务(<=20字)"
@@ -503,7 +503,9 @@ _SQ_RANGES = {
 def _derive_points_from_score_share(subquestions: list, total_score: float) -> list:
     """Derive integer points from score_share, ensuring sum == total_score exactly.
 
-    Uses largest-remainder method for fair rounding.
+    Uses largest-remainder method for fair rounding, then enforces minimum 1 point
+    per subquestion while preserving the sum==total_score invariant by reducing
+    points from the largest subquestions.
     """
     raw_points = [sq["score_share"] * total_score for sq in subquestions]
     floored = [int(p) for p in raw_points]
@@ -514,10 +516,29 @@ def _derive_points_from_score_share(subquestions: list, total_score: float) -> l
     for j in range(int(deficit)):
         if j < len(remainders):
             floored[remainders[j][1]] += 1
-    # Ensure minimum 1 point per subquestion
+    # Ensure minimum 1 point per subquestion.
+    # Any point added here creates excess that must be removed from the largest
+    # subquestions so that sum(points) == round(total_score) is preserved.
     for i in range(len(floored)):
         if floored[i] < 1:
             floored[i] = 1
+    target = round(total_score)
+    excess = sum(floored) - target
+    if excess > 0:
+        # Reduce from subquestions with the most points, never below 1
+        for _ in range(excess):
+            # Find index of largest subquestion that still has > 1 point
+            best_idx = -1
+            best_val = 0
+            for i, v in enumerate(floored):
+                if v > 1 and v > best_val:
+                    best_val = v
+                    best_idx = i
+            if best_idx == -1:
+                # Cannot reduce further (all at 1); sum invariant cannot be satisfied
+                # with min-1 and the given total_score — leave as-is
+                break
+            floored[best_idx] -= 1
     return floored
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Vision Processor 服务
-使用 Gemini 2.5 Flash 视觉模型从 PDF 页面提取 Markdown 文本
+使用 Qwen-VL 视觉模型从 PDF 页面提取 Markdown 文本
 """
 import os
 import base64
@@ -22,10 +22,10 @@ logger = get_logger()
 # 数据库配置
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://biology:biology123@postgres:5432/biology_edu")
 
-# Gemini API配置
-API_KEY = os.environ.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY", ""))
-API_BASE = os.environ.get("GEMINI_API_BASE", "")
-VISION_MODEL = "gemini-2.5-flash"
+# 视觉模型 API 配置
+API_KEY = os.environ.get("QWEN_API_KEY_2", os.environ.get("QWEN_API_KEY", ""))
+API_BASE = os.environ.get("QWEN_API_BASE", "")
+VISION_MODEL = "qwen-vl-max"
 
 # 提示词
 EXTRACTION_PROMPT = """你是一个专业的教材数字化专家。请阅读这张图片，将其内容转换为标准的 Markdown 格式。
@@ -121,7 +121,7 @@ class VisionProcessor:
         timeout: float = 120.0
     ) -> Optional[str]:
         """
-        使用 Gemini Vision 从图片提取 Markdown
+        使用 Qwen-VL 从图片提取 Markdown
         """
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -304,7 +304,7 @@ class VisionProcessor:
                 # 转换为图片
                 img_base64 = self.pdf_page_to_image(doc, page_num)
 
-                # 调用Gemini提取Markdown
+                # 调用AI提取Markdown
                 markdown = await self.extract_page_markdown(img_base64, page_num)
 
                 if not markdown:

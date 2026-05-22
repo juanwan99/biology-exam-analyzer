@@ -64,9 +64,9 @@ nano .env
 
 填入以下内容（请替换为您的实际API密钥）：
 ```env
-# Gemini API配置
-GEMINI_API_KEY=your_api_key_here
-GEMINI_API_BASE=https://www.chataiapi.com/v1
+# DeepSeek API配置
+DEEPSEEK_API_KEY=your_api_key_here
+DEEPSEEK_API_BASE=https://api.deepseek.com/v1
 
 # 管理员密码
 ADMIN_PASSWORD=your_admin_password_here

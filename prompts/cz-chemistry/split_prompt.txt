@@ -1,6 +1,6 @@
 # Subject: cz-chemistry
 # Purpose: 试卷图片拆分为单独题目（OCR + 结构识别）
-# Source: backend/gemini_analyzer.py::_get_default_split_prompt()
+# 拆题提示词
 # Variables: none (image content is provided as separate message parts)
 请分析这份初中化学试卷，将其拆分为单独的题目。
 

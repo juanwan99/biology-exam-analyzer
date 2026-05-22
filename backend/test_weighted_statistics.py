@@ -58,14 +58,24 @@ class TestWeightedAvgDifficulty:
         result = generate_exam_statistics(questions, {})
         assert result["avg_difficulty"] == 6.5
 
-    def test_zero_total_score_fallback(self):
-        """total_score=0 时 fallback 等权=1，不崩溃"""
+    def test_zero_total_score_is_excluded_and_reported(self):
+        """total_score=0 不再等权补 1；应从加权均值排除并进入质量元数据。"""
         questions = [
             _make_question(1, 5.0, 5.0, 0),
         ]
         result = generate_exam_statistics(questions, {})
-        # fallback 等权: 5.0*1/1 = 5.0
-        assert result["avg_difficulty"] == 5.0
+        assert result["avg_difficulty"] == 0
+        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["score_quality"]["score_issue_questions"]
+
+    def test_invalid_score_does_not_pollute_valid_weighted_average(self):
+        questions = [
+            _make_question(1, 9.0, 9.0, 0),
+            _make_question(2, 1.0, 1.0, 10),
+        ]
+        result = generate_exam_statistics(questions, {})
+        assert result["avg_difficulty"] == 1.0
+        assert result["avg_cognitive_level"] == 1.0
+        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["score_quality"]["score_issue_questions"]
 
 
 class TestWeightedAvgCognitive:
@@ -179,8 +189,8 @@ class TestWeightedCompetency:
         result = analyzer.aggregate_exam_competencies(questions)
         assert result["生命观念"]["占比"] == 0.4
 
-    def test_no_score_fallback(self):
-        """无 _total_score 时回退等权"""
+    def test_no_score_is_not_counted_as_equal_weight(self):
+        """无 _total_score 时不再回退等权。"""
         from competency_analyzer import CompetencyAnalyzer
         analyzer = CompetencyAnalyzer.__new__(CompetencyAnalyzer)
 
@@ -192,7 +202,7 @@ class TestWeightedCompetency:
              "primary_competency": "生命观念"},
         ]
         result = analyzer.aggregate_exam_competencies(questions)
-        assert result["生命观念"]["占比"] == 0.8
+        assert result["生命观念"]["占比"] == 0
 
 
 class TestReportGeneratorWeighted:

@@ -1,17 +1,17 @@
-"""LLM Provider 配置 — Vertex AI Gemini 2.5 Pro（主力） + DeepSeek V4 Pro（fallback）。
+"""LLM Provider 配置 — DeepSeek（主力文本分析） + Qwen-VL（视觉识别）。
 
 所有 LLM 调用通过 llm_client.py 统一路由，按此列表顺序尝试。
-Vertex AI 走 HTTPS_PROXY 环境变量代理到 Google API（GCP $1000 赠金）。
+支持多 provider fallback 链，按优先级自动切换。
 """
 import os
 
 PROVIDERS = [
     {
-        "name": "vertex",
-        "model": "gemini-2.5-pro",
-        "api_format": "vertex_genai",
+        "name": "primary",
+        "model": "deepseek-chat",
+        "api_format": "genai_sdk",
         "sa_file_env": "GOOGLE_APPLICATION_CREDENTIALS",
-        "project_env": "VERTEX_AI_PROJECT",
+        "project_env": "GCP_PROJECT",
         "location": "us-central1",
         "max_tokens": 16384,
         "thinking_overhead": 3,

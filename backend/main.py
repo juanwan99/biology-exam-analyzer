@@ -13,7 +13,7 @@ import aiofiles
 from logger import get_logger
 from middleware import RequestIdMiddleware
 from config import UPLOAD_DIR, LOG_DIR, PROMPT_DIR, RULES_DIR, REPORTS_DIR
-from deps import get_gemini_analyzer
+from deps import get_analyzer
 from llm_config import get_providers
 from exceptions import (
     BiologyAnalyzerError,
@@ -160,7 +160,7 @@ async def health_check():
     return {
         "status": status,
         "timestamp": datetime.now().isoformat(),
-        "gemini_configured": len(get_providers()) > 0,
+        "llm_configured": len(get_providers()) > 0,
         "llm_providers": len(get_providers()),
         "database": "ok" if db_ok else "unreachable"
     }

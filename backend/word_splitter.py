@@ -26,6 +26,7 @@ class Question:
     content: str
     images: List[Dict[str, Any]]  # 图片列表
     tables: List[Dict[str, Any]]  # 表格列表
+    media: List[Dict[str, Any]]  # 按文档顺序保存图片和表格
     warnings: List[str]
     section_header: Optional[str] = None  # 分节标题
 
@@ -39,6 +40,8 @@ class WordQuestionSplitter:
         (r'^\((\d+)\)\s*', 0.9, 'parenthesis'),    # (1)
         (r'^([一二三四五六七八九十]+)[.、]\s*', 0.8, 'chinese'),  # 一、
     ]
+    TABLE_CUE_PATTERN = re.compile(r"(如下表|下表|结果如下表|表中|表格|表\s*\d+|table)", re.IGNORECASE)
+    IMAGE_CUE_PATTERN = re.compile(r"(如下图|下图|如图|图中|图\s*\d+|曲线|电泳|figure|fig)", re.IGNORECASE)
 
     def __init__(self):
         logger.info("[Word拆分器] 初始化完成")
@@ -95,11 +98,11 @@ class WordQuestionSplitter:
                 para = DocxParagraph(element, doc)
                 text = para.text.strip()
 
-                if not text:
-                    continue
-
                 # 提取段落中的图片
                 images = self._extract_images_from_paragraph(para, doc)
+
+                if not text and not images:
+                    continue
 
                 elements.append({
                     "type": "paragraph",
@@ -112,10 +115,12 @@ class WordQuestionSplitter:
                 # 表格
                 table = DocxTable(element, doc)
                 table_image = self._table_to_image(table)
+                table_text = self._table_to_markdown(table)
 
                 elements.append({
                     "type": "table",
                     "image_base64": table_image,
+                    "text": table_text,
                     "element": table
                 })
 
@@ -183,6 +188,34 @@ class WordQuestionSplitter:
         # 如果不是标准图片格式，记录前几个字节用于调试
         logger.debug(f"[图片验证] 未知格式，magic bytes: {image_bytes[:16].hex()}")
         return False
+
+    @staticmethod
+    def _table_to_markdown(table: DocxTable) -> str:
+        """将 Word 表格转为 Markdown 文本。"""
+        if not table.rows:
+            return ""
+        rows_data = []
+        for row in table.rows:
+            row_data = []
+            prev_tc = None
+            for cell in row.cells:
+                if cell._tc is prev_tc:
+                    continue  # skip merged cell duplicate
+                prev_tc = cell._tc
+                row_data.append(cell.text.strip().replace("\n", " "))
+            rows_data.append(row_data)
+        if not rows_data:
+            return ""
+        max_cols = max(len(r) for r in rows_data)
+        for row in rows_data:
+            while len(row) < max_cols:
+                row.append("")
+        lines = []
+        lines.append("| " + " | ".join(rows_data[0]) + " |")
+        lines.append("|" + "|".join(["---" for _ in rows_data[0]]) + "|")
+        for row in rows_data[1:]:
+            lines.append("| " + " | ".join(row) + " |")
+        return "\n".join(lines)
 
     def _table_to_image(self, table: DocxTable) -> str:
         """
@@ -296,6 +329,10 @@ class WordQuestionSplitter:
                         content=text,
                         images=element["images"].copy(),
                         tables=[],
+                        media=[
+                            {"type": "image", "base64": img_base64}
+                            for img_base64 in element["images"]
+                        ],
                         warnings=[],
                         section_header=current_section_header  # 附加分节标题
                     )
@@ -303,8 +340,13 @@ class WordQuestionSplitter:
                 else:
                     # 题目内容追加
                     if current_question:
-                        current_question.content += "\n" + text
+                        if text:
+                            current_question.content += "\n" + text
                         current_question.images.extend(element["images"])
+                        current_question.media.extend(
+                            {"type": "image", "base64": img_base64}
+                            for img_base64 in element["images"]
+                        )
 
             elif element["type"] == "table":
                 # 表格归属到当前题目
@@ -312,6 +354,14 @@ class WordQuestionSplitter:
                     current_question.tables.append({
                         "image_base64": element["image_base64"]
                     })
+                    current_question.media.append({
+                        "type": "table",
+                        "base64": element["image_base64"]
+                    })
+                    # Append table markdown text to content
+                    table_text = element.get("text", "")
+                    if table_text:
+                        current_question.content += "\n" + table_text
 
         # 添加最后一道题
         if current_question:
@@ -403,19 +453,25 @@ class WordQuestionSplitter:
         # 组装media数据（仅供AI分析）
         media_for_ai = []
 
-        # 添加图片
-        for img_base64 in question.images:
-            media_for_ai.append({
-                "type": "image",
-                "base64": img_base64
-            })
+        for item in question.media:
+            if item.get("type") in ("image", "table") and item.get("base64"):
+                media_for_ai.append({
+                    "type": item["type"],
+                    "base64": item["base64"]
+                })
 
-        # 添加表格（截图）
-        for table in question.tables:
-            media_for_ai.append({
-                "type": "table",
-                "base64": table["image_base64"]
-            })
+        table_count = sum(1 for item in media_for_ai if item["type"] == "table")
+        image_count = sum(1 for item in media_for_ai if item["type"] == "image")
+        expected_table = bool(self.TABLE_CUE_PATTERN.search(question.content or ""))
+        expected_image = bool(self.IMAGE_CUE_PATTERN.search(question.content or ""))
+        integrity_warnings = []
+        if expected_table and table_count == 0:
+            integrity_warnings.append("table_media_missing")
+        if expected_image and image_count == 0:
+            integrity_warnings.append("image_media_missing")
+        for warning in integrity_warnings:
+            if warning not in question.warnings:
+                question.warnings.append(warning)
 
         return {
             "id": question.id,
@@ -427,5 +483,13 @@ class WordQuestionSplitter:
 
             # 内部使用，不发给前端
             "_media_for_ai": media_for_ai,
+            "media_integrity": {
+                "status": "ok" if not integrity_warnings else "failed",
+                "expected_table": expected_table,
+                "expected_image": expected_image,
+                "actual_tables": table_count,
+                "actual_images": image_count,
+                "warnings": integrity_warnings,
+            },
             "_section_header": question.section_header  # 分节标题（如"一、单选题（1-15题，每题2分，共30分）"）
         }

@@ -8,7 +8,7 @@
 - GET  /api/admin/logs              — 获取日志内容
 - GET  /api/admin/logs/download/{d} — 下载日志文件
 - GET  /api/admin/logs/list         — 列出所有日志文件
-- GET  /api/reports/{filename}      — 下载 PDF 报告
+- GET  /api/reports/{filename}      — 下载 PDF / 查看 HTML 报告
 - GET  /uploads/{path:path}         — 静态上传文件访问
 """
 import hmac
@@ -189,13 +189,13 @@ async def run_calibration_api(admin_ok=Depends(verify_admin)):
 @router.get("/api/reports/{filename}")
 async def download_report(filename: str):
     """
-    下载生成的PDF报告
+    下载生成的 PDF 报告或查看 HTML 报告
 
     Args:
-        filename: PDF文件名（如: 20251019_143022.pdf）
+        filename: 报告文件名（如: 20251019_143022.pdf / .html）
 
     Returns:
-        PDF文件下载响应
+        报告文件响应
     """
     logger.info(f"请求下载报告: {filename}")
 
@@ -210,7 +210,22 @@ async def download_report(filename: str):
         logger.warning(f"报告文件不存在: {report_path}")
         raise HTTPException(404, "报告文件不存在")
 
+    suffix = report_path.suffix.lower()
+    if suffix not in {".pdf", ".html"}:
+        raise HTTPException(400, "不支持的报告类型")
+
     logger.info(f"返回报告文件: {report_path}")
+    if suffix == ".html":
+        return FileResponse(
+            report_path,
+            media_type='text/html; charset=utf-8',
+            filename=filename,
+            headers={
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+            }
+        )
+
     return FileResponse(
         report_path,
         media_type='application/pdf',

@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 内置 DeepSeek + Vertex AI fallback 链。
+"""统一 LLM 客户端 — 内置多 provider fallback 链（DeepSeek 主力）。
 
 所有 LLM 调用都通过 llm_call() 入口，自动按 llm_config.PROVIDERS 顺序尝试。
 每次调用独立 fallback，不是整卷切换。
@@ -13,7 +13,7 @@ logger = get_logger()
 
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
-_vertex_client = None
+_genai_client = None
 
 
 async def close_llm_clients():
@@ -163,38 +163,46 @@ def _build_request_body(provider: dict, messages: list, max_tokens: int,
 
 
 def _extract_text(api_format: str, data: dict) -> str:
-    """从 API 响应中提取文本。"""
+    """从 API 响应中提取文本。空内容视为失败抛出异常。"""
+    text = None
     if api_format == "anthropic":
-        return data["content"][0]["text"]
+        text = data["content"][0]["text"]
     elif api_format == "openai_responses":
         for item in data.get("output", []):
             if item.get("type") == "message":
                 for block in item.get("content", []):
                     if block.get("type") == "output_text":
-                        return block["text"]
-        return data["output"][0]["content"][0]["text"]
+                        text = block["text"]
+                        break
+                if text is not None:
+                    break
+        if text is None:
+            text = data["output"][0]["content"][0]["text"]
     else:  # openai_chat
-        return data["choices"][0]["message"]["content"]
+        text = data["choices"][0]["message"]["content"]
+    if not text or not text.strip():
+        raise RuntimeError("LLM 返回空内容，视为失败触发 fallback")
+    return text
 
 
-# ── Vertex AI SDK ────────────────────────────────────────────────
+# ── 备用 provider SDK ────────────────────────────────────────────────
 
-def _get_vertex_client(provider: dict):
-    global _vertex_client
-    if _vertex_client is None:
+def _get_genai_client(provider: dict):
+    global _genai_client
+    if _genai_client is None:
         from google import genai
         project = os.environ.get(provider.get("project_env", ""), "")
         location = provider.get("location", "us-central1")
-        _vertex_client = genai.Client(
+        _genai_client = genai.Client(
             vertexai=True,
             project=project,
             location=location,
         )
-    return _vertex_client
+    return _genai_client
 
 
-def _convert_messages_to_gemini(messages: list) -> tuple:
-    """OpenAI Chat messages → Gemini (contents, system_instruction)。"""
+def _convert_messages_to_genai(messages: list) -> tuple:
+    """OpenAI Chat messages → genai (contents, system_instruction)。"""
     contents = []
     system_instruction = None
     for msg in messages:
@@ -203,7 +211,7 @@ def _convert_messages_to_gemini(messages: list) -> tuple:
             if isinstance(msg["content"], str):
                 system_instruction = msg["content"]
             continue
-        gemini_role = "model" if role == "assistant" else "user"
+        genai_role = "model" if role == "assistant" else "user"
         parts = []
         content = msg["content"]
         if isinstance(content, str):
@@ -218,17 +226,17 @@ def _convert_messages_to_gemini(messages: list) -> tuple:
                         header, b64data = url.split(",", 1)
                         mime_type = header.split(";")[0].split(":")[1]
                         parts.append({"inline_data": {"mime_type": mime_type, "data": b64data}})
-        contents.append({"role": gemini_role, "parts": parts})
+        contents.append({"role": genai_role, "parts": parts})
     return contents, system_instruction
 
 
-async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
+async def _call_genai_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float = 120.0) -> str:
-    """调用 Vertex AI Gemini（google-genai SDK），含超时和重试。"""
+    """调用备用 provider（genai SDK），含超时和重试。"""
     from google.genai import types
 
-    client = _get_vertex_client(provider)
-    contents, system_instruction = _convert_messages_to_gemini(messages)
+    client = _get_genai_client(provider)
+    contents, system_instruction = _convert_messages_to_genai(messages)
     thinking_mult = provider.get("thinking_overhead", 1)
     capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
 
@@ -257,23 +265,21 @@ async def _call_vertex_provider(provider: dict, messages: list, max_tokens: int,
                 )
                 text = response.text
                 if text is None:
-                    raise RuntimeError(f"Vertex AI returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
+                    raise RuntimeError(f"Provider returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
                 return text
             except asyncio.TimeoutError:
-                last_err = TimeoutError(f"Vertex AI timeout after {timeout}s")
+                last_err = TimeoutError(f"Provider timeout after {timeout}s")
                 if attempt < retries:
                     wait = 2 ** attempt
-                    logger.warning(f"[LLM] vertex timeout, retry {attempt+1}/{retries} in {wait}s")
+                    logger.warning(f"[LLM] provider timeout, retry {attempt+1}/{retries} in {wait}s")
                     await asyncio.sleep(wait)
                     continue
                 raise last_err
             except Exception as e:
                 last_err = e
-                err_str = str(e)
-                retryable = any(code in err_str for code in ("429", "500", "502", "503", "529", "RESOURCE_EXHAUSTED"))
-                if attempt < retries and retryable:
-                    wait = 2 ** attempt + (2 if "429" in err_str else 0)
-                    logger.warning(f"[LLM] vertex error, retry {attempt+1}/{retries} in {wait}s: {err_str[:80]}")
+                if attempt < retries and "500" in str(e):
+                    wait = 2 ** attempt
+                    logger.warning(f"[LLM] provider error, retry {attempt+1}/{retries} in {wait}s: {str(e)[:80]}")
                     await asyncio.sleep(wait)
                     continue
                 raise
@@ -293,8 +299,8 @@ async def _http_post(url: str, headers: dict, json: dict,
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float) -> str:
     """调用单个 provider（含内部重试）。"""
-    if provider["api_format"] == "vertex_genai":
-        return await _call_vertex_provider(provider, messages, max_tokens, temperature, timeout)
+    if provider["api_format"] == "genai_sdk":
+        return await _call_genai_provider(provider, messages, max_tokens, temperature, timeout)
 
     url = _get_url(provider)
     headers = _get_headers(provider)
@@ -353,23 +359,9 @@ async def llm_call(
     max_tokens: int = 4096,
     temperature: float = 0,
     timeout: float = 120.0,
-    stage: str = "",
-    prefer_provider: str = "",
 ) -> str:
-    """统一 LLM 调用入口，内置 fallback 链。
-
-    Args:
-        prefer_provider: 优先使用的 provider 名称（如 "deepseek"），不可用时仍 fallback。
-    """
-    import time as _time
-    _t0 = _time.monotonic()
-    _prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    """统一 LLM 调用入口，内置 fallback 链。"""
     providers = get_providers()
-    if prefer_provider and len(providers) > 1:
-        preferred = [p for p in providers if p["name"] == prefer_provider]
-        others = [p for p in providers if p["name"] != prefer_provider]
-        if preferred:
-            providers = preferred + others
     if not providers:
         raise AllProvidersFailed([("none", RuntimeError("无可用 LLM provider，请检查 API key 配置"))])
 
@@ -379,13 +371,9 @@ async def llm_call(
             result = await _call_single_provider(
                 provider, messages, max_tokens, temperature, timeout
             )
-            elapsed = round(_time.monotonic() - _t0, 1)
             if len(errors) > 0:
                 logger.info(f"[LLM] Fallback 成功: {provider['name']} "
                             f"(前 {len(errors)} 个 provider 失败)")
-            logger.info(f"[LLM perf] stage={stage} provider={provider['name']} "
-                        f"elapsed={elapsed}s prompt={_prompt_chars}c max_tokens={max_tokens} "
-                        f"response={len(result)}c")
             return result
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -419,12 +407,6 @@ async def llm_call(
     raise AllProvidersFailed(errors)
 
 
-
-
-def get_token_stats() -> dict:
-    """返回各 provider 的调用统计（内存态，重启清零）。"""
-    return {name: {"calls": 0, "errors": 0} for name in _semaphores}
-
 # ── 兼容接口 ──────────────────────────────────────────────────────
 
 async def send_message_gpt(
@@ -432,15 +414,11 @@ async def send_message_gpt(
     model: str = None,
     max_tokens: int = 512,
     temperature: float = 0,
-    stage: str = "",
-    prefer_provider: str = "",
 ) -> str:
     return await llm_call(
         [{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         temperature=temperature,
-        stage=stage,
-        prefer_provider=prefer_provider,
     )
 
 

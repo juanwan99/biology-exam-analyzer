@@ -315,6 +315,12 @@ class KnowledgeMapper:
         "激素": ["选择性必修1", "第3章", "3.1"],
         "体液调节": ["选择性必修1", "第3章", "3.2"],
         "免疫": ["选择性必修1", "第4章", "4.1"],
+        "免疫系统": ["选择性必修1", "第4章", "4.1"],
+        "T细胞": ["选择性必修1", "第4章", "4.2"],
+        "B细胞": ["选择性必修1", "第4章", "4.2"],
+        "淋巴细胞": ["选择性必修1", "第4章", "4.1"],
+        "体液免疫": ["选择性必修1", "第4章", "4.2"],
+        "细胞免疫": ["选择性必修1", "第4章", "4.2"],
         "抗原": ["选择性必修1", "第4章", "4.2"],
         "抗体": ["选择性必修1", "第4章", "4.2"],
         "生长素": ["选择性必修1", "第5章", "5.1"],
@@ -411,6 +417,63 @@ class KnowledgeMapper:
         "营养缺陷型": ["选择性必修3", "第1章", "1.2"],
         "药物生产": ["选择性必修3", "第3章", "3.3"],
         "个体识别": ["选择性必修3", "第3章", "3.2"],
+        # ── 补充高频缺失关键词（2026-05-14）──
+        # 必修1
+        "核酸": ["必修1", "第2章", "2.3"],
+        "碱基互补配对": ["必修1", "第2章", "2.3"],
+        "蛋白质的结构": ["必修1", "第2章", "2.2"],
+        "氨基酸": ["必修1", "第2章", "2.2"],
+        "肽键": ["必修1", "第2章", "2.2"],
+        "细胞器": ["必修1", "第3章", "3.2"],
+        "细胞核": ["必修1", "第3章", "3.3"],
+        "渗透作用": ["必修1", "第4章", "4.1"],
+        "主动运输": ["必修1", "第4章", "4.2"],
+        "酶": ["必修1", "第5章", "5.1"],
+        "ATP": ["必修1", "第5章", "5.2"],
+        "呼吸作用": ["必修1", "第5章", "5.3"],
+        "有丝分裂": ["必修1", "第6章", "6.1"],
+        "减数分裂": ["必修2", "第2章", "2.1"],
+        "细胞分化": ["必修1", "第6章", "6.2"],
+        "细胞凋亡": ["必修1", "第6章", "6.3"],
+        # 必修2
+        "分离定律": ["必修2", "第1章", "1.1"],
+        "自由组合": ["必修2", "第1章", "1.2"],
+        "伴性遗传": ["必修2", "第2章", "2.3"],
+        "DNA复制": ["必修2", "第3章", "3.3"],
+        "转录": ["必修2", "第4章", "4.1"],
+        "翻译": ["必修2", "第4章", "4.1"],
+        "基因突变": ["必修2", "第5章", "5.1"],
+        "基因重组": ["必修2", "第5章", "5.2"],
+        "染色体变异": ["必修2", "第5章", "5.3"],
+        "自然选择": ["必修2", "第6章", "6.3"],
+        "物种": ["必修2", "第6章", "6.4"],
+        "隔离": ["必修2", "第6章", "6.4"],
+        # 选择性必修1
+        "神经调节": ["选择性必修1", "第2章", "2.1"],
+        "反射弧": ["选择性必修1", "第2章", "2.2"],
+        "神经冲动": ["选择性必修1", "第2章", "2.3"],
+        "血糖": ["选择性必修1", "第3章", "3.1"],
+        "甲状腺激素": ["选择性必修1", "第3章", "3.2"],
+        "神经-体液-免疫": ["选择性必修1", "第3章", "3.3"],
+        "水盐平衡": ["选择性必修1", "第1章", "1.2"],
+        "稳态": ["选择性必修1", "第1章", "1.1"],
+        # 选择性必修2
+        "种群": ["选择性必修2", "第1章", "1.1"],
+        "群落": ["选择性必修2", "第2章", "2.1"],
+        "种间关系": ["选择性必修2", "第2章", "2.2"],
+        "生态系统结构": ["选择性必修2", "第3章", "3.1"],
+        "物质循环": ["选择性必修2", "第3章", "3.3"],
+        "能量流动": ["选择性必修2", "第3章", "3.2"],
+        "信息传递": ["选择性必修2", "第3章", "3.4"],
+        "生态平衡": ["选择性必修2", "第4章", "4.1"],
+        # 选择性必修3
+        "培养基": ["选择性必修3", "第1章", "1.2"],
+        "脱分化": ["选择性必修3", "第2章", "2.1"],
+        "再分化": ["选择性必修3", "第2章", "2.1"],
+        "动物细胞培养": ["选择性必修3", "第2章", "2.1"],
+        "胚胎工程": ["选择性必修3", "第2章", "2.3"],
+        "转基因": ["选择性必修3", "第3章", "3.3"],
+        "生物安全": ["选择性必修3", "第3章", "3.4"],
     }
 
     def __init__(self):
@@ -485,7 +548,51 @@ class KnowledgeMapper:
                     logger.debug(f"[知识点映射] '{knowledge_point}' → {textbook} {chapter} {section}")
                     return result
 
-        # 映射失败（含同义词展开后仍未匹配）
+        # Fallback: 反向匹配 — 检查关键词表中哪些关键词是输入的子串
+        best_match = None
+        best_len = 0
+        for kp_variant in expanded:
+            for keyword, location in self.KEYWORD_MAPPING.items():
+                if keyword in kp_variant and len(keyword) > best_len:
+                    best_match = (keyword, location)
+                    best_len = len(keyword)
+                elif kp_variant in keyword and len(kp_variant) > best_len:
+                    best_match = (keyword, location)
+                    best_len = len(kp_variant)
+
+        # Fallback: 章节名包含匹配
+        if not best_match:
+            for kp_variant in expanded:
+                for tb_key, tb_data in self.TEXTBOOK_STRUCTURE.items():
+                    for ch_key, ch_data in tb_data.get("chapters", {}).items():
+                        ch_name = ch_data.get("name", "")
+                        for sec_key, sec_name in ch_data.get("sections", {}).items():
+                            if len(kp_variant) >= 3:
+                                if kp_variant[:3] in sec_name or sec_name[:3] in kp_variant:
+                                    overlap = len(set(kp_variant) & set(sec_name))
+                                    if overlap > best_len:
+                                        best_match = (sec_name, (tb_key, ch_key, sec_key))
+                                        best_len = overlap
+
+        if best_match:
+            keyword, location = best_match
+            textbook, chapter, section = location
+            textbook_data = self.TEXTBOOK_STRUCTURE.get(textbook, {})
+            chapter_data = textbook_data.get("chapters", {}).get(chapter, {})
+            section_name = chapter_data.get("sections", {}).get(section, "")
+            logger.debug(f"[知识点映射] '{knowledge_point}' 模糊匹配 → {textbook} {chapter} ({keyword})")
+            return {
+                "original": knowledge_point,
+                "mapped": True,
+                "fuzzy": True,
+                "textbook": textbook,
+                "textbook_name": textbook_data.get("name", ""),
+                "chapter": chapter,
+                "chapter_name": chapter_data.get("name", ""),
+                "section": section,
+                "section_name": section_name,
+            }
+
         logger.info(f"[知识点映射] '{knowledge_point}' 映射失败，返回原始内容")
         return {
             "original": knowledge_point,

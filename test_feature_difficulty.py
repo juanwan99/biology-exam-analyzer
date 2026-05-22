@@ -220,10 +220,10 @@ class TestPipelineRepresentation:
         f.update(overrides)
         return f
 
-    def test_gemini_repr_merged_via_kwarg(self):
-        """Gemini 的 representation_complexity 通过 analysis_result 传入。"""
+    def test_mm_repr_merged_via_kwarg(self):
+        """AI 的 representation_complexity 通过 analysis_result 传入。"""
         mock_features = self._mock_v3_features(representation_complexity=1)
-        gemini_analysis = {
+        mm_analysis = {
             "representation_complexity": 3,
             "representation_is_core_to_solving": True,
         }
@@ -233,14 +233,14 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "观察系谱图...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=mm_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] == 3
 
-    def test_gemini_repr_ignored_when_not_core(self):
+    def test_mm_repr_ignored_when_not_core(self):
         mock_features = self._mock_v3_features(representation_complexity=2)
-        gemini_analysis = {
+        mm_analysis = {
             "representation_complexity": 1,
             "representation_is_core_to_solving": False,
         }
@@ -250,7 +250,7 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "某题...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=mm_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] <= 2

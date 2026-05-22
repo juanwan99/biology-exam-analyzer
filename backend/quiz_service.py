@@ -21,10 +21,10 @@ class QuizGeneratorService:
     """测验生成器服务"""
 
     def __init__(self):
-        # 配置Gemini API（使用HTTP请求方式支持自定义base_url）
-        self.api_key = os.environ.get("GEMINI_API_KEY")
-        self.api_base = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
-        self.model_name = "gemini-2.0-flash-exp"
+        # 配置视觉模型 API
+        self.api_key = os.environ.get("QWEN_API_KEY")
+        self.api_base = os.environ.get("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.model_name = "qwen-vl-max"
 
         if self.api_key:
             self.enabled = True

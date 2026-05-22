@@ -46,7 +46,7 @@ class ConfigurationError(BiologyAnalyzerError):
 class MissingAPIKeyError(ConfigurationError):
     """API密钥缺失"""
 
-    def __init__(self, key_name: str = "GEMINI_API_KEY"):
+    def __init__(self, key_name: str = "LLM_API_KEY"):
         super().__init__(
             message=f"未配置{key_name}环境变量",
             config_key=key_name
@@ -147,22 +147,22 @@ class APIError(BiologyAnalyzerError):
         )
 
 
-class GeminiAPIError(APIError):
-    """Gemini API错误"""
+class LLMAPIError(APIError):
+    """LLM API错误"""
 
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(
             message=message,
-            api_name="Gemini",
+            api_name="LLM",
             status_code=status_code
         )
-        self.code = "GEMINI_API_ERROR"
+        self.code = "LLM_API_ERROR"
 
 
 class RateLimitError(APIError):
     """API限流错误"""
 
-    def __init__(self, api_name: str = "Gemini", retry_after: Optional[int] = None):
+    def __init__(self, api_name: str = "LLM", retry_after: Optional[int] = None):
         super().__init__(
             message=f"{api_name} API请求过于频繁，请稍后重试",
             api_name=api_name,

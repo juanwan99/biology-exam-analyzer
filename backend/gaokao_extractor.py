@@ -1,6 +1,6 @@
 """
 高考真题提取器
-从 Word 文档中提取高考真题，通过 Gemini API 结构化处理后入库
+从 Word 文档中提取高考真题，通过 AI 结构化处理后入库
 """
 import os
 import json
@@ -38,7 +38,7 @@ class GaokaoExtractor:
         self.api_key = api_key
         self.api_base = api_base or "https://www.chataiapi.com/v1"
         self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
-        self.model = "gemini-2.5-flash-preview-05-20-nothinking"
+        self.model = "deepseek-chat"
 
         # 加载 prompt
         self.prompt_template = self._load_prompt()
@@ -143,7 +143,7 @@ class GaokaoExtractor:
         chunk_size: int = 8000
     ) -> List[Dict[str, Any]]:
         """
-        调用 Gemini API 提取题目
+        调用 AI API 提取题目
 
         Args:
             content: 提取的文档内容
@@ -329,11 +329,11 @@ def process_single_file(file_path: str) -> List[Dict]:
     """
     import os
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    api_base = os.environ.get("GEMINI_API_BASE")
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_base = os.environ.get("DEEPSEEK_API_BASE")
 
     if not api_key:
-        raise ValueError("请设置 GEMINI_API_KEY 环境变量")
+        raise ValueError("请设置 DEEPSEEK_API_KEY 环境变量")
 
     extractor = GaokaoExtractor(api_key, api_base)
     content = extractor.extract_from_docx(file_path)
@@ -346,11 +346,11 @@ if __name__ == "__main__":
     # 测试单个文件
     import os
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    api_base = os.environ.get("GEMINI_API_BASE")
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_base = os.environ.get("DEEPSEEK_API_BASE")
 
     if not api_key:
-        print("请设置 GEMINI_API_KEY 环境变量")
+        print("请设置 DEEPSEEK_API_KEY 环境变量")
         exit(1)
 
     extractor = GaokaoExtractor(api_key, api_base)

@@ -45,7 +45,7 @@ def _responses_ok():
 
 def _chat_ok():
     return httpx.Response(200, json={
-        "choices": [{"message": {"content": "hello from gemini"}, "finish_reason": "stop"}],
+        "choices": [{"message": {"content": "hello from deepseek"}, "finish_reason": "stop"}],
     }, request=_FAKE_REQ)
 
 
@@ -59,7 +59,7 @@ class TestLlmConfig:
     def test_get_providers_filters_missing_keys(self):
         import os, tempfile
         from llm_config import get_providers, PROVIDERS
-        # Find a key_env provider (skip sa_file_env like vertex)
+        # Find a key_env provider
         key_providers = [p for p in PROVIDERS if p.get("key_env")]
         if key_providers:
             env = {key_providers[0]["key_env"]: "test-key"}

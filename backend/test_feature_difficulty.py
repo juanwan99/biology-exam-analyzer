@@ -220,10 +220,10 @@ class TestPipelineRepresentation:
         f.update(overrides)
         return f
 
-    def test_gemini_repr_merged_via_kwarg(self):
-        """Gemini 的 representation_complexity 通过 analysis_result 传入。"""
+    def test_mm_repr_merged_via_kwarg(self):
+        """多模态的 representation_complexity 通过 analysis_result 传入。"""
         mock_features = self._mock_v3_features(representation_complexity=1)
-        gemini_analysis = {
+        mm_analysis = {
             "representation_complexity": 3,
             "representation_is_core_to_solving": True,
         }
@@ -233,14 +233,14 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "观察系谱图...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=mm_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] == 3
 
-    def test_gemini_repr_ignored_when_not_core(self):
+    def test_mm_repr_ignored_when_not_core(self):
         mock_features = self._mock_v3_features(representation_complexity=2)
-        gemini_analysis = {
+        mm_analysis = {
             "representation_complexity": 1,
             "representation_is_core_to_solving": False,
         }
@@ -250,7 +250,7 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "某题...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=mm_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] <= 2
@@ -1349,7 +1349,7 @@ class TestSEUFallback:
             pipeline = DifficultyPipeline()
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
-                    "content": "某大题...", "question_type": "简答题",
+                    "content": "某实验探究光照强度对植物光合速率的影响，请据图分析回答下列问题。", "question_type": "简答题",
                     "correct_answer": "", "total_score": 12,
                 }, analysis_result=analysis_result)
             )
@@ -1427,7 +1427,7 @@ class TestSEUFallback:
             pipeline = DifficultyPipeline()
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
-                    "content": "某大题...", "question_type": "简答题",
+                    "content": "某实验探究光照强度对植物光合速率的影响，请据图分析回答下列问题。", "question_type": "简答题",
                     "correct_answer": "", "total_score": 12,
                 }, analysis_result=analysis_result)
             )
@@ -1504,3 +1504,270 @@ class TestQualityScoreGate:
                 })
             )
         assert result.get("analysis_failed") is not True
+
+
+class TestCriticalPathWeighted:
+    """Critical path should select by score-weighted difficulty, not raw steps."""
+
+    def test_high_value_hard_subquestion_selected(self):
+        """High-value + high-step subquestion should be on critical path."""
+        from rule_scorer import find_critical_path
+        subquestions = [
+            {"id": 1, "points": 6, "reasoning_steps": 4, "working_memory": 4,
+             "trap_density": 3, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 2, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+            {"id": 3, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+        ]
+        dependencies = [
+            {"from": 2, "to": 3, "strength": "strong", "reason": "sequential"},
+        ]
+        path_nodes, path_steps = find_critical_path(subquestions, dependencies)
+        path_ids = [n["id"] for n in path_nodes]
+        # sq1 (6pts, weighted=4*0.5=2.0) should beat sq2->sq3 chain (weighted=2*0.25+2*0.25=1.0)
+        assert 1 in path_ids, f"High-value sq1 should be on critical path, got {path_ids}"
+
+    def test_small_outlier_does_not_hijack(self):
+        """1-point high-difficulty subquestion should not hijack the whole question."""
+        from rule_scorer import find_critical_path
+        subquestions = [
+            {"id": 1, "points": 1, "reasoning_steps": 8, "working_memory": 5,
+             "trap_density": 3, "novelty": 3, "knowledge_breadth": 1},
+            {"id": 2, "points": 5, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 3, "points": 6, "reasoning_steps": 4, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+        ]
+        dependencies = [
+            {"from": 2, "to": 3, "strength": "strong", "reason": "builds on"},
+        ]
+        path_nodes, path_steps = find_critical_path(subquestions, dependencies)
+        path_ids = [n["id"] for n in path_nodes]
+        # sq2->sq3 chain (weighted=(3*5/12)+(4*6/12)=1.25+2.0=3.25) should beat
+        # sq1 alone (weighted=8*1/12=0.67)
+        assert 1 not in path_ids or len(path_ids) > 1, \
+            f"1-point outlier sq1 should not be sole critical path, got {path_ids}"
+
+    def test_breadth_upgrade_with_3_subquestions(self):
+        """3 subquestions + method_novelty>=3 should upgrade breadth to 3."""
+        from rule_scorer import aggregate_big_question
+        subquestions = [
+            {"id": 1, "points": 5, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 2, "points": 3, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+            {"id": 3, "points": 4, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 2},
+        ]
+        dependencies = [{"from": 1, "to": 2, "strength": "strong", "reason": "x"}]
+        global_features = {"shared_context_load": 2, "global_method_novelty": 3}
+        result = aggregate_big_question(subquestions, dependencies, global_features)
+        assert result["knowledge_breadth"] == 3, \
+            f"3 sqs + method_novelty=3 should upgrade breadth, got {result['knowledge_breadth']}"
+
+
+
+# ══════════════════════════════════════════════════════════════
+# R2-01: _table_to_markdown merged cell deduplication
+# ══════════════════════════════════════════════════════════════
+
+class TestTableToMarkdownMergedCells:
+    """Merged cells in _table_to_markdown must not produce duplicate columns."""
+
+    def _make_mock_cell(self, text, tc_id):
+        """Return a minimal mock cell whose ._tc identity controls dedup."""
+        from unittest.mock import MagicMock
+        tc = object()  # unique object per logical cell
+        cell = MagicMock()
+        cell.text = text
+        cell._tc = tc
+        return cell
+
+    def _make_mock_table(self, rows_spec):
+        """
+        rows_spec: list of lists of (text, tc_obj).
+        Cells sharing the same tc_obj simulate a horizontal merge.
+        """
+        from unittest.mock import MagicMock
+        table = MagicMock()
+        mock_rows = []
+        for row_spec in rows_spec:
+            row = MagicMock()
+            cells = []
+            tc_registry = {}
+            for text, tc_key in row_spec:
+                if tc_key not in tc_registry:
+                    tc_registry[tc_key] = object()
+                cell = MagicMock()
+                cell.text = text
+                cell._tc = tc_registry[tc_key]
+                cells.append(cell)
+            row.cells = cells
+            mock_rows.append(row)
+        table.rows = mock_rows
+        return table
+
+    def test_no_merge_unchanged(self):
+        """A normal 3-column table (no merges) produces 3 columns."""
+        from word_splitter import WordQuestionSplitter
+        table = self._make_mock_table([
+            [("A", 0), ("B", 1), ("C", 2)],
+            [("1", 3), ("2", 4), ("3", 5)],
+        ])
+        md = WordQuestionSplitter._table_to_markdown(table)
+        header_cols = md.splitlines()[0].strip("|").split("|")
+        assert len(header_cols) == 3, f"expected 3 cols, got {len(header_cols)}: {md}"
+
+    def test_horizontal_merge_deduped(self):
+        """A cell merged across 3 columns must appear only once."""
+        from word_splitter import WordQuestionSplitter
+        # Row 0: normal 3 cols. Row 1: col 0+1 merged (same tc_key=0), col 2 separate.
+        table = self._make_mock_table([
+            [("Header1", 0), ("Header2", 1), ("Header3", 2)],
+            [("Merged", "m"), ("Merged", "m"), ("Solo", 3)],
+        ])
+        md = WordQuestionSplitter._table_to_markdown(table)
+        lines = md.splitlines()
+        data_row = lines[2]  # skip header + separator
+        cols = [c.strip() for c in data_row.strip("|").split("|")]
+        assert cols.count("Merged") == 1, f"Merged should appear once, got: {data_row}"
+        assert "Solo" in data_row, f"Solo cell missing: {data_row}"
+
+    def test_all_merged_single_row(self):
+        """All 3 columns merged into one — result has exactly 1 column."""
+        from word_splitter import WordQuestionSplitter
+        table = self._make_mock_table([
+            [("X", "same"), ("X", "same"), ("X", "same")],
+        ])
+        md = WordQuestionSplitter._table_to_markdown(table)
+        header_cols = [c.strip() for c in md.splitlines()[0].strip("|").split("|")]
+        assert len(header_cols) == 1, f"all-merged row should yield 1 col, got {header_cols}"
+
+    def test_jagged_rows_padded(self):
+        """When merge makes row 1 shorter than row 0, it must be padded with empty strings."""
+        from word_splitter import WordQuestionSplitter
+        # Row 0: 3 distinct cols. Row 1: first two merged → only 2 logical cols.
+        table = self._make_mock_table([
+            [("A", 0), ("B", 1), ("C", 2)],
+            [("AB", "m"), ("AB", "m"), ("C2", 3)],
+        ])
+        md = WordQuestionSplitter._table_to_markdown(table)
+        lines = [l for l in md.splitlines() if not l.startswith("|---")]
+        # Every data row must have the same number of | separators as the header
+        header_pipes = lines[0].count("|")
+        for line in lines[1:]:
+            assert line.count("|") == header_pipes, (
+                f"Column count mismatch: header has {header_pipes} pipes, "
+                f"data row has {line.count('|')} pipes: {line}"
+            )
+
+    def test_empty_table_returns_empty_string(self):
+        """Empty table (no rows) returns empty string."""
+        from unittest.mock import MagicMock
+        from word_splitter import WordQuestionSplitter
+        table = MagicMock()
+        table.rows = []
+        assert WordQuestionSplitter._table_to_markdown(table) == ""
+
+
+# ══════════════════════════════════════════════════════════════
+# R2-03: SEU fallback quality gate (content-length check)
+# ══════════════════════════════════════════════════════════════
+
+class TestSeuFallbackQualityGate:
+    """SEU fallback must be blocked when question_text is suspiciously short."""
+
+    def _make_seu(self, confidence=0.8, bloom=3, points=3):
+        return {
+            "description": "test unit",
+            "bloom_level": bloom,
+            "difficulty_estimate": 5.0,
+            "points": points,
+            "allocation_confidence": confidence,  # field read by _scoring_unit_metrics
+        }
+
+    def _seu_analysis_result(self, seus):
+        return {"_fine_grained": {"scoring_units": seus}}
+
+    def _run(self, question_text, seus, total_score=10):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from difficulty_pipeline import DifficultyPipeline
+
+        async def _go():
+            pipeline = DifficultyPipeline()
+            # Patch big_question extraction to always fail so SEU fallback triggers
+            fail_result = {
+                "_big_question_failed": True,
+                "failure_type": "llm_parse_error",
+                "errors": [],
+            }
+            with patch(
+                "difficulty_pipeline.extract_big_question_features",
+                new_callable=AsyncMock,
+                return_value=fail_result,
+            ):
+                return await pipeline._evaluate_single(
+                    {
+                        "content": question_text,
+                        "question_type": "big_question",
+                        "correct_answer": "see marking scheme",
+                        "total_score": total_score,
+                    },
+                    analysis_result=self._seu_analysis_result(seus),
+                )
+
+        return asyncio.get_event_loop().run_until_complete(_go())
+
+    def test_short_content_blocked(self):
+        """Content < 30 chars must be blocked even with valid SEUs."""
+        seus = [self._make_seu(0.9), self._make_seu(0.8), self._make_seu(0.7)]
+        result = self._run("短内容", seus)  # 3 chars — well below threshold
+        assert result.get("analysis_failed") is True, (
+            f"Expected analysis_failed=True for short content, got: {result}"
+        )
+
+    def test_borderline_29_chars_blocked(self):
+        """29-char content (one below threshold) must be blocked."""
+        text = "A" * 29
+        seus = [self._make_seu(0.9), self._make_seu(0.9)]
+        result = self._run(text, seus)
+        assert result.get("analysis_failed") is True, (
+            f"29-char content should be blocked, got: {result}"
+        )
+
+    def test_30_chars_passes_gate(self):
+        """Content >= 30 chars with valid SEUs must produce a score."""
+        text = "B" * 30
+        seus = [self._make_seu(0.9), self._make_seu(0.8), self._make_seu(0.7)]
+        result = self._run(text, seus)
+        assert result.get("analysis_failed") is not True, (
+            f"30-char content should pass quality gate, got: {result}"
+        )
+        assert result.get("source") == "seu_fallback", (
+            f"Expected source=seu_fallback, got: {result.get('source')}"
+        )
+
+    def test_normal_content_passes_gate(self):
+        """Realistic question text passes the gate and returns a valid score."""
+        text = (
+            "下图为某生物膜结构示意图，请据图回答下列问题："
+            "（1）图中①的名称是______；"
+            "（2）与细胞膜功能直接相关的物质是______。"
+        )
+        seus = [self._make_seu(0.85), self._make_seu(0.75), self._make_seu(0.8)]
+        result = self._run(text, seus)
+        assert result.get("analysis_failed") is not True, (
+            f"Normal content blocked unexpectedly: {result}"
+        )
+        assert "final_difficulty" in result, f"Missing final_difficulty: {result}"
+
+    def test_low_confidence_seus_still_blocked_regardless_of_length(self):
+        """Low-confidence SEUs (< 0.5 avg) block fallback independent of length."""
+        text = "C" * 100  # long enough to pass the length gate
+        seus = [self._make_seu(0.3), self._make_seu(0.2)]  # avg 0.25 < 0.5
+        result = self._run(text, seus)
+        assert result.get("analysis_failed") is True, (
+            f"Low-confidence SEUs should still block, got: {result}"
+        )

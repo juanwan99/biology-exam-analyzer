@@ -132,3 +132,177 @@ def check_consistency(features: dict) -> tuple:
         score -= 0.15
 
     return max(0.0, score), flags
+
+
+# ── 5. 细粒度分析（SEU/DU/SU typed units）───────────────────────
+
+class KnowledgeLink(BaseModel):
+    knowledge_point: str
+    share: float = Field(ge=0.0, le=1.0)  # 在 SEU 中占的比例
+
+
+COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任"]
+
+
+class CompetencyLink(BaseModel):
+    primary: str = ""
+    weight: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class ScoringEvidenceUnit(BaseModel):
+    """采分证据单元 — 承载正向分值归因"""
+    seu_id: str
+    label: str
+    score_share: float = Field(ge=0.0, le=1.0)
+    allocation_source: str = "inferred"
+    allocation_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    knowledge_links: List[KnowledgeLink]
+    bloom_level: int = Field(default=3, ge=1, le=6)
+    competency: Optional[CompetencyLink] = None
+    competency_weights: Optional[Dict[str, float]] = None
+    difficulty_estimate: float = Field(default=5.0, ge=0.0, le=10.0)
+    reasoning_brief: str = ""
+
+    def get_competency_weights(self) -> Dict[str, float]:
+        """获取四维素养权重（兼容新旧格式）。"""
+        if self.competency_weights:
+            w = {d: self.competency_weights.get(d, 0.0) for d in COMPETENCY_DIMS}
+            total = sum(w.values())
+            if total > 0:
+                return {k: v / total for k, v in w.items()}
+            return {d: 0.25 for d in COMPETENCY_DIMS}
+        if self.competency and self.competency.primary:
+            w = {d: 0.0 for d in COMPETENCY_DIMS}
+            if self.competency.primary in w:
+                w[self.competency.primary] = self.competency.weight
+                remaining = 1.0 - self.competency.weight
+                others = [d for d in COMPETENCY_DIMS if d != self.competency.primary]
+                for d in others:
+                    w[d] = remaining / len(others)
+            return w
+        return {d: 0.25 for d in COMPETENCY_DIMS}
+
+
+class DiagnosticUnit(BaseModel):
+    """诊断干扰单元 — 承载干扰项/误区分析，不参与分值聚合"""
+    du_id: str
+    option_or_trap: str  # "A"/"B" 或 "trap_1"
+    distractor_type: str = "misconception"  # misconception/partial_truth/calculation_trap/reading_trap
+    misconception: str = ""
+    trap_strength: int = Field(default=2, ge=1, le=3)
+    knowledge_boundary: str = ""
+    if_selected_means: List[str] = []
+
+
+class StimulusUnit(BaseModel):
+    """情境/过程单元 — 承载材料、图表、共享情境"""
+    su_id: str
+    stimulus_type: str = "text"  # text/chart/table/pedigree/device/flowchart/multi
+    complexity: int = Field(default=1, ge=1, le=3)
+    is_core: bool = False
+    description: str = ""  # ≤30字
+
+
+class FineGrainedResult(BaseModel):
+    """细粒度分析结果 — 三类 units + 向后兼容字段"""
+    scoring_units: List[ScoringEvidenceUnit]
+    diagnostic_units: List[DiagnosticUnit] = []
+    stimulus_units: List[StimulusUnit] = []
+    answer: str = ""
+    total_score: int = 0
+    detailed_analysis: str = ""
+    # 向后兼容字段（由 compute_summary_from_units 派生）
+    knowledge_points: List[str] = []
+    common_mistakes: List[str] = []
+    difficulty: str = "中等"
+
+    class Config:
+        extra = "allow"
+
+    @model_validator(mode="after")
+    def check_score_conservation(self):
+        """分值守恒：所有 SEU 的 score_share 加总必须 ≈ 1.0"""
+        if self.scoring_units:
+            total = sum(s.score_share for s in self.scoring_units)
+            if abs(total - 1.0) > 0.02:
+                # 自动归一化修复
+                for s in self.scoring_units:
+                    s.score_share = round(s.score_share / total, 4) if total > 0 else 1.0 / len(self.scoring_units)
+        return self
+
+
+# ── 细粒度分析辅助函数 ──────────────────────────────────────────
+
+def validate_score_conservation(result: FineGrainedResult, total_score: float) -> tuple:
+    """分值守恒硬检查。返回 (is_valid, errors)"""
+    errors = []
+    # 检查 SEU score_share 总和
+    share_sum = sum(s.score_share for s in result.scoring_units)
+    if abs(share_sum - 1.0) > 0.02:
+        errors.append(f"score_share sum={share_sum:.3f}, expected 1.0")
+    # 检查每个 SEU 的 knowledge_links share 总和
+    for seu in result.scoring_units:
+        kl_sum = sum(kl.share for kl in seu.knowledge_links)
+        if abs(kl_sum - 1.0) > 0.02:
+            errors.append(f"{seu.seu_id}: knowledge_links share sum={kl_sum:.3f}")
+    return (len(errors) == 0, errors)
+
+
+def compute_summary_from_units(fg: FineGrainedResult) -> dict:
+    """从 typed units 派生旧格式字段。纯 Python，无 LLM。"""
+    # knowledge_points: 按 score_share * kl.share 加权，取前 5
+    _ABILITY_BLACKLIST = {"数据处理", "数据分析", "实验设计", "信息获取", "信息处理",
+                          "逻辑推理", "模型建构", "批判性思维", "科学探究能力"}
+    kp_scores = {}
+    for seu in fg.scoring_units:
+        for kl in seu.knowledge_links:
+            kp = kl.knowledge_point
+            if kp in _ABILITY_BLACKLIST:
+                continue
+            kp_scores[kp] = kp_scores.get(kp, 0) + seu.score_share * kl.share
+    sorted_kps = sorted(kp_scores.items(), key=lambda x: -x[1])
+    knowledge_points = [kp for kp, _ in sorted_kps[:5]]
+
+    # common_mistakes: 从 DU 提取
+    common_mistakes = [du.misconception for du in fg.diagnostic_units if du.misconception][:3]
+
+    # primary_competency: 从 SEU 四维权重加权
+    comp_weights = {d: 0.0 for d in COMPETENCY_DIMS}
+    for seu in fg.scoring_units:
+        w = seu.get_competency_weights()
+        for d in COMPETENCY_DIMS:
+            comp_weights[d] += seu.score_share * w.get(d, 0)
+    primary_comp = max(comp_weights, key=comp_weights.get) if any(comp_weights.values()) else "科学思维"
+
+    # bloom: 分值加权
+    bloom_sum = sum(seu.bloom_level * seu.score_share for seu in fg.scoring_units)
+    bloom = round(bloom_sum)
+
+    # bloom_distribution: 按 SEU bloom_level 计数
+    bloom_dist = {}
+    bloom_labels = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
+    for seu in fg.scoring_units:
+        label = bloom_labels.get(seu.bloom_level, "应用")
+        bloom_dist[label] = bloom_dist.get(label, 0) + 1
+
+    # competency details: 四维素养权重加权聚合
+    all_comps = {d: 0.0 for d in COMPETENCY_DIMS}
+    for seu in fg.scoring_units:
+        w = seu.get_competency_weights()
+        for d in COMPETENCY_DIMS:
+            all_comps[d] += seu.score_share * w.get(d, 0)
+
+    # allocation confidence
+    avg_conf = sum(s.allocation_confidence for s in fg.scoring_units) / len(fg.scoring_units) if fg.scoring_units else 0
+
+    return {
+        "knowledge_points": knowledge_points,
+        "common_mistakes": common_mistakes,
+        "primary_competency": primary_comp,
+        "competency_level": "中" if bloom <= 3 else "高",
+        "bloom_level": bloom,
+        "bloom_distribution": bloom_dist,
+        "competency_details": all_comps,
+        "allocation_confidence_avg": round(avg_conf, 2),
+        "difficulty": fg.difficulty,
+    }

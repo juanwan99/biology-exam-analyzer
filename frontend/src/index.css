@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --app-nav-height: 68px;
   --color-primary: #1a2e1f;
   --color-primary-light: #2d5a3d;
   --color-primary-dark: #0f1c13;
@@ -29,7 +30,12 @@
   --shadow-md: 0 4px 12px rgba(26, 46, 31, 0.06);
   --shadow-lg: 0 12px 32px rgba(26, 46, 31, 0.08);
   --shadow-xl: 0 24px 48px rgba(26, 46, 31, 0.1);
-  --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition: color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * { box-sizing: border-box; }
@@ -42,6 +48,67 @@ body {
   min-height: 100vh;
   background: var(--color-bg);
   color: var(--color-primary);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary-light);
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 16px;
+  z-index: 1100;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: var(--transition);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.app-nav {
+  height: var(--app-nav-height);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-color: var(--color-border-light);
+}
+
+.app-nav-spacer {
+  height: var(--app-nav-height);
+}
+
+.nav-brand-mark {
+  background: var(--color-primary);
+}
+
+.nav-external-link {
+  color: var(--color-primary);
+  border: 1.5px solid var(--color-border);
+  border-radius: 50px;
+  transition: var(--transition);
+}
+
+.nav-external-link:hover,
+.nav-external-link:focus-visible {
+  border-color: var(--color-primary-light);
+  background: var(--macaron-mint-light, #e8f8ee);
+}
+
+.route-loading {
+  min-height: 42vh;
+  display: grid;
+  place-items: center;
+  color: var(--color-secondary);
+  font-size: 15px;
 }
 
 @layer components {
@@ -58,7 +125,7 @@ body {
     border-color: var(--color-primary-light);
   }
   .glass-card {
-    @apply p6;
+    padding: 1.5rem;
     border-radius: 24px;
     background: rgba(255, 255, 255, 0.92);
     backdrop-filter: blur(12px);
@@ -104,7 +171,9 @@ body {
     border: 1.5px solid var(--color-border);
     font-size: 14px; transition: var(--transition); background: var(--color-bg);
   }
-  .input-modern:focus { outline: none; border-color: var(--color-primary-light); box-shadow: 0 0 0 3px rgba(45, 90, 61, 0.1); }
+  .input-modern:focus { border-color: var(--color-primary-light); box-shadow: 0 0 0 3px rgba(45, 90, 61, 0.1); }
+  .input-modern:focus:not(:focus-visible) { outline: none; }
+  .input-modern:focus-visible { outline: 2px solid var(--color-primary-light); outline-offset: 2px; }
   .input-modern:hover { border-color: #c5d0c7; }
   .input-modern::placeholder { color: var(--color-muted); }
   .badge { @apply inline-flex items-center px-3 py-1 text-xs font-semibold; border-radius: 50px; transition: var(--transition); }
@@ -193,4 +262,21 @@ input[type="checkbox"].modern-checkbox { @apply w-5 h-5; border-radius: 6px; bor
   .card { border-radius: 14px; }
   .upload-zone { @apply p-6; border-radius: 14px; }
   .stat-card { @apply p-4; border-radius: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .app-nav,
+  .glass-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }

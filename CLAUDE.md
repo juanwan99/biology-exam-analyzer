@@ -16,15 +16,12 @@
 
 | 优先级 | Provider | 模型 | API 格式 | 认证 | 备注 |
 |--------|----------|------|----------|------|------|
-| 1（主力） | vertex | `gemini-2.5-pro` | Vertex AI genai SDK | SA JSON + OAuth2 | GCP $1000 赠金，thinking_overhead=3 |
 | 2（兜底） | deepseek | `deepseek-v4-pro` | OpenAI Chat | API Key | no_proxy=True 绕过 HTTPS_PROXY |
 
 **统一入口**: `llm_client.llm_call(messages, max_tokens, temperature)`
 **配置中枢**: `llm_config.py` 定义 Provider 列表 + `get_providers()` 过滤已配置 key
 **并发控制**: 每 provider semaphore_limit=10，题目级并发由 `ANALYSIS_CONCURRENCY` 环境变量控制（默认 5）
-**代理**: Vertex AI 走 `HTTPS_PROXY=http://172.17.0.1:7890`（容器→宿主机 sing-box→DMIT）
 
-> 每次 LLM 调用独立 fallback。题 A 用 Vertex 成功，题 B Vertex 超时自动降级 DeepSeek——逐调用粒度，不是整卷切换。
 > 400 Bad Request 不 fallback（prompt 问题），401/403 会 fallback。
 
 ---
@@ -55,8 +52,6 @@ biology-exam-analyzer/
 │   ├── textbook_router.py   # 教材管理（最大，1672 行，含向量处理）
 │   │
 │   │   # === AI/ML 服务 ===
-│   ├── gemini_analyzer.py   # LLM 多模态分析（通过 llm_client fallback 链）
-│   ├── llm_client.py        # 统一 LLM 客户端（三级 fallback: Opus→GPT→Gemini）
 │   ├── claude_client.py     # 兼容垫片（重导出 llm_client）
 │   ├── feature_extractor.py # 特征提取（v3 扁平 + v3.1 大题结构化）
 │   ├── rule_scorer.py       # 规则评分 v3 + v3.1 大题聚合（关键路径模型）
@@ -65,7 +60,6 @@ biology-exam-analyzer/
 │   ├── calibration.py       # Isotonic Regression 校准（未集成）
 │   ├── competency_analyzer.py # 素养分析
 │   ├── knowledge_mapper.py  # 知识点映射（501 行）
-│   ├── vision_processor.py  # Gemini Flash 视觉提取 PDF→Markdown（556 行）
 │   │
 │   │   # === 文档处理 ===
 │   ├── document_processor.py # PDF/DOCX→图片（602 行）
@@ -86,7 +80,6 @@ biology-exam-analyzer/
 │   ├── chapter_locator.py   # 章节定位服务（页码→章节）
 │   ├── task_registry.py     # 异步任务状态（未集成）
 │   ├── textbook_service.py  # 教材服务层（801 行）
-│   ├── textbook_processor.py # 教材智能处理（Gemini 分析教材内容）
 │   ├── textbook_parser_v2.py # 教材解析器 v2
 │   ├── prediction_service.py # 预测服务层（530 行）
 │   ├── quiz_service.py      # 组卷服务层

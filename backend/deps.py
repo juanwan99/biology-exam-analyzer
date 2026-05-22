@@ -12,10 +12,10 @@ from logger import get_logger
 logger = get_logger()
 
 # ============ 环境变量 ============
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "21"))
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
 
 # ============ 惰性单例 ============
-_gemini_analyzer = None
+_analyzer_instance = None
 _difficulty_engine = None
 _competency_analyzer = None
 _knowledge_mapper = None
@@ -26,16 +26,16 @@ _pdf_splitter = None
 _report_generator = None
 
 
-def get_gemini_analyzer():
-    global _gemini_analyzer
-    if _gemini_analyzer is None:
+def get_vision_analyzer():
+    global _analyzer_instance
+    if _analyzer_instance is None:
         from llm_config import get_providers
         if not get_providers():
             logger.warning("无可用 LLM provider（请检查 API key 配置），AI 分析功能不可用")
             return None
         from question_analyzer import QuestionAnalyzer
-        _gemini_analyzer = QuestionAnalyzer()
-    return _gemini_analyzer
+        _analyzer_instance = QuestionAnalyzer()
+    return _analyzer_instance
 
 
 def get_difficulty_engine():
@@ -110,7 +110,7 @@ def get_analysis_service():
     if _analysis_service is None:
         from services.analysis_service import AnalysisService
         _analysis_service = AnalysisService(
-            analyzer=get_gemini_analyzer(),
+            analyzer=get_vision_analyzer(),
             difficulty_engine=get_difficulty_engine(),
             competency_analyzer=get_competency_analyzer(),
             knowledge_mapper=get_knowledge_mapper(),
@@ -121,4 +121,4 @@ def get_analysis_service():
         )
     return _analysis_service
 
-get_question_analyzer = get_gemini_analyzer
+get_question_analyzer = get_vision_analyzer

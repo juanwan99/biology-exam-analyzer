@@ -19,11 +19,11 @@ def batch_extract(input_dir: str, output_dir: str = None):
         input_dir: 输入目录
         output_dir: 输出目录（默认为 extracted/）
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    api_base = os.environ.get("GEMINI_API_BASE")
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_base = os.environ.get("DEEPSEEK_API_BASE")
 
     if not api_key:
-        print("错误: 请设置 GEMINI_API_KEY 环境变量")
+        print("错误: 请设置 DEEPSEEK_API_KEY 环境变量")
         return
 
     extractor = GaokaoExtractorV2(api_key, api_base)

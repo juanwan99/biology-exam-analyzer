@@ -8,6 +8,7 @@ from docx.text.paragraph import Paragraph
 from PIL import Image
 import io
 import os
+import re
 import subprocess
 import tempfile
 import base64
@@ -91,8 +92,8 @@ class DocumentProcessor:
                                             except Exception as e:
                                                 logger.warning(f"提取内联图片失败: {e}")
 
-                    # 添加段落文字（如果非空且不是纯图片段落）
-                    if para_text and not any(e.get("type") == "image" and e.get("caption") == para_text for e in elements[-1:]):
+                    # 添加段落文字。即使段落中同时含图，也要保留文本边界。
+                    if para_text:
                         content_parts.append(para_text)
                         elements.append({
                             "type": "paragraph",
@@ -388,7 +389,7 @@ class DocumentProcessor:
 
             logger.info(f"PDF内容提取: {len(extracted_text)} 字符, {len(extracted_images)} 张图片, {len(elements)} 个元素")
 
-            # 2. 转换PDF为图片（用于布局参考和Gemini视觉识别）
+            # 2. 转换PDF为图片（用于布局参考和AI视觉识别）
             layout_images = convert_from_path(
                 file_path,
                 dpi=dpi,
@@ -509,7 +510,7 @@ class DocumentProcessor:
     @staticmethod
     def images_to_bytes(images: List[Image.Image]) -> List[bytes]:
         """
-        将PIL Image转换为字节流（用于Gemini API）
+        将PIL Image转换为字节流（用于API调用）
 
         Args:
             images: PIL Image列表
@@ -539,9 +540,9 @@ class DocumentProcessor:
         智能匹配：将提取的元素（表格、图片）分配给对应的题目
 
         策略：
-        1. 分析每道题目的内容文本
-        2. 查找题目中提到的表格和图片（例如"下表"、"如图"）
-        3. 按照元素在文档中的顺序分配给题目
+        1. 在元素流中识别每道题的起止边界
+        2. 只把边界内的表格、图片绑定到该题
+        3. 发现题干提示图表但边界内缺失时显式标记 warning
 
         Args:
             questions: 题目列表
@@ -553,50 +554,102 @@ class DocumentProcessor:
 
         logger.info(f"[智能匹配] 开始为 {len(questions)} 道题目匹配 {len(elements)} 个元素")
 
-        # 统计元素类型
-        tables = [e for e in elements if e['type'] == 'table']
-        images = [e for e in elements if e['type'] == 'image']
+        def element_text(element: Dict[str, Any]) -> str:
+            return str(
+                element.get("content")
+                or element.get("caption")
+                or element.get("text")
+                or ""
+            ).strip()
 
-        logger.info(f"[智能匹配] 元素统计: {len(tables)} 个表格, {len(images)} 张图片")
+        def starts_question(text: str, q_id: Any) -> bool:
+            if not isinstance(q_id, int):
+                return False
+            return bool(re.match(rf"^\s*{q_id}[.、．]\s*", text))
 
-        # 简单策略：按题号顺序分配元素
-        # 假设文档中元素的顺序与题目顺序一致
+        start_by_id: Dict[int, int] = {}
+        for idx, element in enumerate(elements):
+            text = element_text(element)
+            if not text:
+                continue
+            for question in questions:
+                q_id = question.get("id")
+                if q_id in start_by_id:
+                    continue
+                if starts_question(text, q_id):
+                    start_by_id[q_id] = idx
+                    break
 
-        table_idx = 0
-        image_idx = 0
+        ordered_starts = sorted(
+            (idx, q_id) for q_id, idx in start_by_id.items()
+        )
+        next_start_by_id: Dict[int, int] = {}
+        for pos, (start_idx, q_id) in enumerate(ordered_starts):
+            next_start_by_id[q_id] = (
+                ordered_starts[pos + 1][0]
+                if pos + 1 < len(ordered_starts)
+                else len(elements)
+            )
 
-        for q_idx, question in enumerate(questions):
-            question['structured_content'] = []
-            q_content = question.get("content", "").lower()
+        table_cue = re.compile(r"(如下表|下表|结果如下表|表中|表格|表\s*\d+|table)", re.IGNORECASE)
+        image_cue = re.compile(r"(如下图|下图|如图|图中|图\s*\d+|曲线|电泳|figure|fig)", re.IGNORECASE)
 
-            # 检查题目是否提到表格
-            if "表" in q_content or "table" in q_content:
-                if table_idx < len(tables):
-                    question['structured_content'].append(tables[table_idx])
-                    logger.info(f"[智能匹配] 题目{question.get('id')} 分配表格 #{table_idx + 1}")
-                    table_idx += 1
+        unmatched_media = 0
+        for question in questions:
+            q_id = question.get("id")
+            question["structured_content"] = []
+            if q_id not in start_by_id:
+                question.setdefault("warnings", []).append("media_boundary_missing")
+                logger.warning(f"[智能匹配] 题目{q_id} 未找到元素边界，跳过媒体绑定")
+                continue
 
-            # 检查题目是否提到图片/图表
-            if "图" in q_content or "figure" in q_content or "fig" in q_content:
-                if image_idx < len(images):
-                    question['structured_content'].append(images[image_idx])
-                    logger.info(f"[智能匹配] 题目{question.get('id')} 分配图片 #{image_idx + 1}")
-                    image_idx += 1
+            start_idx = start_by_id[q_id]
+            end_idx = next_start_by_id[q_id]
+            media = [
+                element for element in elements[start_idx:end_idx]
+                if element.get("type") in ("table", "image")
+            ]
+            question["structured_content"] = media
 
-            # 记录分配结果
-            if question['structured_content']:
-                table_count = sum(1 for e in question['structured_content'] if e['type'] == 'table')
-                image_count = sum(1 for e in question['structured_content'] if e['type'] == 'image')
-                logger.info(f"✅ 题目 {question.get('id')} 匹配完成：{table_count}个表格，{image_count}张图片")
+            table_count = sum(1 for e in media if e.get("type") == "table")
+            image_count = sum(1 for e in media if e.get("type") == "image")
+            q_content = str(question.get("content") or "")
+            expected_table = bool(table_cue.search(q_content))
+            expected_image = bool(image_cue.search(q_content))
+            integrity_warnings = []
+            if expected_table and table_count == 0:
+                integrity_warnings.append("table_media_missing")
+            if expected_image and image_count == 0:
+                integrity_warnings.append("image_media_missing")
+
+            question["media_integrity"] = {
+                "status": "ok" if not integrity_warnings else "failed",
+                "expected_table": expected_table,
+                "expected_image": expected_image,
+                "actual_tables": table_count,
+                "actual_images": image_count,
+                "warnings": integrity_warnings,
+            }
+            if integrity_warnings:
+                question.setdefault("warnings", []).extend(
+                    warning for warning in integrity_warnings
+                    if warning not in question.get("warnings", [])
+                )
+
+            if media:
+                logger.info(f"✅ 题目 {q_id} 边界匹配完成：{table_count}个表格，{image_count}张图片")
             else:
-                logger.debug(f"题目 {question.get('id')} 无需附加元素")
+                logger.debug(f"题目 {q_id} 边界内无附加媒体")
 
-        # 如果还有未分配的元素，分配给第一题（兜底策略）
-        remaining_tables = tables[table_idx:]
-        remaining_images = images[image_idx:]
+        assigned_ranges = [
+            (start_by_id[q.get("id")], next_start_by_id[q.get("id")])
+            for q in questions if q.get("id") in start_by_id
+        ]
+        for idx, element in enumerate(elements):
+            if element.get("type") not in ("table", "image"):
+                continue
+            if not any(start <= idx < end for start, end in assigned_ranges):
+                unmatched_media += 1
 
-        if remaining_tables or remaining_images:
-            logger.warning(f"[智能匹配] 还有未分配的元素: {len(remaining_tables)}个表格, {len(remaining_images)}张图片，将分配给第一题")
-            if questions:
-                questions[0]['structured_content'].extend(remaining_tables)
-                questions[0]['structured_content'].extend(remaining_images)
+        if unmatched_media:
+            logger.warning(f"[智能匹配] {unmatched_media} 个媒体元素不在任何题目边界内，已保留未分配状态")

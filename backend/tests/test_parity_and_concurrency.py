@@ -258,8 +258,8 @@ class TestErrorClassificationMatrix:
         assert e.step == "analyze"
         assert e.question_id == 5
 
-    def test_gemini_auth_error(self):
-        """Gemini API key 无效。"""
+    def test_provider_auth_error(self):
+        """API key 无效。"""
         from pipeline.errors import PipelineError, ErrorCategory
         e = PipelineError.from_exception(
             RuntimeError("HTTP 403 API key not valid. Please pass a valid API key.")
