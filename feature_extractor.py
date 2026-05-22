@@ -435,7 +435,7 @@ def build_big_question_prompt(question_text: str, options: str = "",
       "score_share": 该小问占总分的比例(0.0-1.0的浮点数，所有小问之和=1.0),
       "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
       "reasoning_steps": 正整数（该小问最少认知操作数），
-      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径或答题方向数。选择题：有效干扰选项数。非选择题：需排除的错误假设/机制/解释的数量。例如蛋白不在上清需排除2+原因(包涵体/未分泌/降解)→trap>=2；PCR引物方向判断需从多个引物中选配→trap>=2），
       "novelty": 1-3（知识/方法新颖度），
       "knowledge_breadth": 1-3（跨知识模块程度），
       "brief": "核心任务(<=20字)"
