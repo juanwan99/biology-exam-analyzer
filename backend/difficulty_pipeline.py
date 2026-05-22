@@ -121,7 +121,45 @@ class DifficultyPipeline:
 
             if isinstance(structured, dict) and structured.get("_big_question_failed"):
                 failure_type = structured.get("failure_type") or "big_question_structure_failed"
-                logger.error(f"[v3.1] 结构化解析失败: {failure_type}，阻断大题难度评估")
+                logger.error(f"[v3.1] 结构化解析失败: {failure_type}")
+
+                # SEU fallback: use v2 analysis scoring_units if available
+                analysis_result = kwargs.get("analysis_result") or {}
+                fg = analysis_result.get("_fine_grained", {})
+                seus = fg.get("scoring_units", []) if isinstance(fg, dict) else []
+                if len(seus) >= 2:
+                    logger.info(f"[v3.1] SEU fallback: {len(seus)} SEUs available")
+                    seu_metrics = self._scoring_unit_metrics(seus)
+                    if seu_metrics and seu_metrics["avg_confidence"] >= 0.5:
+                        fallback_score = seu_metrics["score"]
+                        fallback_score = max(2.0, min(10.0, round(fallback_score, 1)))
+                        label = score_to_label(fallback_score)
+                        logger.info(f"[v3.1] SEU fallback 评分: {fallback_score} ({label})")
+                        return {
+                            "base_difficulty": fallback_score,
+                            "final_difficulty": fallback_score,
+                            "difficulty_label": label,
+                            "cognitive_level": round(fallback_score * 0.9, 1),
+                            "cognitive_level_source": "linear_approximation",
+                            "score_distribution_by_difficulty": self._score_distribution(fallback_score, total_score),
+                            "features": {
+                                "_feature_status": "seu_fallback",
+                                "big_question_failure_type": failure_type,
+                                "seu_count": len(seus),
+                            },
+                            "raw_score": fallback_score,
+                            "source": "seu_fallback",
+                            "difficulty_source": "seu_fallback",
+                            "confidence": min(0.5, round(seu_metrics["avg_confidence"] * 0.5, 2)),
+                            "predicted_score_rate": None,
+                            "flags": ["seu_fallback", f"original_failure:{failure_type}"],
+                            "calibration_status": "not_configured",
+                            "calibration_error": None,
+                        }
+                    else:
+                        logger.warning("[v3.1] SEU fallback 置信度不足，仍阻断")
+
+                # No fallback available → hard block as before
                 failed_features = dict(structured)
                 failed_features["big_question_errors"] = structured.get("errors", [])
                 return self._failed_result(
@@ -180,6 +218,16 @@ class DifficultyPipeline:
         analysis_result = kwargs.get("analysis_result") or {}
         features, flags = self._merge_representation(features, analysis_result, flags)
         features, flags = self._merge_media_representation(features, question, is_big_question, flags)
+
+        # Quality gate: block scoring when content quality is too low
+        quality_score = features.get("quality_score")
+        if isinstance(quality_score, (int, float)) and quality_score <= 2:
+            logger.error(f"[难度] quality_score={quality_score}，内容质量不足，阻断难度评估")
+            return self._failed_result(
+                "quality_score_too_low",
+                flags=["quality_score_too_low"],
+                features=features,
+            )
 
         # Stage 3: 规则评分（消费 _feature_status 四态）
         feature_status = features.get("_feature_status", "ok")
