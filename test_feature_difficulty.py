@@ -654,7 +654,15 @@ class TestBuildBigQuestionPrompt:
         assert '"status": "ok"' in prompt
         assert '"status": "failed"' in prompt
         assert '"failure_type"' in prompt
-        assert "points_sum" in prompt
+        assert "score_share" in prompt
+
+    def test_prompt_uses_score_share_not_points(self):
+        """v3.2: prompt 使用 score_share 而非 points。"""
+        prompt = self.build("某大题内容", question_type="实验题")
+        assert "score_share" in prompt
+        # points_sum 和 points_unknown 不应出现在新 prompt 中
+        assert "points_sum" not in prompt
+        assert "points_unknown" not in prompt
 
     def test_big_question_prompt_file_registered(self):
         from prompt_loader import PromptLoader
@@ -1150,3 +1158,221 @@ class TestBigQuestionRetry:
             )
         assert result.get("_big_question_failed") is True
         assert mock_send.call_count == 1
+
+
+class TestParseScoreShare:
+    """score_share 模式解析测试。"""
+
+    def setup_method(self):
+        from feature_extractor import parse_big_question_features
+        self.parse = parse_big_question_features
+
+    def test_score_share_parsed_and_points_derived(self):
+        """score_share 输入 → 解析成功，points 由 total_score * score_share 派生。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.25, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.25, "working_memory": 4, "reasoning_steps": 3,
+                     "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.50, "working_memory": 4, "reasoning_steps": 5,
+                     "trap_density": 2, "novelty": 3, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [{"from": 1, "to": 2, "strength": "strong", "reason": "x"}],
+                "global_features": {"shared_context_load": 2, "global_method_novelty": 1},
+                "bloom": 4,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        assert sqs[0]["points"] == 3   # 12 * 0.25 = 3
+        assert sqs[1]["points"] == 3   # 12 * 0.25 = 3
+        assert sqs[2]["points"] == 6   # 12 * 0.50 = 6
+        assert sqs[0]["score_share"] == 0.25
+        assert result["data"].get("allocation_source") == "inferred"
+
+    def test_score_share_sum_mismatch_rejected(self):
+        """score_share 之和偏离 1.0 超过 10% → 失败。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.2, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is False
+        assert result["failure_type"] == "score_share_sum_mismatch"
+
+    def test_score_share_normalized_within_tolerance(self):
+        """score_share 之和在 0.9~1.1 范围内 → 自动归一化后通过。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=12, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        total_derived = sum(sq["points"] for sq in sqs)
+        assert total_derived == 12
+
+    def test_backward_compat_absolute_points_still_work(self):
+        """旧格式（absolute points）仍然可用——向后兼容。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                {"id": 2, "points": 4, "working_memory": 4, "reasoning_steps": 3,
+                 "trap_density": 2, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw, total_score=8, detailed=True)
+        assert result["ok"] is True
+        assert result["data"]["subquestions"][0]["points"] == 4
+        assert result["data"].get("allocation_source") == "explicit"
+
+    def test_score_share_rounding_adjustment(self):
+        """score_share 派生 points 时，四舍五入确保总和精确等于 total_score。"""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+        result = self.parse(raw, total_score=10, detailed=True)
+        assert result["ok"] is True
+        sqs = result["data"]["subquestions"]
+        total_derived = sum(sq["points"] for sq in sqs)
+        assert total_derived == 10, f"total points should be exactly 10, got {total_derived}"
+
+    def test_allocation_source_in_legacy_mode(self):
+        """旧格式解析结果包含 allocation_source=explicit。"""
+        raw = json.dumps({
+            "subquestions": [
+                {"id": 1, "points": 6, "working_memory": 3, "reasoning_steps": 3,
+                 "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+            ],
+            "dependencies": [],
+            "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+            "bloom": 3,
+        })
+        result = self.parse(raw, total_score=6, detailed=True)
+        assert result["ok"] is True
+        assert result["data"].get("allocation_source") == "explicit"
+
+
+class TestSEUFallback:
+    """大题结构化失败时的 SEU fallback 测试。"""
+
+    def test_seu_fallback_produces_score_when_big_question_fails(self):
+        """big_question 失败 + v2 SEU 可用 → fallback 出分，标记 seu_fallback。"""
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "points_sum_mismatch",
+            "errors": ["points_sum=6, total_score=12"],
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.33, "difficulty_estimate": 7.0, "bloom_level": 4,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.33, "difficulty_estimate": 6.0, "bloom_level": 3,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.34, "difficulty_estimate": 8.0, "bloom_level": 5,
+                     "allocation_confidence": 0.8},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 12,
+                }, analysis_result=analysis_result)
+            )
+        assert result.get("analysis_failed") is not True, "SEU fallback 应产出有效分数"
+        assert result["final_difficulty"] is not None
+        assert result["difficulty_source"] == "seu_fallback"
+        assert result["confidence"] <= 0.5
+
+    def test_seu_fallback_not_triggered_without_seus(self):
+        """big_question 失败 + 无 SEU → 仍然 failed。"""
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "points_sum_mismatch",
+            "errors": ["points_sum=6, total_score=12"],
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 12,
+                }, analysis_result={})
+            )
+        assert result["analysis_failed"] is True
+        assert result["final_difficulty"] is None
+
+    def test_seu_fallback_requires_minimum_seus(self):
+        """SEU 数量 < 2 → 不触发 fallback。"""
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "score_share_sum_mismatch",
+            "errors": ["score_share_sum=0.4"],
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 1.0, "difficulty_estimate": 5.0, "bloom_level": 3,
+                     "allocation_confidence": 0.5},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "某大题...", "question_type": "简答题",
+                    "correct_answer": "", "total_score": 12,
+                }, analysis_result=analysis_result)
+            )
+        assert result["analysis_failed"] is True
