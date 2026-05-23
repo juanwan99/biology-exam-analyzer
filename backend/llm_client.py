@@ -191,12 +191,12 @@ def _get_native_client(provider: dict):
     global _native_client
     if _native_client is None:
         import importlib
-        sdk_module = provider.get("sdk_module", "google.genai")
+        sdk_module = provider["sdk_module"]
         sdk = importlib.import_module(sdk_module)
         project = os.environ.get(provider.get("project_env", ""), "")
         location = os.environ.get(provider.get("location_env", ""), "us-central1")
         _native_client = sdk.Client(
-            vertexai=provider.get("use_vertex", True),
+            vertexai=provider.get("cloud_mode", False),
             project=project,
             location=location,
         )
@@ -236,7 +236,7 @@ async def _call_native_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float = 120.0) -> str:
     """调用 native SDK provider，含超时和重试。"""
     import importlib
-    sdk_module = provider.get("sdk_module", "google.genai")
+    sdk_module = provider["sdk_module"]
     types = importlib.import_module(f"{sdk_module}.types")
 
     client = _get_native_client(provider)

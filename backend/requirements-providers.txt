@@ -1,2 +1,0 @@
-# Provider-specific SDK dependencies
-google-genai>=1.0.0
