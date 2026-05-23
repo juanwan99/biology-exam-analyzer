@@ -4,7 +4,7 @@
 
 cd /home/ubuntu/biology-exam-analyzer/backend
 source .env
-export GEMINI_API_KEY GEMINI_API_KEY_2 GEMINI_API_BASE DATABASE_URL
+export DATABASE_URL
 
 echo "=========================================="
 echo "开始批量处理所有教材"

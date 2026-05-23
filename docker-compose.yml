@@ -31,7 +31,7 @@ services:
       - ./prompts:/app/subject_prompts  # 多学科 prompt 模板
       - ./uploads:/app/uploads
       - ./backend/rules:/app/rules
-      - ./.secrets:/app/.secrets:ro
+      - ./.credentials:/app/.credentials:ro
       - ./reports:/app/reports
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -40,10 +40,10 @@ services:
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
-      - GCP_PROJECT=${GCP_PROJECT}
+      - LLM_SA_CREDENTIALS=${LLM_SA_CREDENTIALS}
+      - LLM_PROJECT=${LLM_PROJECT}
       - HTTPS_PROXY=${HTTPS_PROXY}
+      - LLM_LOCATION=${LLM_LOCATION}
     depends_on:
       postgres:
         condition: service_healthy

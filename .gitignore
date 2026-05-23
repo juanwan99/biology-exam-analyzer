@@ -1,5 +1,6 @@
 .env
 .secrets/
+.credentials/
 *.bak
 __pycache__/
 *.pyc

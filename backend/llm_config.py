@@ -1,4 +1,4 @@
-"""LLM Provider 配置 — DeepSeek（主力文本分析） + Qwen-VL（视觉识别）。
+"""LLM Provider 配置 — 多 provider fallback 链。
 
 所有 LLM 调用通过 llm_client.py 统一路由，按此列表顺序尝试。
 支持多 provider fallback 链，按优先级自动切换。
@@ -9,10 +9,12 @@ PROVIDERS = [
     {
         "name": "primary",
         "model": "deepseek-chat",
-        "api_format": "genai_sdk",
-        "sa_file_env": "GOOGLE_APPLICATION_CREDENTIALS",
-        "project_env": "GCP_PROJECT",
-        "location": "us-central1",
+        "api_format": "native_sdk",
+        "sdk_module": "google.genai",
+        "use_vertex": True,
+        "sa_file_env": "LLM_SA_CREDENTIALS",
+        "project_env": "LLM_PROJECT",
+        "location_env": "LLM_LOCATION",
         "max_tokens": 16384,
         "thinking_overhead": 3,
         "semaphore_limit": 10,

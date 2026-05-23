@@ -122,3 +122,6 @@ def get_analysis_service():
     return _analysis_service
 
 get_question_analyzer = get_vision_analyzer
+
+# Backward-compat alias: some modules import get_analyzer
+get_analyzer = get_vision_analyzer

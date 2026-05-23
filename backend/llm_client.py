@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 内置多 provider fallback 链（DeepSeek 主力）。
+"""统一 LLM 客户端 — 内置多 provider fallback 链。
 
 所有 LLM 调用都通过 llm_call() 入口，自动按 llm_config.PROVIDERS 顺序尝试。
 每次调用独立 fallback，不是整卷切换。
@@ -13,7 +13,7 @@ logger = get_logger()
 
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
-_genai_client = None
+_native_client = None
 
 
 async def close_llm_clients():
@@ -185,24 +185,26 @@ def _extract_text(api_format: str, data: dict) -> str:
     return text
 
 
-# ── 备用 provider SDK ────────────────────────────────────────────────
+# ── Native SDK provider ────────────────────────────────────────────────
 
-def _get_genai_client(provider: dict):
-    global _genai_client
-    if _genai_client is None:
-        from google import genai
+def _get_native_client(provider: dict):
+    global _native_client
+    if _native_client is None:
+        import importlib
+        sdk_module = provider.get("sdk_module", "google.genai")
+        sdk = importlib.import_module(sdk_module)
         project = os.environ.get(provider.get("project_env", ""), "")
-        location = provider.get("location", "us-central1")
-        _genai_client = genai.Client(
-            vertexai=True,
+        location = os.environ.get(provider.get("location_env", ""), "us-central1")
+        _native_client = sdk.Client(
+            vertexai=provider.get("use_vertex", True),
             project=project,
             location=location,
         )
-    return _genai_client
+    return _native_client
 
 
-def _convert_messages_to_genai(messages: list) -> tuple:
-    """OpenAI Chat messages → genai (contents, system_instruction)。"""
+def _convert_messages_to_native(messages: list) -> tuple:
+    """OpenAI Chat messages → native SDK (contents, system_instruction)。"""
     contents = []
     system_instruction = None
     for msg in messages:
@@ -211,7 +213,7 @@ def _convert_messages_to_genai(messages: list) -> tuple:
             if isinstance(msg["content"], str):
                 system_instruction = msg["content"]
             continue
-        genai_role = "model" if role == "assistant" else "user"
+        native_role = "model" if role == "assistant" else "user"
         parts = []
         content = msg["content"]
         if isinstance(content, str):
@@ -226,17 +228,19 @@ def _convert_messages_to_genai(messages: list) -> tuple:
                         header, b64data = url.split(",", 1)
                         mime_type = header.split(";")[0].split(":")[1]
                         parts.append({"inline_data": {"mime_type": mime_type, "data": b64data}})
-        contents.append({"role": genai_role, "parts": parts})
+        contents.append({"role": native_role, "parts": parts})
     return contents, system_instruction
 
 
-async def _call_genai_provider(provider: dict, messages: list, max_tokens: int,
+async def _call_native_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float = 120.0) -> str:
-    """调用备用 provider（genai SDK），含超时和重试。"""
-    from google.genai import types
+    """调用 native SDK provider，含超时和重试。"""
+    import importlib
+    sdk_module = provider.get("sdk_module", "google.genai")
+    types = importlib.import_module(f"{sdk_module}.types")
 
-    client = _get_genai_client(provider)
-    contents, system_instruction = _convert_messages_to_genai(messages)
+    client = _get_native_client(provider)
+    contents, system_instruction = _convert_messages_to_native(messages)
     thinking_mult = provider.get("thinking_overhead", 1)
     capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
 
@@ -299,8 +303,8 @@ async def _http_post(url: str, headers: dict, json: dict,
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float) -> str:
     """调用单个 provider（含内部重试）。"""
-    if provider["api_format"] == "genai_sdk":
-        return await _call_genai_provider(provider, messages, max_tokens, temperature, timeout)
+    if provider["api_format"] == "native_sdk":
+        return await _call_native_provider(provider, messages, max_tokens, temperature, timeout)
 
     url = _get_url(provider)
     headers = _get_headers(provider)
