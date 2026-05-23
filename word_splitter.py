@@ -196,10 +196,20 @@ class WordQuestionSplitter:
             return ""
         rows_data = []
         for row in table.rows:
-            row_data = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+            row_data = []
+            prev_tc = None
+            for cell in row.cells:
+                if cell._tc is prev_tc:
+                    continue  # skip merged cell duplicate
+                prev_tc = cell._tc
+                row_data.append(cell.text.strip().replace("\n", " "))
             rows_data.append(row_data)
         if not rows_data:
             return ""
+        max_cols = max(len(r) for r in rows_data)
+        for row in rows_data:
+            while len(row) < max_cols:
+                row.append("")
         lines = []
         lines.append("| " + " | ".join(rows_data[0]) + " |")
         lines.append("|" + "|".join(["---" for _ in rows_data[0]]) + "|")
