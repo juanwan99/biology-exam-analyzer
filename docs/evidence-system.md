@@ -108,7 +108,13 @@ DISCOVERY_ENGINE_TIMEOUT=90
 远端基线标签：
 
 ```bash
-baseline-2026-05-27-agent-search-architecture
+baseline-2026-05-27-full-tested-architecture
+```
+
+远端基线提交：
+
+```bash
+07250fc9aefa61f22c8e9368d135835d8e98ca89
 ```
 
 完整后端测试：
@@ -120,7 +126,7 @@ docker exec -w /app -e PYTHONPATH=/app biology_backend python -m pytest -q
 当前结果：
 
 ```text
-591 passed, 8 warnings
+592 passed, 8 warnings
 ```
 
 最新报告视觉 QA：
@@ -130,3 +136,23 @@ zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.pdf
 pages=15
 problem_count=0
 ```
+
+最新报告位置：
+
+```text
+远端：
+/home/ubuntu/biology-exam-analyzer/reports/zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.html
+/home/ubuntu/biology-exam-analyzer/reports/zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.pdf
+
+本机：
+C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.html
+C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.pdf
+```
+
+本机干净代码副本：
+
+```text
+C:\Users\Administrator\Documents\New project\remote_edit\biology-exam-analyzer-clean-20260527
+```
+
+旧目录 `C:\Users\Administrator\Documents\New project\remote_edit\biology-exam-analyzer` 保留历史工作痕迹，当前不再作为架构基准使用。
