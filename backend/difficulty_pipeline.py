@@ -1,6 +1,6 @@
 """难度量化 Pipeline 主控 — 特征分析评分。
 
-v2: 特征提取 + 规则评分 + 多模态 representation 合并 + 动态 confidence
+v2: 特征提取 + 规则评分 + Gemini representation 合并 + 动态 confidence
 v3.1: 大题结构化拆分评估（total_score >= 8 → 结构化提取 → 聚合 → 评分）
 设计文档: docs/plans/2026-03-28-difficulty-v3.1-design.md
 """
@@ -53,7 +53,7 @@ class DifficultyPipeline:
     """难度量化 Pipeline。v3.1: 大题结构化拆分评估。"""
 
     def __init__(self, **kwargs):
-        """初始化。接受 kwargs 以兼容旧调用方签名。"""
+        """初始化。接受 kwargs 以兼容旧调用方 DifficultyEngine(gemini_analyzer=...) 签名。"""
         pass
 
     async def _evaluate_single(self, question: dict, **kwargs) -> dict:
@@ -61,7 +61,7 @@ class DifficultyPipeline:
 
         Args:
             question: dict，需包含 content, question_type, correct_answer, total_score
-            **kwargs: analysis_result=多模态分析结果（含 representation 字段）
+            **kwargs: analysis_result=Gemini 分析结果（含 representation 字段）
 
         Returns:
             dict: 兼容旧接口 + 新增 features/flags/confidence 字段
@@ -111,79 +111,74 @@ class DifficultyPipeline:
 
         # ── v3.1 大题分流 ──
         is_big_question = total_score >= 8
+        media_items = question.get("media_items")
+        if media_items is None:
+            media_items = question.get("_media_for_ai") or []
         structured = None
 
         if is_big_question:
             logger.info(f"[v3.1] 大题模式 (total_score={total_score}): {question_text[:50]}...")
             structured = await extract_big_question_features(
                 full_text, "", correct_answer, question_type,
-                subject=subject, total_score=total_score, return_failure=True)
+                subject=subject, total_score=total_score, return_failure=True,
+                media_items=media_items)
 
             if isinstance(structured, dict) and structured.get("_big_question_failed"):
                 failure_type = structured.get("failure_type") or "big_question_structure_failed"
                 logger.error(f"[v3.1] 结构化解析失败: {failure_type}")
 
-                # SEU fallback: use v2 analysis scoring_units if available
                 analysis_result = kwargs.get("analysis_result") or {}
                 fg = analysis_result.get("_fine_grained", {})
                 seus = fg.get("scoring_units", []) if isinstance(fg, dict) else []
-                if len(seus) >= 2:
-                    logger.info(f"[v3.1] SEU fallback: {len(seus)} SEUs available")
-                    seu_metrics = self._scoring_unit_metrics(seus)
-                    if seu_metrics and seu_metrics["avg_confidence"] >= 0.5:
-                        fallback_score = seu_metrics["score"]
-                        fallback_score = max(2.0, min(10.0, round(fallback_score, 1)))
-                        label = score_to_label(fallback_score)
-                        # Quality gate: block SEU fallback for suspiciously short content.
-                        # quality_score is unavailable when big_question extraction fails;
-                        # content length is a pragmatic proxy for parse-failure detection.
-                        content_len = len(question_text.strip())
-                        if content_len < 30:
-                            logger.error(
-                                f"[v3.1] SEU fallback 内容过短({content_len}字)，"
-                                "疑似解析失败，阻断"
-                            )
-                        else:
-                            logger.info(f"[v3.1] SEU fallback 评分: {fallback_score} ({label})")
-                            return {
-                                "base_difficulty": fallback_score,
-                                "final_difficulty": fallback_score,
-                                "difficulty_label": label,
-                                "cognitive_level": round(fallback_score * 0.9, 1),
-                                "cognitive_level_source": "linear_approximation",
-                                "score_distribution_by_difficulty": self._score_distribution(fallback_score, total_score),
-                                "features": {
-                                    "_feature_status": "seu_fallback",
-                                    "big_question_failure_type": failure_type,
-                                    "seu_count": len(seus),
-                                },
-                                "raw_score": fallback_score,
-                                "source": "seu_fallback",
-                                "difficulty_source": "seu_fallback",
-                                "confidence": min(0.5, round(seu_metrics["avg_confidence"] * 0.5, 2)),
-                                "predicted_score_rate": None,
-                                "flags": ["seu_fallback", f"original_failure:{failure_type}"],
-                                "calibration_status": "not_configured",
-                                "calibration_error": None,
-                            }
-                    else:
-                        logger.warning("[v3.1] SEU fallback 置信度不足，仍阻断")
+                fallback_block_flags = []
 
-                # No fallback available → hard block as before
+                # Failed structure extraction is fail-closed. Existing SEU
+                # evidence is retained for debugging, but never converted into
+                # a normal difficulty score.
                 failed_features = dict(structured)
                 failed_features["big_question_errors"] = structured.get("errors", [])
+                if seus:
+                    seu_metrics = self._scoring_unit_metrics(seus)
+                    failed_features["seu_count"] = len(seus)
+                    failed_features["seu_available_but_not_authoritative"] = True
+                    if seu_metrics:
+                        failed_features["seu_metrics"] = {
+                            "average_score": round(seu_metrics["average_score"], 2),
+                            "bottleneck_score": round(seu_metrics["bottleneck_score"], 2),
+                            "mastery_threshold_score": round(seu_metrics["mastery_threshold_score"], 2),
+                            "avg_confidence": round(seu_metrics["avg_confidence"], 2),
+                        }
+                    fallback_block_flags.append("seu_available_but_not_authoritative")
+                    logger.error(
+                        f"[v3.1] SEU evidence exists ({len(seus)} units) but structured big-question "
+                        "extraction failed; blocking difficulty instead of emitting fallback score"
+                    )
                 return self._failed_result(
                     failure_type,
-                    flags=["big_question_structure_failed", failure_type],
+                    flags=["big_question_structure_failed", failure_type] + fallback_block_flags,
                     features=failed_features,
                 )
 
             if structured is not None:
-                aggregated = aggregate_big_question(
-                    structured["subquestions"],
-                    structured["dependencies"],
-                    structured["global_features"],
-                )
+                try:
+                    aggregated = aggregate_big_question(
+                        structured["subquestions"],
+                        structured["dependencies"],
+                        structured["global_features"],
+                    )
+                except ValueError as exc:
+                    failure_type = (
+                        "dependency_cycle"
+                        if "cycle" in str(exc)
+                        else "big_question_aggregation_failed"
+                    )
+                    failed_features = dict(structured)
+                    failed_features["big_question_errors"] = [str(exc)]
+                    return self._failed_result(
+                        failure_type,
+                        flags=["big_question_structure_failed", failure_type],
+                        features=failed_features,
+                    )
                 features = {
                     "working_memory": aggregated["working_memory"],
                     "reasoning_steps": round(aggregated["effective_steps"]),
@@ -213,7 +208,9 @@ class DifficultyPipeline:
 
         if not is_big_question:
             logger.info(f"开始特征提取: {question_text[:50]}...")
-            features = await extract_features(full_text, "", correct_answer, question_type, subject=subject)
+            features = await extract_features(
+                full_text, "", correct_answer, question_type,
+                subject=subject, media_items=media_items)
             logger.info(f"特征提取完成: {features}")
 
             # Bloom 优先级：LLM 分析的 bloom_level 优先于特征提取推断
@@ -221,7 +218,7 @@ class DifficultyPipeline:
             if isinstance(llm_bloom, (int, float)) and 1 <= llm_bloom <= 6:
                 features["bloom"] = int(llm_bloom)
 
-        # Stage 2.5: 合并多模态 representation
+        # Stage 2.5: 合并 Gemini representation
         flags = []
         if is_big_question and structured and structured.get("_dropped_deps", 0) > 0:
             flags.append("dep_partial_invalid")
@@ -229,15 +226,13 @@ class DifficultyPipeline:
         features, flags = self._merge_representation(features, analysis_result, flags)
         features, flags = self._merge_media_representation(features, question, is_big_question, flags)
 
-        # Quality gate: block scoring when content quality is too low
+        # Quality score describes item quality, not evaluation viability. Low-quality
+        # items still need a difficulty estimate so the report can show both signals.
         quality_score = features.get("quality_score")
         if isinstance(quality_score, (int, float)) and quality_score <= 2:
-            logger.error(f"[难度] quality_score={quality_score}，内容质量不足，阻断难度评估")
-            return self._failed_result(
-                "quality_score_too_low",
-                flags=["quality_score_too_low"],
-                features=features,
-            )
+            logger.warning(f"[难度] quality_score={quality_score}，标记题目质量风险但继续评估难度")
+            features["quality_issue_low_score"] = True
+            flags.append("quality_issue_low_score")
 
         # Stage 3: 规则评分（消费 _feature_status 四态）
         feature_status = features.get("_feature_status", "ok")
@@ -301,8 +296,6 @@ class DifficultyPipeline:
         confidence -= consistency.get("confidence_penalty", 0)
         if feature_status == "partial":
             confidence *= 0.7
-        elif difficulty_source == "seu_fallback":
-            confidence *= 0.5
         elif difficulty_source == "default":
             confidence = 0.2
         confidence = max(0.1, round(confidence, 2))
@@ -311,6 +304,13 @@ class DifficultyPipeline:
         bloom = features.get("bloom", 3)
         _BLOOM_COGNITIVE = {1: 1.0, 2: 2.5, 3: 4.5, 4: 6.5, 5: 8.0, 6: 9.5}
         cognitive_level = _BLOOM_COGNITIVE.get(bloom, round(bloom / 6.0 * 10.0, 1))
+        score_layer = self._score_layer(
+            score,
+            features,
+            analysis_result,
+            is_big_question=is_big_question,
+            total_score=total_score,
+        )
 
         return {
             # 旧字段（main.py / prediction_service.py / 前端 消费）
@@ -319,6 +319,11 @@ class DifficultyPipeline:
             "difficulty_label": label,
             "cognitive_level": cognitive_level,
             "score_distribution_by_difficulty": self._score_distribution(score, total_score),
+            "content_difficulty": score,
+            "difficulty_density": score_layer["difficulty_density"],
+            "score_risk": score_layer["score_risk"],
+            "score_layer": score_layer,
+            "difficulty_model_version": "four_layer_20260526",
             # 新字段
             "features": features,
             "raw_score": raw_score,
@@ -346,33 +351,304 @@ class DifficultyPipeline:
         adjusted = float(score)
 
         seu_metrics = self._scoring_unit_metrics(fg.get("scoring_units", []))
+        diagnostic_strong_count = 0
+        diagnostic_medium_count = 0
         if seu_metrics:
             seu_score = seu_metrics["score"]
+            average_score = seu_metrics["average_score"]
+            bottleneck_score = seu_metrics["bottleneck_score"]
+            mastery_threshold_score = seu_metrics["mastery_threshold_score"]
+            unit_count = seu_metrics["unit_count"]
+            top_share = seu_metrics["top_share"]
             high_order_share = seu_metrics["high_order_share"]
             avg_confidence = seu_metrics["avg_confidence"]
 
             if is_big_question:
-                target = 0.58 * adjusted + 0.42 * seu_score + high_order_share * 1.6
-                if target > adjusted + 0.05:
-                    adjusted = target
+                # 大题难度是构念难度，不是采分点平均值。SEU 只能提供
+                # “最高认知瓶颈”证据，不能用低均值把结构化规则分压低。
+                threshold_score = max(bottleneck_score, mastery_threshold_score)
+                if threshold_score > adjusted + 0.20:
+                    lift_ratio = 0.45 if high_order_share >= 0.20 else 0.30
+                    lift = min(1.00, (threshold_score - adjusted) * lift_ratio)
+                    adjusted += lift
                     if high_order_share >= 0.20:
-                        flags.append("seu_high_order_adjustment")
+                        flags.append("seu_bottleneck_adjustment")
                     else:
-                        flags.append("seu_crosscheck_adjustment")
-            elif total_score <= 2 and avg_confidence >= 0.70:
-                # Trap/novelty can be over-additive on bounded choice items.
-                # A reliable SEU estimate prevents a single item from becoming
-                # "hardest" only because many independent risk labels stacked.
-                if adjusted - seu_score > 1.20 and high_order_share < 0.20:
-                    adjusted -= 0.45 * (adjusted - seu_score - 1.0)
+                        flags.append("seu_bottleneck_crosscheck")
+                else:
+                    construct_low = (
+                        features.get("working_memory", 3) <= 3
+                        and features.get("reasoning_steps", 4) <= 5
+                        and features.get("trap_density", 2) <= 2
+                        and features.get("novelty", 2) <= 2
+                        and features.get("knowledge_breadth", 2) <= 2
+                        and features.get("representation_complexity", 1) <= 1
+                    )
+                    if (
+                        construct_low
+                        and avg_confidence >= 0.85
+                        and high_order_share < 0.10
+                        and adjusted - bottleneck_score > 1.50
+                    ):
+                        adjusted -= min(0.60, (adjusted - bottleneck_score) * 0.20)
+                        flags.append("seu_low_construct_moderation")
+                    elif (
+                        adjusted >= 9.20
+                        and bottleneck_score < 8.00
+                        and avg_confidence >= 0.80
+                        and adjusted - bottleneck_score > 1.00
+                    ):
+                        adjusted -= min(0.90, (adjusted - bottleneck_score) * 0.40)
+                        flags.append("seu_no_top_bottleneck_moderation")
+                    if (
+                        adjusted > 8.90
+                        and unit_count >= 7
+                        and top_share < 0.20
+                        and high_order_share < 0.20
+                        and average_score < 6.80
+                    ):
+                        adjusted = 8.90
+                        flags.append("seu_many_medium_unit_moderation")
+            elif total_score <= 4 and avg_confidence >= 0.70:
+                # Bounded objective/semi-objective items can look inflated when
+                # global labels stack. Reliable SEU evidence acts as a ceiling
+                # unless a large share is genuinely high-order.
+                strong_construct_signal = (
+                    features.get("working_memory", 3) >= 4
+                    and features.get("trap_density", 1) >= 3
+                    and features.get("representation_complexity", 1) >= 3
+                    and features.get("info_density", 1) >= 3
+                    and (
+                        bottleneck_score >= 8.30
+                        or high_order_share >= 0.35
+                    )
+                )
+                if high_order_share < 0.35 and not strong_construct_signal:
+                    objective_ceiling = (
+                        average_score
+                        + 0.95
+                        + min(0.40, high_order_share * 1.40)
+                    )
+                    objective_ceiling = max(objective_ceiling, 5.0)
+                    if adjusted > objective_ceiling:
+                        adjusted = objective_ceiling
+                        flags.append("bounded_item_seu_ceiling")
+
+                # Keep the older two-point moderation for choice items that
+                # still sit noticeably above their SEU estimate after capping.
+                if adjusted - average_score > 1.20 and high_order_share < 0.20:
+                    adjusted -= 0.45 * (adjusted - average_score - 1.0)
                     flags.append("seu_extreme_rule_moderation")
 
+                # Compact objective items can carry a real high-cognitive
+                # bottleneck even when their point value is small. In that
+                # case the SEU threshold is a bounded lift, not a replacement
+                # for the rule score.
+                threshold_score = max(bottleneck_score, mastery_threshold_score)
+                if (
+                    adjusted < 6.4
+                    and average_score >= 5.80
+                    and threshold_score >= adjusted + 0.80
+                    and top_share >= 0.25
+                ):
+                    adjusted += min(0.70, (threshold_score - adjusted) * 0.35)
+                    flags.append("compact_seu_bottleneck_lift")
+
         diagnostic_units = fg.get("diagnostic_units", []) if isinstance(fg, dict) else []
-        if len(diagnostic_units) >= 3 and adjusted < 6.0:
-            adjusted += 1.00
-            flags.append("diagnostic_burden_adjustment")
+        if diagnostic_units:
+            trap_values = []
+            for unit in diagnostic_units:
+                if not isinstance(unit, dict):
+                    continue
+                raw_strength = unit.get("trap_strength")
+                if raw_strength is None:
+                    trap_values.append(1.0)
+                    continue
+                try:
+                    trap_values.append(float(raw_strength))
+                except (TypeError, ValueError):
+                    trap_values.append(1.0)
+            strong_count = sum(1 for value in trap_values if value >= 3)
+            medium_count = sum(1 for value in trap_values if value >= 2)
+            diagnostic_strong_count = strong_count
+            diagnostic_medium_count = medium_count
+            if (
+                is_big_question
+                and adjusted < 7.0
+                and features.get("representation_complexity", 1) >= 3
+                and strong_count >= 1
+                and medium_count >= 2
+            ):
+                bump = min(
+                    1.30,
+                    0.75 + 0.25 * strong_count + 0.10 * (medium_count - strong_count),
+                )
+                adjusted += bump
+                flags.append("visual_diagnostic_burden_adjustment")
+            elif adjusted < 6.0 and strong_count:
+                bump = min(0.60, 0.25 + 0.15 * strong_count + 0.05 * max(0, medium_count - strong_count - 1))
+                adjusted += bump
+                flags.append("diagnostic_burden_adjustment")
+            elif adjusted < 6.0 and features.get("trap_density", 1) >= 3 and medium_count >= 3:
+                adjusted += 0.30
+                flags.append("diagnostic_burden_adjustment")
+            if not is_big_question and adjusted < 5.8 and medium_count >= 3 and strong_count == 0:
+                reliable_units = bool(
+                    seu_metrics
+                    and seu_metrics.get("unit_count", 0) >= 3
+                    and seu_metrics.get("avg_confidence", 0) >= 0.70
+                )
+                decision_signal = (
+                    reliable_units
+                    or features.get("trap_density", 1) >= 2
+                    or features.get("info_density", 1) >= 2
+                    or features.get("representation_complexity", 1) >= 2
+                )
+                if decision_signal:
+                    bump = min(
+                        1.05,
+                        0.35
+                        + 0.09 * medium_count
+                        + 0.12 * strong_count
+                        + (0.12 if reliable_units else 0.0),
+                    )
+                    adjusted += bump
+                    flags.append("choice_decision_trap_adjustment")
+            if not is_big_question and total_score <= 4 and seu_metrics:
+                reliable_units = bool(
+                    seu_metrics.get("unit_count", 0) >= 3
+                    and seu_metrics.get("avg_confidence", 0) >= 0.70
+                )
+                average_score = seu_metrics.get("average_score", 0)
+                if (
+                    adjusted < 5.8
+                    and reliable_units
+                    and strong_count >= 1
+                    and medium_count >= 3
+                    and (
+                        average_score <= 4.60
+                        or features.get("representation_complexity", 1) >= 2
+                    )
+                ):
+                    bump = min(
+                        0.75,
+                        0.35
+                        + 0.15 * strong_count
+                        + 0.05 * max(0, medium_count - strong_count)
+                        + (0.10 if features.get("representation_complexity", 1) >= 2 else 0.0),
+                    )
+                    adjusted += bump
+                    flags.append("choice_strong_misconception_lift")
+                elif (
+                    adjusted < 5.3
+                    and reliable_units
+                    and strong_count == 0
+                    and medium_count >= 3
+                    and features.get("novelty", 1) <= 1
+                    and average_score >= 3.50
+                ):
+                    bump = min(0.65, 0.35 + 0.08 * medium_count)
+                    adjusted += bump
+                    flags.append("choice_multi_medium_decision_lift")
+
+        if is_big_question and seu_metrics:
+            evidence_floor = max(
+                seu_metrics["bottleneck_score"],
+                seu_metrics["mastery_threshold_score"],
+            )
+            diagnostic_floor = evidence_floor + min(
+                0.30,
+                0.16 * diagnostic_strong_count
+                + 0.06 * max(0, diagnostic_medium_count - diagnostic_strong_count),
+            )
+            stable_visual_bottleneck = (
+                total_score >= 8
+                and seu_metrics.get("avg_confidence", 0) >= 0.75
+                and features.get("representation_complexity", 1) >= 3
+                and diagnostic_medium_count >= 2
+                and evidence_floor >= 7.20
+            )
+            if stable_visual_bottleneck and adjusted < diagnostic_floor:
+                adjusted = min(8.00, diagnostic_floor)
+                flags.append("visual_seu_evidence_floor")
+
+        if is_big_question and seu_metrics and adjusted > 8.4:
+            if (
+                seu_metrics.get("unit_count", 0) >= 7
+                and seu_metrics.get("top_share", 1.0) < 0.20
+                and seu_metrics.get("high_order_share", 1.0) < 0.35
+                and seu_metrics.get("average_score", 10.0) < 6.90
+                and seu_metrics.get("mastery_threshold_score", 10.0) < 7.80
+            ):
+                fragmented_cap = min(
+                    7.80,
+                    max(7.35, seu_metrics["mastery_threshold_score"] + 0.10),
+                )
+                adjusted = min(adjusted, fragmented_cap)
+                flags.append("fragmented_medium_big_item_moderation")
 
         return round(max(0.0, min(10.0, adjusted)), 1), flags
+
+    def _score_layer(self, content_difficulty: float, features: dict,
+                     analysis_result: dict, *,
+                     is_big_question: bool,
+                     total_score: float) -> dict:
+        """Expose score/time pressure separately from content difficulty."""
+        total_score = max(float(total_score or 0), 0.0)
+        score_load = max(0.0, min(1.0, total_score / 14.0)) if total_score else 0.0
+        partial_credit_relief = 0.0
+        part_count = 1
+        dependency_load = 0.0
+
+        big_question = features.get("_big_question") if isinstance(features, dict) else {}
+        subquestions = big_question.get("subquestions", []) if isinstance(big_question, dict) else []
+        dependencies = big_question.get("dependencies", []) if isinstance(big_question, dict) else []
+        if is_big_question and isinstance(subquestions, list) and subquestions:
+            part_count = len(subquestions)
+            points = [float(sq.get("points") or 0) for sq in subquestions if isinstance(sq, dict)]
+            total_points = sum(points) or total_score or 1.0
+            max_share = max((point / total_points for point in points), default=1.0)
+            part_relief = min(0.50, 0.10 * max(0, part_count - 1))
+            balance_relief = 0.16 if max_share <= 0.45 and part_count >= 3 else 0.0
+            valid_dependencies = [
+                dep for dep in dependencies
+                if isinstance(dep, dict) and dep.get("strength") in {"weak", "strong"}
+            ]
+            strong_count = sum(1 for dep in valid_dependencies if dep.get("strength") == "strong")
+            weak_count = sum(1 for dep in valid_dependencies if dep.get("strength") == "weak")
+            dependency_load = min(1.0, strong_count * 0.30 + weak_count * 0.16)
+            partial_credit_relief = max(
+                0.0,
+                min(0.75, part_relief + balance_relief - dependency_load * 0.25),
+            )
+
+        fg = analysis_result.get("_fine_grained", {}) if isinstance(analysis_result, dict) else {}
+        scoring_units = fg.get("scoring_units", []) if isinstance(fg, dict) else []
+        seu_metrics = self._scoring_unit_metrics(scoring_units) if isinstance(scoring_units, list) else None
+        medium_unit_load = 0.0
+        if seu_metrics:
+            avg = seu_metrics["average_score"]
+            bottleneck = max(seu_metrics["bottleneck_score"], seu_metrics["mastery_threshold_score"])
+            medium_unit_load = max(0.0, min(1.0, (avg - 5.5) / 2.5)) * 0.35
+            medium_unit_load += max(0.0, min(1.0, (bottleneck - 7.0) / 2.0)) * 0.25
+            medium_unit_load = min(0.6, medium_unit_load)
+
+        score_risk = (
+            content_difficulty * 0.55
+            + score_load * 2.40
+            + (1.0 - partial_credit_relief) * (1.00 if is_big_question else 0.55)
+            + dependency_load * 0.65
+            + medium_unit_load
+        )
+        return {
+            "content_difficulty": round(content_difficulty, 1),
+            "difficulty_density": round(content_difficulty / total_score, 2) if total_score else None,
+            "score_load": round(score_load, 2),
+            "partial_credit_relief": round(partial_credit_relief, 2),
+            "dependency_load": round(dependency_load, 2),
+            "part_count": part_count,
+            "score_risk": round(max(0.0, min(10.0, score_risk)), 1),
+        }
 
     def _scoring_unit_metrics(self, scoring_units: list) -> dict | None:
         if not scoring_units:
@@ -389,19 +665,36 @@ class DifficultyPipeline:
             float(s.get("allocation_confidence") or 0.5) for s in scoring_units
         ) / len(scoring_units)
 
-        def weighted(field: str, default: float) -> float:
-            return sum(
-                float(s.get(field) or default) * weight
-                for s, weight in zip(scoring_units, weights)
-            ) / total_share
-
         bloom_to_score = {1: 2.5, 2: 4.0, 3: 5.3, 4: 6.5, 5: 7.8, 6: 9.0}
-        bloom_score = sum(
-            bloom_to_score.get(int(round(float(s.get("bloom_level") or 3))), 5.3)
-            * weight
-            for s, weight in zip(scoring_units, weights)
-        ) / total_share
-        difficulty_score = weighted("difficulty_estimate", 5.0)
+        unit_scores = []
+        for s, weight in zip(scoring_units, weights):
+            bloom_score = bloom_to_score.get(
+                int(round(float(s.get("bloom_level") or 3))),
+                5.3,
+            )
+            difficulty_score = float(s.get("difficulty_estimate") or 5.0)
+            unit_scores.append((0.62 * difficulty_score + 0.38 * bloom_score, weight))
+        average_score = sum(score * weight for score, weight in unit_scores) / total_share
+        top_score, top_weight = max(unit_scores, key=lambda item: item[0])
+        top_share = top_weight / total_share if total_share > 0 else 0.0
+        if top_share < 0.12:
+            bottleneck_score = 0.55 * top_score + 0.45 * average_score
+        elif top_share < 0.20:
+            bottleneck_score = 0.75 * top_score + 0.25 * average_score
+        else:
+            bottleneck_score = top_score
+        sorted_scores = sorted(unit_scores, key=lambda item: item[0], reverse=True)
+        cumulative = 0.0
+        threshold_items = []
+        for score, weight in sorted_scores:
+            threshold_items.append((score, weight))
+            cumulative += weight
+            if cumulative / total_share >= 0.35:
+                break
+        threshold_weight = sum(weight for _, weight in threshold_items)
+        mastery_threshold_score = sum(
+            score * weight for score, weight in threshold_items
+        ) / threshold_weight
         high_order_share = sum(
             weight
             for s, weight in zip(scoring_units, weights)
@@ -410,38 +703,43 @@ class DifficultyPipeline:
         ) / total_share
 
         return {
-            "score": 0.62 * difficulty_score + 0.38 * bloom_score,
+            "score": average_score,
+            "average_score": average_score,
+            "bottleneck_score": bottleneck_score,
+            "mastery_threshold_score": mastery_threshold_score,
+            "unit_count": len(scoring_units),
+            "top_share": top_share,
             "high_order_share": high_order_share,
             "avg_confidence": avg_confidence,
         }
 
     def _merge_representation(self, features: dict, analysis_result: dict,
                               flags: list) -> tuple:
-        """合并多模态分析的 representation 数据到特征中。
+        """合并 Gemini 的 representation 数据到 Claude 特征中。
 
-        只有当多模态分析确认 representation_is_core_to_solving=True 时才覆盖。
+        只有当 Gemini 说 representation_is_core_to_solving=True 时才覆盖。
         """
         if not analysis_result:
             return features, flags
 
-        mm_repr = analysis_result.get("representation_complexity")
-        mm_core = analysis_result.get("representation_is_core_to_solving", False)
+        gemini_repr = analysis_result.get("representation_complexity")
+        gemini_core = analysis_result.get("representation_is_core_to_solving", False)
 
-        if mm_repr is None:
+        if gemini_repr is None:
             return features, flags
 
-        text_repr = features.get("representation_complexity", 1)
+        claude_repr = features.get("representation_complexity", 1)
 
-        if mm_core:
-            # 多模态确认表征参与核心推理 → 用多模态值
-            if abs(mm_repr - text_repr) > 1:
+        if gemini_core:
+            # Gemini 确认表征参与核心推理 → 用 Gemini 值
+            if abs(gemini_repr - claude_repr) > 1:
                 flags.append("repr_divergence")
                 logger.warning(
-                    f"多模态/文本 representation 分歧: mm={mm_repr} text={text_repr}")
-            features["representation_complexity"] = mm_repr
+                    f"Gemini/Claude representation 分歧: Gemini={gemini_repr} Claude={claude_repr}")
+            features["representation_complexity"] = gemini_repr
         else:
-            # 多模态分析说不参与核心推理 → 取两者较低值
-            features["representation_complexity"] = min(text_repr, mm_repr)
+            # Gemini 说不参与核心推理 → 取两者较低值
+            features["representation_complexity"] = min(claude_repr, gemini_repr)
 
         return features, flags
 

@@ -151,6 +151,33 @@ def test_render_commercial_report_has_consulting_report_structure():
     assert "LLM 调用与方法论" in html
 
 
+def test_hero_exam_name_can_wrap_long_file_names_on_mobile():
+    html = render_report_product_html(_commercial_model())
+    exam_name_rule = html.split(".exam-name {", 1)[1].split("}", 1)[0]
+
+    assert "max-width: 100%;" in exam_name_rule
+    assert "overflow-wrap: anywhere;" in exam_name_rule
+    assert "word-break: break-word;" in exam_name_rule
+
+
+def test_integrity_trace_wraps_long_internal_markers():
+    html = render_report_product_html(_commercial_model())
+    trace_rule = html.split(".integrity-trace {", 1)[1].split("}", 1)[0]
+    trace_li_rule = html.split(".integrity-trace li {", 1)[1].split("}", 1)[0]
+
+    assert "overflow-wrap: anywhere;" in trace_rule
+    assert "word-break: break-word;" in trace_rule
+    assert "overflow-wrap: anywhere;" in trace_li_rule
+    assert "word-break: break-word;" in trace_li_rule
+
+
+def test_chapter_number_column_has_room_for_icon_and_number():
+    html = render_report_product_html(_commercial_model())
+    chapter_rule = html.split(".chapter {", 1)[1].split("}", 1)[0]
+
+    assert "grid-template-columns: 96px 1fr;" in chapter_rule
+
+
 def test_executive_summary_reads_like_teacher_review_report():
     html = render_report_product_html(_commercial_model())
     visible_html = html.split('<script id="productData"', 1)[0]
@@ -189,13 +216,23 @@ def test_executive_summary_does_not_render_pseudo_clickable_evidence_chips():
     assert "误区诊断点" in summary
 
 
+def test_portfolio_evidence_renders_as_plain_text_not_pseudo_buttons():
+    html = render_report_product_html(_commercial_model())
+    visible_html = html.split('<script id="productData"', 1)[0]
+    portfolio = visible_html.split('id="portfolio"', 1)[1].split('id="deep-dives"', 1)[0]
+
+    assert 'class="evidence-chip"' not in portfolio
+    assert "证据：" in portfolio
+    assert "第 1 题：质量" not in portfolio
+
+
 def test_render_commercial_report_surfaces_sources_and_evidence():
     html = render_report_product_html(_commercial_model())
     visible_html = html.split('<script id="productData"', 1)[0]
 
     assert "来源：报告数据：逐题难度" in visible_html
     assert "指标：平均难度" in visible_html
-    assert "第 1 题：元数据" in visible_html
+    assert "证据：" in visible_html
     assert "元数据置信度：0.66" in visible_html
     assert "purpose_counts" in html
     assert '<script id="productData" type="application/json">' in html
@@ -455,6 +492,25 @@ def test_deep_dives_render_evidence_cards_instead_of_raw_unit_tables():
     assert "素养权重" in visible_html
 
 
+def test_deep_dives_render_source_excerpt_markdown_table_as_visible_table():
+    data = sample_report_data_with_full_units()
+    data["questions"][1]["content"] = (
+        "Q7 experiment stem\n"
+        "| group | treatment | result |\n"
+        "| --- | --- | --- |\n"
+        "| A | light | high |\n"
+        "| B | dark | low |"
+    )
+    model = build_report_product_model(data, {"recommendations": []})
+
+    html = render_report_product_html(model)
+
+    assert 'class="source-evidence"' in html
+    assert 'class="source-table"' in html
+    assert "<td>A</td>" in html
+    assert "<td>light</td>" in html
+
+
 def test_report_surfaces_evidence_integrity_audit_in_visible_html():
     model = _commercial_model()
     model["evidence_integrity"] = {
@@ -485,6 +541,12 @@ def test_report_surfaces_evidence_integrity_audit_in_visible_html():
                 "detail": "非直接标注，仅作分布参考",
                 "severity": "info",
             },
+            {
+                "title": "Report generation failure",
+                "value": "report_teaching_suggestions",
+                "detail": "teaching suggestion timeout",
+                "severity": "warning",
+            },
         ],
     }
     model["methodology"]["evidence_integrity"] = model["evidence_integrity"]
@@ -496,6 +558,8 @@ def test_report_surfaces_evidence_integrity_audit_in_visible_html():
     assert "大题结构化回退" in visible_html
     assert "规则推断" in visible_html
     assert "原题/答案摘录缺失" in visible_html
+    assert "Report generation failure" in visible_html
+    assert "teaching suggestion timeout" in visible_html
     assert "Q12" in visible_html
 
 
@@ -532,6 +596,45 @@ def test_deep_dive_empty_units_render_as_data_failures_not_normal_absence():
     assert "证据链异常" in visible_html
 
 
+def test_deep_dive_adjustment_flags_do_not_render_as_evidence_chain_failure():
+    model = _commercial_model()
+    model["deep_dives"] = [
+        {
+            "question_id": 20,
+            "headline": "Q20 stable",
+            "diagnosis": "No explicit quality issue.",
+            "seu_breakdown": [{"seu_id": "seu_1", "label": "reasoning", "score_share": 1.0}],
+            "du_diagnostics": [
+                {
+                    "du_id": "du_1",
+                    "option_or_trap": "trap 1",
+                    "distractor_type": "calculation_trap",
+                    "misconception": "trap",
+                    "trap_strength": 3,
+                }
+            ],
+            "su_context": [{"su_id": "su_1", "stimulus_type": "multi", "description": "context"}],
+            "revision_plan": ["keep"],
+            "metadata_trace": {"purposes": ["question_analysis"], "confidence": 0.97, "warnings": []},
+            "evidence_integrity": {
+                "difficulty_flags": ["bounded_item_seu_ceiling"],
+                "difficulty_source": "rule_scorer",
+                "difficulty_confidence": 0.97,
+            },
+        }
+    ]
+
+    html = render_report_product_html(model)
+    visible_html = html.split('<script id="productData"', 1)[0]
+
+    assert "证据链异常" not in visible_html
+    assert "未闭合的数据缺口" not in visible_html
+    assert "bounded_item_seu_ceiling" not in visible_html
+    assert "rule_scorer" not in visible_html
+    assert "calculation_trap" not in visible_html
+    assert "trap 1" not in visible_html
+
+
 def test_web_and_pdf_use_distinct_report_layouts():
     model = build_report_product_model(sample_report_data(), {"recommendations": []})
     web_html = render_report_product_html(model)
@@ -545,6 +648,28 @@ def test_web_and_pdf_use_distinct_report_layouts():
     assert pdf_html.count('class="pdf-page ') >= 6
     assert pdf_html.count('class="report-chart ') >= 7
     assert "PDF 专用版式" in pdf_html
+    assert "pdf-figure-spread" in pdf_html
+    assert ".pdf-figure .chart-mobile-list" in pdf_html
+    assert "display: none !important;" in pdf_html
+
+
+def test_pdf_chart_matrix_uses_explicit_single_chart_pages():
+    model = _commercial_model()
+    base = model["chapters"][0]["figures"][0]
+    model["chapters"][0]["figures"] = [
+        {**base, "title": f"chart {index}", "source": f"source:{index}"}
+        for index in range(6)
+    ]
+
+    pdf_html = render_report_product_pdf_html(model)
+
+    assert 'pdf-grid-3 pdf-figure-matrix' not in pdf_html
+    sections = pdf_html.split('<section class="pdf-page pdf-content pdf-core-chart-page"')[1:]
+    assert len(sections) == 6
+    for section in sections:
+        body = section.split("</section>", 1)[0]
+        assert "pdf-grid-2 pdf-figure-spread" in body
+        assert body.count('<article class="pdf-figure">') == 1
 
 
 def test_report_frontend_accessibility_and_mobile_contracts():

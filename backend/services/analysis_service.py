@@ -6,6 +6,7 @@ Router 只负责 HTTP 边界（鉴权、参数校验、文件读写、HTTPExcept
 import asyncio
 import base64
 import copy
+import inspect
 import json
 import re
 from datetime import datetime
@@ -55,12 +56,18 @@ class AnalysisService:
         self.pdf_splitter = pdf_splitter
         import os
         self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
+        self._last_report_insights = None
+        self._last_pipeline_audit = None
+        self._last_channel_usage = None
 
     # ── 单题完整分析 ──────────────────────────────────────────
 
     async def analyze_question(self, question: Dict, image_bytes: List[bytes],
-                                mode: str = "deep") -> Dict:
+                                mode: str = "deep",
+                                exam_review_channel: str | None = None) -> Dict:
         q_id = question.get("id", 0)
+        from llm_client import set_llm_review_channel, reset_llm_review_channel
+        review_channel_token = set_llm_review_channel(exam_review_channel)
         try:
             from utils import infer_question_type
             question_type = infer_question_type(question)
@@ -68,16 +75,25 @@ class AnalysisService:
             section_header = question.get("_section_header")
 
             q_images = self._resolve_images(question, image_bytes)
+            q_media_items = self._media_items_for_llm(question, q_images)
+            if q_media_items and not question.get("_media_for_ai"):
+                question["_media_for_ai"] = q_media_items
 
             if not self.analyzer:
                 raise RuntimeError("AI 分析服务未配置")
 
+            from services.review_channel import (
+                channel_evidence_ranking_enabled,
+                channel_uses_agent_search,
+            )
             analysis = await self.analyzer.analyze_question(
                 question_text=question.get("content", ""),
                 question_images=q_images,
                 question_id=q_id,
                 question_type=question_type,
                 section_header=section_header,
+                evidence_ranking_enabled=channel_evidence_ranking_enabled(exam_review_channel),
+                agent_search_enabled=channel_uses_agent_search(exam_review_channel),
             )
             question["analysis"] = analysis
 
@@ -99,11 +115,14 @@ class AnalysisService:
                 "knowledge_points": analysis.get("knowledge_points", []),
                 "total_score": total_score,
                 "num_options": analysis.get("num_options", 4),
+                "options": question.get("options", ""),
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
                 "sub_scores": question.get("sub_scores", []),
                 "image_base64": q_image_b64,
+                "media_items": q_media_items,
+                "_media_for_ai": q_media_items,
                 "media_integrity": question.get("media_integrity"),
             }
 
@@ -144,7 +163,13 @@ class AnalysisService:
 
             if v2_seu_competency:
                 # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
-                competency_q = {"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                competency_q = {
+                    "id": q_id,
+                    "content": question.get("content", ""),
+                    "knowledge_points": analysis.get("knowledge_points", []),
+                    "media_items": q_media_items,
+                    "_media_for_ai": q_media_items,
+                }
                 difficulty_result, supplement = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(
                         question=difficulty_q, mode=mode, analysis_result=analysis),
@@ -182,7 +207,13 @@ class AnalysisService:
                         logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
 
             if need_independent_competency:
-                competency_q = {"id": q_id, "content": question.get("content", ""), "knowledge_points": analysis.get("knowledge_points", [])}
+                competency_q = {
+                    "id": q_id,
+                    "content": question.get("content", ""),
+                    "knowledge_points": analysis.get("knowledge_points", []),
+                    "media_items": q_media_items,
+                    "_media_for_ai": q_media_items,
+                }
                 difficulty_result, competency_result = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(question=difficulty_q, mode=mode, analysis_result=analysis),
                     self.competency_analyzer.analyze_competency(question=competency_q),
@@ -224,6 +255,7 @@ class AnalysisService:
             question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
             self._attach_metadata_envelope(question)
 
+            reset_llm_review_channel(review_channel_token)
             return question
 
         except Exception as e:
@@ -234,25 +266,6 @@ class AnalysisService:
             question["analysis"] = {"error": str(e), "knowledge_points": [], "answer": "分析失败"}
             question["difficulty"] = {"error": str(e)}
             question["competency"] = {"error": str(e)}
-            if not question.get("total_score"):
-                import re as _re
-                content = question.get("content", "")
-                header = question.get("_section_header", "")
-                score_found = None
-                m = _re.search(r'[（(]\s*(\d+)\s*分\s*[）)]', content)
-                if m:
-                    score_found = int(m.group(1))
-                elif header:
-                    m2 = _re.search(r'每小题\s*(\d+)\s*分', header)
-                    if m2:
-                        score_found = int(m2.group(1))
-                    else:
-                        m3 = _re.search(r'共\s*(\d+)\s*分', header)
-                        if m3:
-                            score_found = int(m3.group(1))
-                if score_found:
-                    question["total_score"] = score_found
-                    logger.info(f"[分析] 题目{q_id} 分析失败，兜底恢复 total_score={score_found}")
             question["_llm_calls"] = []
             question["_metadata_envelope"] = {
                 "status": "analysis_failed",
@@ -277,10 +290,11 @@ class AnalysisService:
                 },
                 "lineage": {
                     "status": "analysis_failed",
-                    "failure_reason": "analysis_failure_reason",
+                    "failure_reason": question.get("analysis_failure_reason"),
                 },
                 "warnings": ["analysis_failed"],
             }
+            reset_llm_review_channel(review_channel_token)
             return question
 
     # ── 批量并发分析 ──────────────────────────────────────────
@@ -288,7 +302,8 @@ class AnalysisService:
     async def analyze_questions_batch(self, questions: List[Dict],
                                       image_bytes: List[bytes],
                                       mode: str = "deep",
-                                      subject: str = "biology") -> List[Dict]:
+                                      subject: str = "biology",
+                                      exam_review_channel: str | None = None) -> List[Dict]:
         for idx, q in enumerate(questions):
             if not q.get("id"):
                 q["id"] = idx + 1
@@ -297,6 +312,10 @@ class AnalysisService:
 
         async def _analyze_one(q):
             async with sem:
+                if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
+                    return await self.analyze_question(
+                        q, image_bytes, mode, exam_review_channel=exam_review_channel
+                    )
                 return await self.analyze_question(q, image_bytes, mode)
 
         originals = [copy.deepcopy(q) for q in questions]
@@ -304,14 +323,25 @@ class AnalysisService:
         results = list(await asyncio.gather(*tasks))
 
         for idx, result in enumerate(results):
-            if not self._metadata_retry_needed(result):
+            retry_reason = self._metadata_retry_reason(result)
+            if not retry_reason:
                 continue
             q_id = result.get("id", idx + 1) if isinstance(result, dict) else idx + 1
             logger.warning(f"[元数据] 题目{q_id} 关键元数据不完整，顺序重试一次")
-            retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
+            if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
+                retry = await self.analyze_question(
+                    copy.deepcopy(originals[idx]),
+                    image_bytes,
+                    mode,
+                    exam_review_channel=exam_review_channel,
+                )
+            else:
+                retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
             if not self._metadata_retry_needed(retry):
+                self._mark_recovered_metadata_retry(retry, retry_reason)
                 results[idx] = retry
             elif self._metadata_retry_needed(result) and isinstance(retry.get("_metadata_envelope"), dict):
+                self._mark_recovered_metadata_retry(retry, retry_reason)
                 results[idx] = retry
 
         return results
@@ -351,24 +381,33 @@ class AnalysisService:
 
         extracted_text = None
         extracted_elements = None
+        failure_events = []
         if images and hasattr(images[0], "info"):
             extracted_text = images[0].info.get("extracted_text")
             extracted_elements = images[0].info.get("elements")
+            failure_events = images[0].info.get("failure_events") or []
 
         image_bytes = await loop.run_in_executor(None, self.doc_processor.images_to_bytes, images)
         return {
             "image_bytes": image_bytes,
             "extracted_text": extracted_text,
             "extracted_elements": extracted_elements,
+            "failure_events": failure_events,
         }
 
     # ── 题目拆分 ──────────────────────────────────────────────
 
     async def split_questions_llm(self, image_bytes: List[bytes],
-                                   extracted_text: str = None) -> List[Dict]:
+                                   extracted_text: str = None,
+                                   exam_review_channel: str | None = None) -> List[Dict]:
         if not self.analyzer:
             raise RuntimeError("AI 分析服务未配置")
-        return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
+        from llm_client import set_llm_review_channel, reset_llm_review_channel
+        review_channel_token = set_llm_review_channel(exam_review_channel)
+        try:
+            return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
+        finally:
+            reset_llm_review_channel(review_channel_token)
 
     @staticmethod
     def _main_question_ids_from_text(text: str | None) -> List[int]:
@@ -430,7 +469,8 @@ class AnalysisService:
                                exam_statistics: Dict,
                                exam_info: Dict,
                                mode: str = "full",
-                               output_path: str = None) -> Optional[str]:
+                               output_path: str = None,
+                               exam_review_channel: str | None = None) -> Optional[str]:
         from report_data import aggregate_report_data
         from report_insights import generate_insights
         from report_product_publish import write_report_artifacts
@@ -442,7 +482,30 @@ class AnalysisService:
         )
         rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
             exam_type=exam_info.get("exam_type", "高考"))
-        insights = await generate_insights(rdata, mode=mode)
+        from services.review_channel import channel_grounding_enabled
+        from llm_client import set_llm_review_channel, reset_llm_review_channel
+        review_channel_token = set_llm_review_channel(exam_review_channel)
+        try:
+            insights = await generate_insights(
+                rdata,
+                mode=mode,
+                grounding_enabled=channel_grounding_enabled(exam_review_channel),
+            )
+        finally:
+            reset_llm_review_channel(review_channel_token)
+        self._last_pipeline_audit = self.build_pipeline_audit(
+            rdata.get("metadata_quality", {}),
+            report_insights=insights,
+            exam_review_channel=exam_review_channel,
+        )
+        self._last_report_insights = insights
+        self._last_channel_usage = self.build_channel_usage(questions, insights)
+        self.assert_channel_usage(
+            exam_review_channel,
+            self._last_channel_usage,
+            require_grounding=channel_grounding_enabled(exam_review_channel),
+        )
+        self.assert_pipeline_ready(self._last_pipeline_audit)
         write_report_artifacts(rdata, insights, mode=mode, pdf_path=output_path)
         return output_path
 
@@ -466,10 +529,43 @@ class AnalysisService:
         indices = question.get("image_indices", [])
         return [image_bytes[i] for i in indices if 0 <= i < len(image_bytes)]
 
+    @staticmethod
+    def _media_items_for_llm(question: Dict, images: List[bytes]) -> List[Dict[str, str]]:
+        media_for_ai = question.get("_media_for_ai", [])
+        if isinstance(media_for_ai, list) and media_for_ai:
+            return [
+                {
+                    "type": str(item.get("type") or "image"),
+                    "base64": str(item.get("base64") or ""),
+                    **({"mime_type": str(item.get("mime_type"))} if item.get("mime_type") else {}),
+                }
+                for item in media_for_ai
+                if isinstance(item, dict) and item.get("base64")
+            ]
+        return [
+            {
+                "type": "image",
+                "base64": base64.b64encode(image).decode("utf-8"),
+            }
+            for image in images or []
+        ]
+
+    @staticmethod
+    def _accepts_kwarg(func, name: str) -> bool:
+        try:
+            params = inspect.signature(func).parameters
+        except (TypeError, ValueError):
+            return False
+        return name in params or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in params.values()
+        )
+
     def validate_report_metadata(self, questions: List[Dict],
                                  min_overall_confidence: float = 0.7) -> Dict:
         blocked = []
         low_confidence = []
+        low_component_confidence = []
         warning_questions = []
         required = {"question_analysis"}
         feature_purposes = {"feature_extraction", "big_question_feature_extraction"}
@@ -503,9 +599,10 @@ class AnalysisService:
                     "reason": "required llm purpose missing",
                     "missing": missing_purposes,
                 })
+            has_seu_derived_competency = self._has_seu_derived_competency(envelope)
             has_competency_source = (
                 "competency_analysis" in purposes
-                or self._has_seu_derived_competency(envelope)
+                or has_seu_derived_competency
             )
             if not has_competency_source:
                 blocked.append({
@@ -530,6 +627,36 @@ class AnalysisService:
             overall = confidence.get("overall", 0) if isinstance(confidence, dict) else 0
             if isinstance(overall, (int, float)) and overall < min_overall_confidence:
                 low_confidence.append(q_id)
+            if isinstance(confidence, dict):
+                component_keys = ("analysis", "features", "competency")
+                for component in component_keys:
+                    value = confidence.get(component)
+                    if value is None:
+                        blocked.append({
+                            "id": q_id,
+                            "reason": "component confidence missing",
+                            "component": component,
+                        })
+                    elif isinstance(value, (int, float)):
+                        if (
+                            value <= 0
+                            and not (
+                                component == "competency"
+                                and has_seu_derived_competency
+                            )
+                        ):
+                            blocked.append({
+                                "id": q_id,
+                                "reason": "component confidence failed",
+                                "component": component,
+                                "confidence": value,
+                            })
+                        elif value < min_overall_confidence:
+                            low_component_confidence.append({
+                                "id": q_id,
+                                "component": component,
+                                "confidence": value,
+                            })
 
             warnings = envelope.get("warnings", [])
             if warnings:
@@ -543,8 +670,209 @@ class AnalysisService:
             "total_questions": len(questions),
             "blocked_questions": blocked,
             "low_confidence_questions": low_confidence,
+            "low_component_confidence_questions": low_component_confidence,
             "warning_questions": warning_questions,
         }
+
+    @staticmethod
+    def build_pipeline_audit(metadata_quality: Dict | None,
+                             report_insights: Dict | None = None,
+                             exam_review_channel: str | None = None) -> Dict:
+        metadata_quality = metadata_quality or {}
+        blockers = []
+        warnings = []
+
+        def add_block(stage: str, code: str, message: str, detail: Any = None) -> None:
+            blockers.append({
+                "stage": stage,
+                "code": code,
+                "message": message,
+                "detail": detail,
+            })
+
+        hard_list_keys = {
+            "missing_envelope_questions": ("question_metadata", "missing_envelope"),
+            "inferred_envelope_questions": ("question_metadata", "inferred_envelope"),
+            "missing_component_confidence_questions": ("question_metadata", "missing_component_confidence"),
+            "failed_component_confidence_questions": ("question_metadata", "failed_component_confidence"),
+            "missing_purpose_questions": ("llm_calls", "missing_purpose"),
+            "blocked_questions": ("question_analysis", "blocked_question"),
+            "evidence_gap_questions": ("evidence_units", "evidence_gap"),
+            "retry_questions": ("llm_calls", "retry_or_parse_failure"),
+            "score_issue_questions": ("score_extraction", "score_issue"),
+        }
+        for key, (stage, code) in hard_list_keys.items():
+            items = metadata_quality.get(key) or []
+            if items:
+                add_block(stage, code, f"{key} is not empty", items)
+
+        for item in metadata_quality.get("low_component_confidence_questions") or []:
+            warnings.append({
+                "stage": "question_metadata",
+                "code": "low_component_confidence",
+                "detail": item,
+            })
+
+        for event in metadata_quality.get("failure_events") or []:
+            if not isinstance(event, dict):
+                continue
+            severity = str(event.get("severity") or "").lower()
+            if severity in {"blocked", "error", "fatal"}:
+                add_block(
+                    str(event.get("stage") or "pipeline"),
+                    "failure_event",
+                    str(event.get("reason") or "blocked failure event"),
+                    event,
+                )
+
+        hard_warning_prefixes = (
+            "analysis_failed:",
+            "difficulty_blocked:",
+            "llm_fallback:",
+            "invalid_llm_call:",
+            "llm_parse_failure:",
+            "llm_provider_error:",
+            "media_not_passed:",
+        )
+        hard_warning_values = {
+            "missing_llm_calls",
+            "diagnostic_units_missing",
+            "stimulus_units_missing",
+            "stimulus_units_blank",
+        }
+        for item in metadata_quality.get("warning_questions") or []:
+            qid = item.get("id") if isinstance(item, dict) else None
+            for warning in (item.get("warnings") if isinstance(item, dict) else []) or []:
+                warning_text = str(warning)
+                if warning_text in hard_warning_values or warning_text.startswith(hard_warning_prefixes):
+                    add_block(
+                        "question_metadata",
+                        "hard_warning",
+                        f"Q{qid}: {warning_text}",
+                        {"id": qid, "warning": warning_text},
+                    )
+                else:
+                    warnings.append({"id": qid, "warning": warning_text})
+
+        if report_insights is not None:
+            report_calls = report_insights.get("_llm_calls") or []
+            for call in report_calls:
+                if not isinstance(call, dict):
+                    continue
+                purpose = call.get("purpose") or "report_llm"
+                metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+                if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
+                    add_block("report_llm", "llm_fallback", f"{purpose} used fallback", call)
+                if metadata.get("provider_errors"):
+                    add_block("report_llm", "provider_error", f"{purpose} has provider errors", call)
+                if call.get("validation_errors") and purpose != "report_grounding_check":
+                    add_block("report_llm", "parse_or_validation_error", f"{purpose} validation failed", call)
+
+            grounding_required = False
+            try:
+                from services.review_channel import channel_grounding_enabled
+                grounding_required = channel_grounding_enabled(exam_review_channel)
+            except Exception:
+                grounding_required = False
+            if grounding_required:
+                checks = report_insights.get("_grounding_checks") or []
+                status = report_insights.get("_grounding_status")
+                if status != "ok" or not checks:
+                    failed_checks = [
+                        check for check in checks
+                        if isinstance(check, dict) and check.get("status") != "ok"
+                    ]
+                    first_failed = failed_checks[0] if failed_checks else {}
+                    detail_message = f"report grounding status is {status or 'missing'}"
+                    if first_failed:
+                        detail_message += (
+                            f"; first failed section={first_failed.get('section') or 'unknown'}"
+                            f", support_score={first_failed.get('support_score')}"
+                            f", threshold={first_failed.get('threshold')}"
+                        )
+                    add_block(
+                        "report_grounding",
+                        "grounding_not_ok",
+                        detail_message,
+                        {"status": status, "checks": checks},
+                    )
+
+        return {
+            "status": "blocked" if blockers else "ok",
+            "blockers": blockers,
+            "warnings": warnings,
+            "metadata_quality": metadata_quality,
+            "report_grounding_status": (
+                report_insights.get("_grounding_status")
+                if isinstance(report_insights, dict) else None
+            ),
+        }
+
+    @staticmethod
+    def build_channel_usage(questions: List[Dict] | None,
+                            report_insights: Dict | None = None) -> Dict:
+        """Summarize which parts of the review used Discovery Engine vs model calls."""
+        from services.evidence_audit import summarize_evidence_usage
+
+        return summarize_evidence_usage(questions, report_insights)
+
+    @staticmethod
+    def assert_channel_usage(exam_review_channel: str | None,
+                             channel_usage: Dict | None,
+                             require_grounding: bool = False) -> None:
+        from services.review_channel import channel_uses_agent_search, channel_uses_evidence
+
+        if not channel_uses_evidence(exam_review_channel):
+            return
+        channel_usage = channel_usage or {}
+        if (
+            channel_uses_agent_search(exam_review_channel)
+            and int(channel_usage.get("agent_search_answer_count") or 0) <= 0
+        ):
+            raise RuntimeError(
+                "agent_search channel requested but no Search App answer_query evidence "
+                "was recorded; verify DISCOVERY_ENGINE_ENGINE_ID and the question evidence context"
+            )
+        if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
+            raise RuntimeError(
+                "证据增强审题失败：检测到不应使用的 Discovery Engine "
+                "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
+            )
+        if int(channel_usage.get("discovery_rank_count") or 0) <= 0:
+            missing = channel_usage.get("missing_rank_question_ids") or []
+            if missing:
+                first = missing[0]
+                raise RuntimeError(
+                    f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
+                    "（Discovery Engine Ranking 未记录），不能进入正式报告。"
+                )
+            raise RuntimeError(
+                "证据增强审题失败：缺少 Discovery Engine Ranking 记录，"
+                "不能进入正式报告。"
+            )
+        missing = channel_usage.get("missing_rank_question_ids") or []
+        if missing:
+            first = missing[0]
+            raise RuntimeError(
+                f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
+                "（Discovery Engine Ranking 未记录），不能进入正式报告。"
+            )
+        if require_grounding and int(channel_usage.get("discovery_grounding_check_count") or 0) <= 0:
+            raise RuntimeError(
+                "证据增强审题失败：报告结论缺少 Check Grounding 校验"
+                "（Discovery Engine Check Grounding 未记录），不能进入正式报告。"
+            )
+
+    @staticmethod
+    def assert_pipeline_ready(audit: Dict | None) -> None:
+        audit = audit or {}
+        blockers = audit.get("blockers") or []
+        if blockers:
+            first = blockers[0]
+            raise RuntimeError(
+                "pipeline gate failed: "
+                f"{first.get('stage')}.{first.get('code')} - {first.get('message')}"
+            )
 
     @staticmethod
     def _has_seu_derived_competency(envelope: Dict) -> bool:
@@ -559,23 +887,27 @@ class AnalysisService:
 
     @staticmethod
     def _metadata_retry_needed(question: Dict) -> bool:
+        return AnalysisService._metadata_retry_reason(question) is not None
+
+    @staticmethod
+    def _metadata_retry_reason(question: Dict) -> str | None:
         if not isinstance(question, dict):
-            return True
+            return "invalid_question_result"
         envelope = question.get("_metadata_envelope")
         if not isinstance(envelope, dict):
-            return True
+            return "missing_metadata_envelope"
 
         calls = envelope.get("llm_calls", [])
         if not isinstance(calls, list) or not calls:
-            return True
+            return "missing_llm_calls"
 
         purposes = {call.get("purpose") for call in calls if isinstance(call, dict)}
         if "question_analysis" not in purposes:
-            return True
+            return "missing_question_analysis"
         if not (purposes & {"feature_extraction", "big_question_feature_extraction"}):
-            return True
+            return "missing_feature_extraction"
         if "competency_analysis" not in purposes:
-            return True
+            return "missing_competency_analysis"
         warnings = envelope.get("warnings", [])
         if isinstance(warnings, list) and any(
             warning in {
@@ -586,16 +918,41 @@ class AnalysisService:
             or str(warning).startswith("llm_parse_failure:")
             for warning in warnings
         ):
-            return True
-        return False
+            visible = ",".join(str(w) for w in warnings[:3])
+            return f"metadata_warning:{visible or 'unknown'}"
+        return None
 
     @staticmethod
-    def _valid_llm_call(call: Dict) -> Optional[Dict]:
+    def _mark_recovered_metadata_retry(question: Dict, reason: str | None) -> None:
+        if not isinstance(question, dict) or not reason:
+            return
+        warning = f"question_retried_after_metadata_failure:{reason}"
+        question.setdefault("_recovered_failures", []).append({
+            "stage": "question_analysis",
+            "severity": "warning",
+            "reason": reason,
+            "recovered_by": "sequential_retry",
+        })
+        envelope = question.get("_metadata_envelope")
+        if not isinstance(envelope, dict):
+            return
+        warnings = envelope.setdefault("warnings", [])
+        if isinstance(warnings, list) and warning not in warnings:
+            warnings.append(warning)
+        lineage = envelope.setdefault("lineage", {})
+        if isinstance(lineage, dict):
+            lineage["recovered_retry"] = {
+                "reason": reason,
+                "recovered_by": "sequential_retry",
+            }
+
+    @staticmethod
+    def _valid_llm_call(call: Dict) -> tuple[Optional[Dict], Optional[str]]:
         try:
-            return LLMCallRecord.model_validate(call).model_dump()
+            return LLMCallRecord.model_validate(call).model_dump(), None
         except Exception as e:
             logger.warning(f"[元数据] 丢弃无效 LLM 调用记录: {e}")
-            return None
+            return None, str(e)
 
     def _collect_llm_calls(self, question: Dict) -> List[Dict]:
         buckets = [
@@ -607,15 +964,22 @@ class AnalysisService:
             question.get("competency"),
         ]
         calls = []
+        invalid_calls = []
         seen = set()
         for bucket in buckets:
             if not isinstance(bucket, dict):
                 continue
             for raw_call in bucket.get("_llm_calls", []):
                 if not isinstance(raw_call, dict):
+                    invalid_calls.append({"reason": "llm_call_record_not_dict"})
                     continue
-                call = self._valid_llm_call(raw_call)
+                call, error = self._valid_llm_call(raw_call)
                 if not call:
+                    invalid_calls.append({
+                        "reason": "llm_call_record_invalid",
+                        "error": error or "unknown validation error",
+                        "purpose": raw_call.get("purpose"),
+                    })
                     continue
                 key = (
                     call.get("call_id"),
@@ -626,6 +990,7 @@ class AnalysisService:
                     continue
                 seen.add(key)
                 calls.append(call)
+        question["_invalid_llm_call_errors"] = invalid_calls
         return calls
 
     def _attach_metadata_envelope(self, question: Dict) -> None:
@@ -638,17 +1003,51 @@ class AnalysisService:
         competency = question.get("competency") if isinstance(question.get("competency"), dict) else {}
         fine_grained = analysis.get("_fine_grained") if isinstance(analysis, dict) else None
 
+        def numeric_confidence(value) -> float:
+            return float(value) if isinstance(value, (int, float)) else 0.0
+
+        def call_confidence_for(*purposes: str) -> float:
+            wanted = set(purposes)
+            best = 0.0
+            for call in calls:
+                if call.get("purpose") not in wanted:
+                    continue
+                metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+                if call.get("validation_errors") or metadata.get("validation_errors"):
+                    continue
+                if metadata.get("status") in {"failed", "parse_failed", "provider_failed"}:
+                    continue
+                best = max(best, numeric_confidence(call.get("confidence")))
+            return best
+
+        def result_or_call_confidence(value, *purposes: str) -> float:
+            result_value = numeric_confidence(value)
+            return result_value if result_value > 0 else call_confidence_for(*purposes)
+
         confidence = {
             "overall": question.get("analysis_confidence", 0.0),
-            "analysis": analysis.get("_extraction_confidence", 0.0),
-            "features": features.get("_extraction_confidence", 0.0),
-            "competency": competency.get("_extraction_confidence", 0.0),
+            "analysis": result_or_call_confidence(
+                analysis.get("_extraction_confidence", 0.0),
+                "question_analysis",
+            ),
+            "features": result_or_call_confidence(
+                features.get("_extraction_confidence", 0.0),
+                "feature_extraction",
+                "big_question_feature_extraction",
+            ),
+            "competency": result_or_call_confidence(
+                competency.get("_extraction_confidence", 0.0),
+                "competency_analysis",
+            ),
         }
         warnings = []
         def add_warning(value: str) -> None:
             if value and value not in warnings:
                 warnings.append(value)
 
+        invalid_call_errors = question.get("_invalid_llm_call_errors") or []
+        if invalid_call_errors:
+            add_warning(f"invalid_llm_call:{len(invalid_call_errors)}")
         if not calls:
             add_warning("missing_llm_calls")
         if features.get("_feature_status") in ("partial", "failed"):
@@ -666,16 +1065,32 @@ class AnalysisService:
                 add_warning(f"difficulty_blocked:{flag}")
         for call in calls:
             metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+            input_refs = call.get("input_refs") if isinstance(call.get("input_refs"), dict) else {}
             prompt_id = str(call.get("prompt_id") or "").lower()
             retry_count = call.get("retry_count") or metadata.get("retry_count") or 0
             if "compact_retry" in prompt_id or retry_count:
                 add_warning(f"llm_retry:{call.get('purpose') or 'unknown'}")
+            if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
+                add_warning(f"llm_fallback:{call.get('purpose') or 'unknown'}")
+            if metadata.get("provider_errors"):
+                add_warning(f"llm_provider_error:{call.get('purpose') or 'unknown'}")
             if (
                 metadata.get("initial_parse_error")
                 or metadata.get("validation_errors")
                 or call.get("validation_errors")
             ):
                 add_warning(f"llm_parse_failure:{call.get('purpose') or 'unknown'}")
+            if (
+                (question.get("_media_for_ai") or question.get("media_items") or question.get("image_indices"))
+                and call.get("purpose") in {
+                    "question_analysis",
+                    "feature_extraction",
+                    "big_question_feature_extraction",
+                    "competency_analysis",
+                }
+                and not (input_refs.get("media_count") or input_refs.get("image_count"))
+            ):
+                add_warning(f"media_not_passed:{call.get('purpose') or 'unknown'}")
         if float(question.get("total_score") or 0) >= 8 and isinstance(fine_grained, dict):
             if not fine_grained.get("diagnostic_units"):
                 add_warning("diagnostic_units_missing")
@@ -704,6 +1119,7 @@ class AnalysisService:
                 "knowledge_points": analysis.get("knowledge_points", []),
                 "difficulty": difficulty.get("final_difficulty"),
                 "competency": competency.get("primary_competency"),
+                "invalid_llm_call_errors": invalid_call_errors,
             },
             confidence=confidence,
             lineage={
@@ -721,47 +1137,76 @@ class AnalysisService:
     async def run_full_analysis(self, file_path: str, filename: str,
                                  mode: str = "deep", generate_report: bool = False,
                                  report_mode: str = "full", reports_dir: str = None,
-                                 exam_id: str = None) -> Dict:
+                                 exam_id: str = None,
+                                 exam_review_channel: str | None = None) -> Dict:
         """完整分析流程：文档→拆分→分析→统计→报告。对应 /api/analyze。"""
         doc = await self.process_document(file_path, filename)
         image_bytes = doc["image_bytes"]
         extracted_text = doc["extracted_text"]
         extracted_elements = doc["extracted_elements"]
+        document_failure_events = doc.get("failure_events") or []
 
         if filename.lower().endswith(".docx") and self.word_splitter:
             loop = asyncio.get_event_loop()
             split_result = await loop.run_in_executor(None, self.word_splitter.split, file_path)
             questions = split_result.get("questions", [])
         else:
-            questions = await self.split_questions_llm(image_bytes, extracted_text)
+            questions = await self.split_questions_llm(
+                image_bytes,
+                extracted_text,
+                exam_review_channel=exam_review_channel,
+            )
 
         self.validate_split_integrity(questions, extracted_text)
 
         if extracted_elements and self.doc_processor:
             self.doc_processor.match_elements_to_questions(questions, extracted_elements)
 
-        questions = await self.analyze_questions_batch(questions, image_bytes, mode)
+        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
+            questions = await self.analyze_questions_batch(
+                questions, image_bytes, mode, exam_review_channel=exam_review_channel
+            )
+        else:
+            questions = await self.analyze_questions_batch(questions, image_bytes, mode)
 
         competency_summary = self.build_competency_summary(questions)
         exam_statistics = self.aggregate_statistics(questions, competency_summary)
+        if document_failure_events:
+            exam_statistics["document_failure_events"] = document_failure_events
         from report_data import compute_metadata_quality
-        metadata_quality = compute_metadata_quality(questions)
+        metadata_quality = compute_metadata_quality(questions, exam_statistics=exam_statistics)
+        pipeline_audit = self.build_pipeline_audit(metadata_quality)
+        self._last_pipeline_audit = pipeline_audit
+        channel_usage = self.build_channel_usage(questions)
+        self.assert_channel_usage(exam_review_channel, channel_usage)
 
         report_url = None
         html_report_url = None
         report_error = None
+        report_insights = None
         if generate_report and reports_dir:
+            self.assert_pipeline_ready(pipeline_audit)
             try:
                 from pathlib import Path
                 pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
                 await self.generate_report(
                     questions, competency_summary, exam_statistics,
                     {"name": filename, "total": len(questions), "mode": mode},
-                    mode=report_mode, output_path=pdf_path,
+                    mode=report_mode,
+                    output_path=pdf_path,
+                    exam_review_channel=exam_review_channel,
                 )
                 report_url = f"/api/reports/{exam_id}.pdf"
                 if Path(pdf_path).with_suffix(".html").exists():
                     html_report_url = f"/api/reports/{exam_id}.html"
+                report_insights = self._last_report_insights
+                pipeline_audit = self._last_pipeline_audit or pipeline_audit
+                channel_usage = self._last_channel_usage or self.build_channel_usage(questions, report_insights)
+                self.assert_channel_usage(
+                    exam_review_channel,
+                    channel_usage,
+                    require_grounding=True,
+                )
             except Exception as e:
                 logger.exception("[报告生成] 自动分析报告生成失败")
                 raise RuntimeError(f"report generation failed: {e}") from e
@@ -771,9 +1216,13 @@ class AnalysisService:
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
             "metadata_quality": metadata_quality,
+            "pipeline_audit": pipeline_audit,
+            "document_failure_events": document_failure_events,
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
+            "report_insights": report_insights,
+            "channel_usage": channel_usage,
         }
 
     async def run_auto_analysis(self, file_path: str, filename: str,
@@ -782,9 +1231,11 @@ class AnalysisService:
                                  generate_report: bool = False,
                                  report_mode: str = "full",
                                  reports_dir: str = None,
-                                 exam_id: str = None) -> Dict:
+                                 exam_id: str = None,
+                                 exam_review_channel: str | None = None) -> Dict:
         """规则拆分 + 自动分析。对应 /api/analyze_auto 的核心逻辑。"""
         file_ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+        document_failure_events = []
 
         if file_ext == "docx":
             loop = asyncio.get_event_loop()
@@ -800,6 +1251,8 @@ class AnalysisService:
                 await loop.run_in_executor(None, self.doc_processor.images_to_bytes, images)
                 if images else []
             )
+            if images and hasattr(images[0], "info"):
+                document_failure_events = images[0].info.get("failure_events") or []
         elif file_ext == "pdf":
             loop = asyncio.get_event_loop()
             split_result = await loop.run_in_executor(
@@ -807,31 +1260,64 @@ class AnalysisService:
             )
             questions = split_result.get("questions", [])
             self.validate_split_integrity(questions)
-            image_bytes = []
+            images = (
+                await loop.run_in_executor(None, self.doc_processor.process_pdf, file_path)
+                if self.doc_processor else []
+            )
+            image_bytes = (
+                await loop.run_in_executor(None, self.doc_processor.images_to_bytes, images)
+                if self.doc_processor and images else []
+            )
+            if images and hasattr(images[0], "info"):
+                document_failure_events = images[0].info.get("failure_events") or []
         else:
             raise ValueError(f"不支持的文件格式: {filename}")
 
-        analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
+        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
+            analyzed = await self.analyze_questions_batch(
+                questions, image_bytes, mode, subject, exam_review_channel=exam_review_channel
+            )
+        else:
+            analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
         competency_summary = self.build_competency_summary(analyzed)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
+        if document_failure_events:
+            exam_statistics["document_failure_events"] = document_failure_events
         from report_data import compute_metadata_quality
-        metadata_quality = compute_metadata_quality(analyzed)
+        metadata_quality = compute_metadata_quality(analyzed, exam_statistics=exam_statistics)
+        pipeline_audit = self.build_pipeline_audit(metadata_quality)
+        self._last_pipeline_audit = pipeline_audit
+        channel_usage = self.build_channel_usage(analyzed)
+        self.assert_channel_usage(exam_review_channel, channel_usage)
 
         report_url = None
         html_report_url = None
         report_error = None
+        report_insights = None
         if generate_report and reports_dir:
+            self.assert_pipeline_ready(pipeline_audit)
             try:
                 from pathlib import Path
                 pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
+                report_kwargs = {"mode": report_mode, "output_path": pdf_path}
+                if self._accepts_kwarg(self.generate_report, "exam_review_channel"):
+                    report_kwargs["exam_review_channel"] = exam_review_channel
                 await self.generate_report(
                     analyzed, competency_summary, exam_statistics,
                     {"name": filename, "total": len(analyzed), "mode": mode},
-                    mode=report_mode, output_path=pdf_path,
+                    **report_kwargs,
                 )
                 report_url = f"/api/reports/{exam_id}.pdf"
                 if Path(pdf_path).with_suffix(".html").exists():
                     html_report_url = f"/api/reports/{exam_id}.html"
+                report_insights = self._last_report_insights
+                pipeline_audit = self._last_pipeline_audit or pipeline_audit
+                channel_usage = self._last_channel_usage or self.build_channel_usage(analyzed, report_insights)
+                self.assert_channel_usage(
+                    exam_review_channel,
+                    channel_usage,
+                    require_grounding=True,
+                )
             except Exception as e:
                 logger.exception("[报告生成] 确认拆分报告生成失败")
                 raise RuntimeError(f"report generation failed: {e}") from e
@@ -842,7 +1328,11 @@ class AnalysisService:
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
             "metadata_quality": metadata_quality,
+            "pipeline_audit": pipeline_audit,
+            "document_failure_events": document_failure_events,
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
+            "report_insights": report_insights,
+            "channel_usage": channel_usage,
         }

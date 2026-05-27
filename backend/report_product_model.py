@@ -156,8 +156,23 @@ QUALITY_GATES = [
 FAIL_CLOSED_DIFFICULTY_FLAGS = {
     "big_question_structure_failed",
     "big_question_points_mismatch",
+    "points_sum_mismatch",
+    "score_share_sum_mismatch",
+    "points_unknown",
+    "cannot_identify_subquestions",
+    "invalid_subquestion_schema",
+    "invalid_dependency_ids",
+    "insufficient_stem",
+    "json_parse_failed",
+    "json_truncated",
+    "llm_parse_error",
+    "llm_parse_failure",
+    "provider_failed",
+    "quality_score_too_low",
+    "question_analysis_failed",
     "feature_extraction_failed",
     "no_evaluation",
+    "seu_fallback",
     "big_question_fallback",
 }
 
@@ -207,6 +222,22 @@ FAILURE_COPY = {
         "impact": "该题不能进入正常难度测算和质量排序。",
         "action": "请检查题面、答案和解析是否完整；必要时重跑该题分析。",
         "severity": "blocked",
+    },
+    "quality_score_too_low": {
+        "stage": "题目质量评估",
+        "title": "题目质量阻断",
+        "reason": "题目质量评分低于自动入统阈值，系统停止展示推断难度。",
+        "impact": "该题不纳入逐题难度曲线、平均难度和正常质量排序，避免把高风险题伪装成正常题。",
+        "action": "请先由教师核对答案、科学性、设问边界和评分口径；确认修正后再重新生成报告。",
+        "severity": "blocked",
+    },
+    "quality_issue_low_score": {
+        "stage": "题目质量评估",
+        "title": "题目质量低分",
+        "reason": "系统识别到题目质量评分偏低，但题面和特征仍足以估算难度。",
+        "impact": "该题保留难度估算，同时进入人工优先复核清单，避免把质量风险误当成数据缺失。",
+        "action": "请核对科学性、设问边界、答案和评分口径；如确认题目可用，可继续参考难度结果。",
+        "severity": "warning",
     },
     "feature_extraction_partial": {
         "stage": "题目特征提取",
@@ -322,6 +353,21 @@ FAILURE_COPY = {
     },
 }
 
+FAILURE_COPY_ALIASES = {
+    "score_share_sum_mismatch": "points_sum_mismatch",
+    "points_unknown": "big_question_points_mismatch",
+    "cannot_identify_subquestions": "big_question_structure_failed",
+    "invalid_subquestion_schema": "big_question_structure_failed",
+    "invalid_dependency_ids": "big_question_structure_failed",
+    "json_parse_failed": "feature_extraction_failed",
+    "json_truncated": "feature_extraction_failed",
+    "llm_parse_error": "feature_extraction_failed",
+    "llm_parse_failure": "feature_extraction_failed",
+    "provider_failed": "feature_extraction_failed",
+    "question_analysis_failed": "analysis_failed",
+    "seu_fallback": "big_question_fallback",
+}
+
 BLOOM_LEVEL_LABELS = {
     1: "识记",
     2: "理解",
@@ -337,28 +383,29 @@ COMPETENCY_SUBDIMENSION_RULES = {
     "生命观念": [
         ("稳态与平衡观", ("稳态", "平衡", "调节", "反馈", "内环境", "激素", "神经", "homeostasis", "balance")),
         ("结构与功能观", ("结构", "功能", "蛋白", "细胞器", "膜", "器官", "structure", "function")),
+        ("遗传与信息观", ("遗传", "基因", "dna", "rna", "染色体", "染色单体", "碱基", "基因型", "表型", "花粉", "分离比", "复制", "转录", "翻译", "突变", "遗传信息")),
         ("物质与能量观", ("物质", "能量", "代谢", "光合", "呼吸", "atp", "energy", "metabolism")),
         ("进化与适应观", ("进化", "适应", "选择", "遗传变异", "evolution", "adaptation")),
         ("生态观", ("生态", "种群", "群落", "生态系统", "食物网", "污染", "ecology")),
     ],
     "科学思维": [
         ("模型建构", ("模型", "建模", "图示", "机制", "路径", "model", "mechanism")),
-        ("证据推理", ("推理", "证据", "判断", "论证", "解释", "遗传方式", "inference", "evidence", "reasoning", "explanation")),
+        ("数据分析", ("数据", "表格", "曲线", "图表", "统计", "计算", "大小", "比例", "条带", "电泳", "密码表", "pcr", "data", "table", "chart")),
+        ("证据推理", ("推理", "推断", "证据", "判断", "论证", "解释", "预测", "排除", "辨析", "识别", "遗传方式", "inference", "evidence", "reasoning", "explanation")),
         ("变量控制", ("变量", "对照", "控制", "control", "variable")),
-        ("数据分析", ("数据", "表格", "曲线", "图表", "统计", "data", "table", "chart")),
         ("批判评价", ("评价", "质疑", "比较", "优劣", "evaluate", "critique")),
     ],
     "科学探究": [
-        ("实验设计", ("实验", "方案", "设计", "探究", "处理组", "experiment", "design")),
+        ("实验设计", ("实验", "方案", "设计", "探究", "处理组", "筛选", "培养", "鉴定", "引物", "扩增", "pcr", "experiment", "design")),
         ("变量控制", ("变量", "对照", "单一变量", "control", "variable")),
-        ("数据处理", ("数据", "结果", "表格", "曲线", "统计", "data", "result", "table")),
+        ("数据处理", ("数据", "结果", "表格", "曲线", "统计", "条带", "电泳", "产物大小", "data", "result", "table")),
         ("证据解释", ("解释", "结论", "证据", "说明", "explain", "evidence", "conclusion")),
         ("反思改进", ("改进", "误差", "局限", "优化", "improve", "limitation")),
     ],
     "社会责任": [
         ("健康生活", ("健康", "疾病", "用药", "医学", "health", "disease")),
-        ("生态环保", ("生态", "环保", "污染", "治理", "保护", "environment", "pollution")),
-        ("生物安全", ("安全", "转基因", "crispr", "基因编辑", "biosecurity")),
+        ("生态环保", ("生态", "环保", "污染", "治理", "保护", "修复", "浮床", "重金属", "铜", "铅", "固碳", "碳", "environment", "pollution")),
+        ("生物安全", ("安全", "生物安全", "转基因", "crispr", "基因编辑", "biosecurity")),
         ("伦理意识", ("伦理", "道德", "社会影响", "ethic")),
         ("农业与技术应用", ("农业", "育种", "技术", "工程", "应用", "agriculture", "technology")),
     ],
@@ -397,6 +444,9 @@ def _format_num(value: Any, digits: int = 1) -> str:
 _SUBQUESTION_RE = re.compile(r"[（(]([0-9一二三四五六七八九十]+)[)）]")
 _CIRCLED_SUBQUESTION_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩]")
 _DOTTED_SUBQUESTION_RE = re.compile(r"(?<!\d)([1-9][0-9]?)\s*[.．、]")
+_QUESTION_HEADER_RE = re.compile(r"^\s*[1-9][0-9]?\s*[.．、]\s*(?:[（(][^）)]{0,12}分[)）])?\s*")
+_LEADING_CIRCLED_SUBQUESTION_RE = re.compile(r"^\s*[①②③④⑤⑥⑦⑧⑨⑩]")
+_LEADING_DOTTED_SUBQUESTION_RE = re.compile(r"^\s*([1-9][0-9]?)\s*[.．、]")
 _CIRCLED_SUBQUESTION_NUMBERS = {
     "①": 1,
     "②": 2,
@@ -450,22 +500,38 @@ def _question_source_text(question: Dict[str, Any]) -> str:
 
 
 def _subquestion_numbers(question: Dict[str, Any], text: str) -> List[int]:
-    numbers = [
+    parenthesized = [
         parsed
         for parsed in (_cn_subquestion_number(match.group(1)) for match in _SUBQUESTION_RE.finditer(text))
         if parsed is not None
     ]
-    numbers.extend(
-        _CIRCLED_SUBQUESTION_NUMBERS[match.group(0)]
-        for match in _CIRCLED_SUBQUESTION_RE.finditer(text)
-    )
+    if parenthesized:
+        return parenthesized
+
+    numbers: List[int] = []
     question_id = question.get("id")
-    for match in _DOTTED_SUBQUESTION_RE.finditer(text):
-        parsed = int(match.group(1))
-        if isinstance(question_id, int) and parsed == question_id and match.start() <= 6:
+    for raw_line in text.splitlines() or [text]:
+        line = _QUESTION_HEADER_RE.sub("", raw_line.strip(), count=1)
+        if _LEADING_CIRCLED_SUBQUESTION_RE.match(line):
+            numbers.extend(
+                _CIRCLED_SUBQUESTION_NUMBERS[match.group(0)]
+                for match in _CIRCLED_SUBQUESTION_RE.finditer(line)
+            )
             continue
-        numbers.append(parsed)
+        if _LEADING_DOTTED_SUBQUESTION_RE.match(line):
+            for match in _DOTTED_SUBQUESTION_RE.finditer(line):
+                parsed = int(match.group(1))
+                if isinstance(question_id, int) and parsed == question_id and match.start() <= 6:
+                    continue
+                numbers.append(parsed)
     return numbers
+
+
+def _top_level_subquestion_numbers(question: Dict[str, Any]) -> List[int]:
+    text = _question_source_text(question)
+    if not text:
+        return []
+    return _subquestion_numbers(question, text)
 
 
 def _question_structure_warnings(question: Dict[str, Any]) -> List[str]:
@@ -489,25 +555,6 @@ def _question_structure_warnings(question: Dict[str, Any]) -> List[str]:
         warnings.append("题面小问编号缺失：" + "、".join(f"（{number}）" for number in missing))
     return warnings
 
-
-def _top_level_subquestion_numbers(question: Dict[str, Any]) -> List[int]:
-    text = _question_source_text(question)
-    if not text:
-        return []
-    numbers = [
-        parsed
-        for parsed in (_cn_subquestion_number(match.group(1)) for match in _SUBQUESTION_RE.finditer(text))
-        if parsed is not None
-    ]
-    question_id = question.get("id")
-    for match in _DOTTED_SUBQUESTION_RE.finditer(text):
-        parsed = int(match.group(1))
-        if isinstance(question_id, int) and parsed == question_id and match.start() <= 6:
-            continue
-        numbers.append(parsed)
-    return numbers
-
-
 def _question_label(qid: Any) -> str:
     return f"第{qid}题" if qid not in (None, "") else "该题"
 
@@ -517,7 +564,8 @@ def _subquestion_label(numbers: Iterable[int]) -> str:
 
 
 def _copy_with_question_context(code: str, question: Dict | None = None, qid: Any = None) -> Dict[str, Any]:
-    base = dict(FAILURE_COPY.get(code) or {
+    copy_code = FAILURE_COPY_ALIASES.get(code, code)
+    base = dict(FAILURE_COPY.get(copy_code) or {
         "stage": "数据质量检查",
         "title": "未归类的数据异常",
         "reason": f"系统记录到异常代码 {code}，但尚未归类为具体失败范式。",
@@ -536,6 +584,21 @@ def _copy_with_question_context(code: str, question: Dict | None = None, qid: An
                     f"系统只识别到{_question_label(qid)}的{_subquestion_label(numbers)}小问，"
                     f"未识别到{_subquestion_label(missing)}问；因此无法确认小问总数、材料边界和分值分配。"
                 )
+    if code == "quality_score_too_low" and question:
+        question_data = _as_dict(question)
+        difficulty = _as_dict(question_data.get("difficulty"))
+        features = _as_dict(difficulty.get("features"))
+        detail = (
+            features.get("quality_scientific")
+            or features.get("quality_normative")
+            or question_data.get("quality_scientific")
+            or question_data.get("primary_issue")
+            or question_data.get("teacher_comment")
+        )
+        score = features.get("quality_score", question_data.get("quality_score"))
+        score_text = f"质量评分 {score:g}，" if isinstance(score, (int, float)) else ""
+        if detail:
+            base["reason"] = f"{_question_label(qid)}{score_text}低于自动入统阈值；核心原因：{detail}"
     return base
 
 
@@ -554,7 +617,7 @@ def _failure_explanation(
         copy["stage"] = stage
     if severity:
         copy["severity"] = severity
-    if raw_reason and code not in FAILURE_COPY:
+    if raw_reason and code not in FAILURE_COPY and code not in FAILURE_COPY_ALIASES:
         copy["reason"] = str(raw_reason)
     qid = qid if qid not in (None, "") else (_as_dict(question or {}).get("id"))
     item = {
@@ -605,6 +668,13 @@ def _warning_to_failure_explanation(warning: str, question: Dict | None = None, 
         )
         return item
     if prefix == "feature_status" and value in {"failed", "missing", "partial"}:
+        failure_reason = str(
+            _as_dict(question or {}).get("failure_reason")
+            or _as_dict(_as_dict(question or {}).get("difficulty")).get("failure_reason")
+            or ""
+        )
+        if failure_reason == "quality_score_too_low":
+            return _failure_explanation(failure_reason, question, qid, source="metadata_warning")
         code = "feature_extraction_failed" if value != "partial" else "feature_extraction_partial"
         return _failure_explanation(code, question, qid, source="metadata_warning")
     if prefix == "missing_llm_calls":
@@ -803,12 +873,13 @@ def _effective_question_difficulty(
     if _is_difficulty_blocked(question):
         return None
     base_raw = question.get("difficulty")
-    if isinstance(base_raw, dict):
+    raw_was_dict = isinstance(base_raw, dict)
+    if raw_was_dict:
         final_difficulty = base_raw.get("final_difficulty")
         if isinstance(final_difficulty, (int, float)):
-            return round(_clamp(final_difficulty, 0, 10), 2)
+            base_raw = final_difficulty
     base_available = isinstance(base_raw, (int, float))
-    if question.get("_difficulty_authoritative") is True and base_available:
+    if question.get("_difficulty_authoritative") is True and base_available and not raw_was_dict:
         return round(_clamp(base_raw, 0, 10), 2)
     base = _clamp(base_raw if base_available else 0, 0, 10)
     if not scoring_units:
@@ -849,7 +920,23 @@ def _effective_question_difficulty(
         - _independent_scoring_relief(question, scoring_units, normalized_values) * 2.00
         - _objective_tail_damping(question, evidence_difficulty, normalized_values) * 0.30
     )
-    return round(_clamp(2.8 + raw_difficulty * 1.35, 0, 10), 2)
+    final_difficulty = _clamp(2.8 + raw_difficulty * 1.35, 0, 10)
+    if not _is_constructed_response_question(question) and diagnostic_units:
+        trap_values = []
+        for unit in diagnostic_units:
+            unit = _as_dict(unit)
+            try:
+                trap_values.append(float(unit.get("trap_strength", 1)))
+            except (TypeError, ValueError):
+                trap_values.append(1.0)
+        strong_count = sum(1 for value in trap_values if value >= 3)
+        medium_count = sum(1 for value in trap_values if value >= 2)
+        if final_difficulty < 6.2 and medium_count >= 3:
+            final_difficulty += min(
+                0.95,
+                0.28 + 0.08 * medium_count + 0.10 * strong_count,
+            )
+    return round(_clamp(final_difficulty, 0, 10), 2)
 
 
 def _score_weighted_avg(questions: List[Dict[str, Any]]) -> float:
@@ -953,6 +1040,15 @@ def _normalize_questions_for_report(exam: Dict[str, Any], questions: List[Dict[s
             flags = _difficulty_flags_from_value(raw_difficulty)
             question.setdefault("difficulty_flags", flags)
             question.setdefault("difficulty_source", raw_difficulty.get("difficulty_source") or raw_difficulty.get("source") or "")
+            for field in (
+                "content_difficulty",
+                "difficulty_density",
+                "score_risk",
+                "score_layer",
+                "difficulty_model_version",
+            ):
+                if field in raw_difficulty and field not in question:
+                    question[field] = raw_difficulty.get(field)
             if isinstance(raw_difficulty.get("confidence"), (int, float)):
                 question["difficulty_confidence"] = raw_difficulty.get("confidence")
             elif isinstance(question.get("confidence"), (int, float)):
@@ -1070,33 +1166,44 @@ def _build_question_rows(questions: List[Dict]) -> List[Dict]:
         issue = primary_issue(question)
         difficulty = _effective_question_difficulty(question, scoring_units, diagnostic_units)
         difficulty_display = _format_num(difficulty, 1) if isinstance(difficulty, (int, float)) else "未评估"
-        explicit_review_warnings = _as_list(question.get("structure_warnings")) + _as_list(question.get("difficulty_review_warnings"))
-        needs_review = _contains_risk_text(issue) or (
-            isinstance(difficulty, (int, float)) and difficulty >= 8.5
-        ) or bool(explicit_review_warnings)
+        structure_review_warnings = _as_list(question.get("structure_warnings"))
+        difficulty_review_warnings = _as_list(question.get("difficulty_review_warnings"))
+        explicit_review_warnings = structure_review_warnings + difficulty_review_warnings
+        needs_review = _contains_risk_text(issue) or bool(explicit_review_warnings)
         quality_level = _teacher_quality_level(question.get("quality_score"), feature_status, issue)
         if explicit_review_warnings and risk != "data_gap":
             quality_level = "需复核"
         action = action_for_question(question)
         if explicit_review_warnings and risk != "data_gap":
-            action = "先人工复核题面结构或难度评估证据，再决定是否进入正式使用。"
-        elif needs_review:
+            if structure_review_warnings and difficulty_review_warnings:
+                action = "先人工复核题面结构和难度评估证据，再决定是否进入正式使用。"
+            elif structure_review_warnings:
+                action = "先人工复核题面小问编号、材料边界和评分口径，再决定是否进入正式使用。"
+            else:
+                action = "先人工复核难度评估证据和采分点负荷，再决定是否进入正式使用。"
+        elif needs_review and str(question.get("failure_reason") or "") != "quality_score_too_low":
             action = "进入人工优先复核清单，确认设问边界、评分标准和讲评口径。"
+        is_difficulty_blocked = not isinstance(difficulty, (int, float))
         rows.append({
             "question_id": qid,
             "risk_level": risk,
             "stance": "watch" if risk == "low" and needs_review else risk_stance(risk),
+            "needs_priority_review": needs_review and risk != "data_gap",
             "quality_level": quality_level,
             "difficulty": difficulty,
             "difficulty_label": _difficulty_label(difficulty),
             "difficulty_display": difficulty_display,
-            "data_quality_status": "gap" if risk == "data_gap" else "ok",
+            "data_quality_status": "gap" if risk == "data_gap" or is_difficulty_blocked else "ok",
             "score": question.get("total_score"),
             "metadata_confidence": confidence,
             "metadata_gap": pressure["metadata_gap"],
             "evidence_density": pressure["evidence_density"],
             "pressure_index": pressure["pressure_index"],
             "dominant_pressure": pressure["dominant_pressure"],
+            "score_risk": pressure["score_risk"],
+            "content_difficulty": question.get("content_difficulty"),
+            "difficulty_density": question.get("difficulty_density"),
+            "score_layer": question.get("score_layer", {}),
             "primary_issue": issue,
             "action": action,
             "evidence_refs": [f"question:{qid}.quality", f"question:{qid}.metadata"],
@@ -1202,7 +1309,7 @@ def _infer_sub_competency(unit: Dict, question: Dict, competency: str, knowledge
     for sub_competency, keywords in COMPETENCY_SUBDIMENSION_RULES.get(competency, []):
         if any(keyword.lower() in text for keyword in keywords):
             return sub_competency, "rule_inferred"
-    return DEFAULT_SUB_COMPETENCY.get(competency, "未细分素养"), "fallback"
+    return DEFAULT_SUB_COMPETENCY.get(competency, "未细分素养"), "default_inferred"
 
 
 def _unit_bloom(unit: Dict, question: Dict) -> int:
@@ -1261,6 +1368,7 @@ def _unit_difficulty(unit: Dict, question: Dict) -> float:
 
 def _question_pressure(question: Dict, scoring_units: List[Dict], diagnostic_units: List[Dict]) -> Dict[str, Any]:
     difficulty = max(0.0, min(1.0, _num(question.get("difficulty"), 0) / 10))
+    score_risk = max(0.0, min(1.0, _num(question.get("score_risk"), _num(question.get("difficulty"), 0)) / 10))
     quality_score = _num(question.get("quality_score"), 5)
     quality_gap = max(0.0, min(1.0, (5 - quality_score) / 5))
     metadata_gap = max(0.0, min(1.0, 1 - _num(question.get("metadata_confidence"), 1)))
@@ -1271,17 +1379,19 @@ def _question_pressure(question: Dict, scoring_units: List[Dict], diagnostic_uni
 
     components = {
         "难度": difficulty,
+        "分值压力": score_risk,
         "质量": quality_gap,
         "元数据": metadata_gap,
         "陷阱": trap_pressure,
         "证据密度": density_pressure,
     }
     weighted = (
-        difficulty * 0.30
-        + quality_gap * 0.25
-        + metadata_gap * 0.20
-        + trap_pressure * 0.15
-        + density_pressure * 0.10
+        difficulty * 0.24
+        + score_risk * 0.16
+        + quality_gap * 0.22
+        + metadata_gap * 0.18
+        + trap_pressure * 0.12
+        + density_pressure * 0.08
     )
     return {
         "pressure_index": round(weighted * 100, 1),
@@ -1290,6 +1400,7 @@ def _question_pressure(question: Dict, scoring_units: List[Dict], diagnostic_uni
         "evidence_density": evidence_density,
         "quality_gap": round(quality_gap, 2),
         "trap_pressure": round(trap_pressure, 2),
+        "score_risk": round(score_risk * 10, 1),
     }
 
 
@@ -1355,7 +1466,7 @@ def _aggregate_competency_detail_rows(rows: List[Dict]) -> List[Dict]:
             "question_ids": set(),
             "seu_count": 0,
             "seu_labels": [],
-            "source": row.get("source", "fallback"),
+            "source": row.get("source", "default_inferred"),
         })
         item["score_contribution"] += _num(row.get("score_contribution"))
         item["seu_count"] += 1
@@ -1595,6 +1706,10 @@ def _build_fine_grained_exhibits(questions: List[Dict], rows: List[Dict]) -> Dic
             "evidence_density": pressure["evidence_density"],
             "pressure_index": pressure["pressure_index"],
             "dominant_pressure": pressure["dominant_pressure"],
+            "score_risk": pressure["score_risk"],
+            "content_difficulty": _num(question.get("content_difficulty"), question.get("difficulty")),
+            "difficulty_density": question.get("difficulty_density"),
+            "partial_credit_relief": _num(_as_dict(question.get("score_layer")).get("partial_credit_relief")),
             "quality_gap": pressure["quality_gap"],
             "trap_pressure": pressure["trap_pressure"],
             "seu_count": len(scoring_units),
@@ -1644,6 +1759,8 @@ def _build_review_positioning() -> Dict[str, str]:
 
 
 def _row_needs_priority_review(row: Dict[str, Any]) -> bool:
+    if row.get("needs_priority_review") is True:
+        return True
     if row.get("risk_level") == "data_gap":
         return False
     if row.get("risk_level") in {"high", "medium"}:
@@ -1652,9 +1769,7 @@ def _row_needs_priority_review(row: Dict[str, Any]) -> bool:
         return True
     if _contains_risk_text(row.get("primary_issue")):
         return True
-    if _num(row.get("pressure_index")) >= 60:
-        return True
-    return _num(row.get("difficulty")) >= 8.5
+    return False
 
 
 def _priority_review_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1940,7 +2055,10 @@ def _build_executive_summary(
     language_risk_count = len([q for q in questions if _contains_risk_text(_as_dict(q).get("quality_language"))])
     scientific_risk_count = len([q for q in questions if _contains_risk_text(_as_dict(q).get("quality_scientific"))])
     priority_rows = _priority_review_rows(rows)
-    blocking_rows = [row for row in rows if row.get("risk_level") == "data_gap"]
+    blocking_rows = [
+        row for row in rows
+        if row.get("risk_level") == "data_gap" or not isinstance(row.get("difficulty"), (int, float))
+    ]
     high_pressure_rows = [
         row for row in rows
         if _num(row.get("pressure_index")) >= 60
@@ -1953,14 +2071,16 @@ def _build_executive_summary(
         high_pressure_count=len(high_pressure_rows),
         target_group="高三学生",
     )
-    risk_question_ids = [int(row["question_id"]) for row in priority_rows if isinstance(row.get("question_id"), int)]
     blocking_question_ids = [int(row["question_id"]) for row in blocking_rows if isinstance(row.get("question_id"), int)]
+    blocking_id_set = set(blocking_question_ids)
+    priority_rows = [row for row in priority_rows if row.get("question_id") not in blocking_id_set]
+    risk_question_ids = [int(row["question_id"]) for row in priority_rows if isinstance(row.get("question_id"), int)]
     fine_summary = _as_dict(_as_dict(fine_exhibits).get("summary"))
     if blocking_rows:
         lead = (
             "本报告用于判断试卷能否使用、哪些题需先修订、讲评时应聚焦哪些能力卡点。"
             f"当前存在 {len(blocking_rows)} 道阻断题（{_q_label_list(blocking_question_ids)}），"
-            "不得用推断难度或默认结论掩盖；需先补齐题面、分析或元数据。"
+            "不得用推断难度或默认结论掩盖；需先处理对应失败原因。"
             f"另有 {len(priority_rows)} 道人工优先复核题。"
         )
     elif priority_rows:
@@ -1973,19 +2093,26 @@ def _build_executive_summary(
     teacher_priorities = []
     if blocking_question_ids:
         block_reason = ""
+        blocking_action = (
+            f"先处理 {_q_label_list(blocking_question_ids)} 的失败原因；"
+            "处理前不得展示推断难度，也不得把该题计入整卷均值。"
+        )
         for question in questions:
             if question.get("id") in blocking_question_ids:
                 explanations = _question_evidence_integrity_trace(question).get("failure_explanations", [])
                 if explanations:
                     first = explanations[0]
                     block_reason = f" 主要原因：Q{question.get('id')} {first.get('title')}，{first.get('reason')}"
+                    if first.get("code") == "quality_score_too_low":
+                        blocking_action = (
+                            f"先核对 {_q_label_list(blocking_question_ids)} 的答案、科学性、设问边界和评分口径；"
+                            "修正前不得展示推断难度，也不得把该题计入整卷均值。"
+                        )
                     break
         teacher_priorities.append({
             "title": "阻断题先处理",
             "summary": (
-                f"先补齐 {_q_label_list(blocking_question_ids)} 的题面、分项分析或元数据；"
-                "补齐前不得展示推断难度，也不得把该题计入整卷均值。"
-                f"{block_reason}"
+                f"{blocking_action}{block_reason}"
             ),
             "stance": "risk",
             "id": "blocking_questions",
@@ -2265,14 +2392,18 @@ def _q_label_list(ids: Iterable[Any], limit: int = 8) -> str:
 
 def _question_evidence_integrity_trace(question: Dict) -> Dict:
     flags = _question_difficulty_flags(question)
-    has_source_excerpt = bool(question.get("question_text") or question.get("answer"))
+    has_source_excerpt = bool(_question_source_text(question).strip() or question.get("answer"))
     failure_explanations: List[Dict[str, Any]] = []
     if question.get("analysis_failed") or question.get("failure_reason"):
         failure_explanations.append(
             _failure_explanation(question.get("failure_reason") or "analysis_failed", question)
         )
     for flag in flags:
-        if str(flag) in FAIL_CLOSED_DIFFICULTY_FLAGS or str(flag) in FAILURE_COPY:
+        if (
+            str(flag) in FAIL_CLOSED_DIFFICULTY_FLAGS
+            or str(flag) in FAILURE_COPY
+            or str(flag) in FAILURE_COPY_ALIASES
+        ):
             failure_explanations.append(_failure_explanation(str(flag), question))
     for warning in _as_list(question.get("metadata_warnings")):
         explanation = _warning_to_failure_explanation(str(warning), question)
@@ -2294,8 +2425,31 @@ def _question_evidence_integrity_trace(question: Dict) -> Dict:
     return trace
 
 
-def _build_evidence_integrity(report_data: Dict, questions: List[Dict], fine_exhibits: Dict) -> Dict:
+def _question_source_excerpt(question: Dict, limit: int = 2400) -> Dict[str, Any]:
+    text = _question_source_text(question).strip()
+    answer = question.get("answer")
+    if answer is None and isinstance(question.get("analysis"), dict):
+        answer = question.get("analysis", {}).get("answer")
+    answer_text = "" if answer is None else str(answer).strip()
+    return {
+        "status": "available" if text or answer_text else "missing",
+        "question_text": text[:limit],
+        "answer": answer_text[:1200],
+        "truncated": len(text) > limit or len(answer_text) > 1200,
+    }
+
+
+def _build_evidence_integrity(
+    report_data: Dict,
+    questions: List[Dict],
+    fine_exhibits: Dict,
+    insights: Dict | None = None,
+) -> Dict:
     metadata = _as_dict(report_data.get("metadata_quality"))
+    knowledge = _as_dict(report_data.get("knowledge"))
+    insights = _as_dict(insights)
+    grounding_checks = _as_list(insights.get("_grounding_checks"))
+    grounding_status = str(insights.get("_grounding_status") or "").strip()
     seu_rows = _as_list(fine_exhibits.get("seu_rows"))
     competency_rows = _as_list(fine_exhibits.get("competency_evidence_rows"))
     allocation_counts = Counter(row.get("allocation_source") or "unknown" for row in seu_rows)
@@ -2343,8 +2497,40 @@ def _build_evidence_integrity(report_data: Dict, questions: List[Dict], fine_exh
     answer_missing_ids = [q.get("id") for q in questions if not q.get("answer")]
     question_text_missing_count = int(_num(metadata.get("question_text_missing_count"), len(question_text_missing_ids)))
     answer_missing_count = int(_num(metadata.get("answer_missing_count"), len(answer_missing_ids)))
+    knowledge_unmapped_count = int(_num(knowledge.get("unmapped_count"), 0))
+    knowledge_total_count = int(_num(knowledge.get("total_knowledge_points"), 0))
+    knowledge_unmapped_points = _as_list(knowledge.get("unmapped_points"))
+    knowledge_non_textbook_count = int(_num(knowledge.get("non_textbook_count"), 0))
+    knowledge_non_textbook_points = _as_list(knowledge.get("non_textbook_points"))
 
     items: List[Dict] = []
+    if grounding_checks:
+        first_grounding = _as_dict(grounding_checks[0])
+        status = str(first_grounding.get("status") or grounding_status or "unknown")
+        score = _num(first_grounding.get("support_score"), 0.0)
+        threshold = _num(first_grounding.get("threshold"), 0.6)
+        severity = "info" if status == "ok" and score >= threshold else "warning"
+        items.append({
+            "id": "report_grounding",
+            "title": "整卷结论证据校验",
+            "value": f"{score:.2f}",
+            "detail": (
+                f"Grounding 状态 {status}，阈值 {threshold:.2f}；"
+                f"claims={int(_num(first_grounding.get('claim_count'), 0))}，"
+                f"citedChunks={int(_num(first_grounding.get('cited_chunk_count'), 0))}。"
+                "低于阈值时，整卷总结需要人工复核。"
+            ),
+            "severity": severity,
+        })
+    for event in _as_list(insights.get("_report_failure_events")):
+        if isinstance(event, dict):
+            items.append({
+                "id": f"report_event_{len(items) + 1}",
+                "title": "报告生成环节失败",
+                "value": str(event.get("stage") or "unknown"),
+                "detail": str(event.get("reason") or ""),
+                "severity": str(event.get("severity") or "warning"),
+            })
     if difficulty_fallback_questions:
         items.append({
             "title": "大题结构化回退",
@@ -2395,16 +2581,56 @@ def _build_evidence_integrity(report_data: Dict, questions: List[Dict], fine_exh
             "detail": "报告数据未带入原题或答案摘录，结论可用但复核时需回看原卷。",
             "severity": "warning",
         })
+    if knowledge_unmapped_count:
+        examples = "、".join(
+            str(item.get("name"))
+            for item in knowledge_unmapped_points[:5]
+            if isinstance(item, dict) and item.get("name")
+        )
+        detail = (
+            f"{knowledge_unmapped_count}/{knowledge_total_count} 个知识点未完成教材标准映射；"
+            "教材覆盖分布仍可参考，但这些知识点需补充同义词或标准节点。"
+        )
+        if examples:
+            detail += f" 示例：{examples}。"
+        items.append({
+            "id": "knowledge_mapping_gap",
+            "title": "知识点标准映射缺口",
+            "value": f"{knowledge_unmapped_count}项",
+            "detail": detail,
+            "severity": "warning",
+        })
+    if knowledge_non_textbook_count:
+        examples = "、".join(
+            str(item.get("name"))
+            for item in knowledge_non_textbook_points[:5]
+            if isinstance(item, dict) and item.get("name")
+        )
+        detail = (
+            f"{knowledge_non_textbook_count} 个能力/方法表述未计入教材章节覆盖率；"
+            "这些内容应在核心素养或讲评建议中解释，不应硬塞进教材知识点统计。"
+        )
+        if examples:
+            detail += f" 示例：{examples}。"
+        items.append({
+            "id": "knowledge_non_textbook_scope",
+            "title": "能力/方法项未计入教材映射",
+            "value": f"{knowledge_non_textbook_count}项",
+            "detail": detail,
+            "severity": "info",
+        })
     inferred_allocations = int(allocation_counts.get("inferred", 0))
     rule_inferred = int(competency_source_counts.get("rule_inferred", 0))
-    fallback_subtypes = int(competency_source_counts.get("fallback", 0))
-    if inferred_allocations or rule_inferred or fallback_subtypes:
+    default_inferred = int(competency_source_counts.get("default_inferred", 0))
+    legacy_fallback_subtypes = int(competency_source_counts.get("fallback", 0))
+    inferred_subtypes = rule_inferred + default_inferred + legacy_fallback_subtypes
+    if inferred_allocations or inferred_subtypes:
         items.append({
             "title": "采分点/二级素养规则推断",
-            "value": f"{inferred_allocations} / {rule_inferred + fallback_subtypes}",
+            "value": f"{inferred_allocations} / {inferred_subtypes}",
             "detail": (
                 f"采分点分值推断 {inferred_allocations} 项；"
-                f"二级素养聚类规则派生 {rule_inferred + fallback_subtypes} 项。"
+                f"二级素养关键词命中 {rule_inferred} 项，默认规则归类 {default_inferred + legacy_fallback_subtypes} 项。"
                 "这些是证据口径提示，不是题目数量，也不等同于人工标注。"
             ),
             "severity": "info",
@@ -2501,6 +2727,13 @@ def _build_evidence_integrity(report_data: Dict, questions: List[Dict], fine_exh
         "answer_missing_count": answer_missing_count,
         "question_text_missing_ids": question_text_missing_ids,
         "answer_missing_ids": answer_missing_ids,
+        "knowledge_unmapped_count": knowledge_unmapped_count,
+        "knowledge_total_count": knowledge_total_count,
+        "knowledge_unmapped_points": knowledge_unmapped_points,
+        "knowledge_non_textbook_count": knowledge_non_textbook_count,
+        "knowledge_non_textbook_points": knowledge_non_textbook_points,
+        "grounding_status": grounding_status,
+        "grounding_checks": grounding_checks,
         "missing_purpose_questions": missing_purpose_questions,
         "source_counts": {
             "seu_allocation": dict(allocation_counts),
@@ -2550,6 +2783,7 @@ def _build_deep_dives(questions: List[Dict], rows: List[Dict]) -> List[Dict]:
                 "confidence": question.get("metadata_confidence", 0),
                 "warnings": _as_list(question.get("metadata_warnings")),
             },
+            "source_excerpt": _question_source_excerpt(question),
             "evidence_integrity": _question_evidence_integrity_trace(question),
         })
     return dives
@@ -2609,7 +2843,7 @@ def build_report_product_model(report_data: Dict, insights: Dict | None = None) 
         _as_dict(report_data.get("knowledge")),
         _as_list(fine_exhibits.get("knowledge_contribution_rows")) or _as_list(fine_exhibits.get("seu_rows")),
     )
-    evidence_integrity = _build_evidence_integrity(report_data, questions, fine_exhibits)
+    evidence_integrity = _build_evidence_integrity(report_data, questions, fine_exhibits, insights)
     findings = _build_findings(report_data, rows, fine_exhibits, knowledge_exhibit_rows)
 
     return {

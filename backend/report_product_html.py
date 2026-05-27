@@ -13,6 +13,33 @@ from report_product_charts import (
     render_portfolio_bubble,
 )
 
+FAIL_CLOSED_DIFFICULTY_FLAGS = {
+    "big_question_structure_failed",
+    "big_question_points_mismatch",
+    "points_sum_mismatch",
+    "score_share_sum_mismatch",
+    "points_unknown",
+    "cannot_identify_subquestions",
+    "invalid_subquestion_schema",
+    "invalid_dependency_ids",
+    "insufficient_stem",
+    "json_parse_failed",
+    "json_truncated",
+    "llm_parse_error",
+    "llm_parse_failure",
+    "provider_failed",
+    "quality_score_too_low",
+    "question_analysis_failed",
+    "feature_extraction_failed",
+    "no_evaluation",
+    "seu_fallback",
+    "big_question_fallback",
+}
+
+
+def _has_fail_closed_difficulty_flag(flags: Iterable[Any]) -> bool:
+    return any(str(flag) in FAIL_CLOSED_DIFFICULTY_FLAGS for flag in flags)
+
 
 def _e(value: Any) -> str:
     return escape("" if value is None else str(value), quote=True)
@@ -125,10 +152,67 @@ def _status_label(value: Any) -> str:
         "data_gap": "数据缺口",
         "low": "稳定",
         "biology": "生物",
-        "commercial_report.v1": "商业报告 v1",
+        "commercial_report.v1": "审题质量报告",
         "inferred": "推断分配",
         "rubric": "评分标准",
         "structured_inferred": "结构化推断",
+        "rule_scorer": "规则评分器",
+        "analysis_failed": "分析失败",
+        "llm": "模型分析",
+        "model": "模型分析",
+        "pipeline.final": "流水线最终结果",
+        "text": "文字材料",
+        "multi": "复合材料",
+        "image": "图像材料",
+        "table": "表格材料",
+        "chart": "图表材料",
+        "flowchart": "流程图",
+        "pedigree": "系谱图",
+        "calculation_trap": "计算陷阱",
+        "reading_trap": "阅读陷阱",
+        "misconception": "概念误区",
+        "typical_misconception": "典型误区",
+        "partial_truth": "部分正确干扰",
+        "trap_1": "陷阱 1",
+        "trap 1": "陷阱 1",
+        "trap_2": "陷阱 2",
+        "trap 2": "陷阱 2",
+        "trap_3": "陷阱 3",
+        "trap 3": "陷阱 3",
+        "trap_4": "陷阱 4",
+        "trap 4": "陷阱 4",
+        "bounded_item_seu_ceiling": "有限题型难度上限校准",
+        "seu_no_top_bottleneck_moderation": "采分点无最高瓶颈时的难度校准",
+        "media_representation_adjustment": "图表/材料表征负荷校准",
+        "seu_bottleneck_adjustment": "采分点瓶颈校准",
+        "visual_seu_evidence_floor": "图像证据下限校准",
+        "fragmented_medium_big_item_moderation": "中等大题分散采分校准",
+        "seu_bottleneck_crosscheck": "采分点瓶颈交叉校验",
+        "visual_diagnostic_burden_adjustment": "图像诊断负荷校准",
+        "diagnostic_burden_adjustment": "诊断负荷校准",
+        "rule_llm_mismatch": "规则特征与模型判断不一致",
+        "choice_decision_trap_adjustment": "选择题决策陷阱校准",
+        "choice_strong_misconception_lift": "强误区干扰项校准",
+        "big_question_structure_failed": "大题结构解析失败",
+        "big_question_points_mismatch": "大题采分点与分值不一致",
+        "points_sum_mismatch": "采分点分值合计不一致",
+        "score_share_sum_mismatch": "采分点占比合计不一致",
+        "points_unknown": "采分点分值未知",
+        "cannot_identify_subquestions": "无法识别小问边界",
+        "invalid_subquestion_schema": "小问结构不合法",
+        "invalid_dependency_ids": "小问依赖关系不合法",
+        "insufficient_stem": "题干证据不足",
+        "json_parse_failed": "结构化结果解析失败",
+        "json_truncated": "结构化结果截断",
+        "llm_parse_error": "模型结果解析错误",
+        "llm_parse_failure": "模型结果解析失败",
+        "provider_failed": "模型服务调用失败",
+        "quality_score_too_low": "质量评分过低",
+        "question_analysis_failed": "题目分析失败",
+        "feature_extraction_failed": "特征抽取失败",
+        "no_evaluation": "未形成有效评估",
+        "seu_fallback": "采分点拆解失败",
+        "big_question_fallback": "大题结构分析失败",
     }.get(str(value), str(value))
 
 
@@ -242,6 +326,12 @@ def _localize_text(value: Any) -> str:
         "Bloom": "认知层级",
         "partial truth": "部分正确干扰",
         "reading trap": "阅读陷阱",
+        "calculation trap": "计算陷阱",
+        "typical misconception": "典型误区",
+        "partial truth": "部分正确干扰",
+        "rule scorer": "规则评分器",
+        "bounded item seu ceiling": "有限题型难度上限校准",
+        "seu no top bottleneck moderation": "采分点无最高瓶颈时的难度校准",
         "fine grained summary": "审题证据概览",
         "fine grained units": "审题证据单元",
         "scoring units": "评分单元",
@@ -372,11 +462,20 @@ def _render_list(items: Iterable[Any], empty: str = "暂无") -> str:
     return f"<ul>{''.join(rows)}</ul>"
 
 
-def _render_evidence(refs: Any) -> str:
-    chips = [f'<span class="evidence-chip">{_e(_ref_label(ref))}</span>' for ref in _items(refs)]
-    if not chips:
-        chips.append('<span class="evidence-chip muted">缺少证据引用</span>')
-    return f'<div class="evidence-row">{"".join(chips)}</div>'
+def _render_evidence(refs: Any, compact_question_label: bool = False) -> str:
+    labels = []
+    for ref in _items(refs):
+        label = _ref_label(ref)
+        if compact_question_label:
+            label = re.sub(r"^第\s*\d+\s*题[：:]\s*", "", label).strip()
+        labels.append(label)
+    text = "、".join(labels) if labels else "证据引用缺失"
+    return (
+        '<div class="evidence-row evidence-text-row">'
+        '<span class="evidence-label">证据：</span>'
+        f'<span class="evidence-text">{_e(text)}</span>'
+        '</div>'
+    )
 
 
 def _render_data(value: Any) -> str:
@@ -783,7 +882,7 @@ def _render_summary(model: Dict[str, Any]) -> str:
             for label, value in scale_items
         )
         cards.append(
-            '<article class="big-call stance-positive">'
+            '<article class="big-call stance-positive summary-scale-card">'
             '<div class="call-heading">'
             f'{_icon("metadata")}'
             '<div><div class="call-id">证据规模</div><h3>本报告依据哪些材料</h3></div>'
@@ -799,7 +898,7 @@ def _render_summary(model: Dict[str, Any]) -> str:
         '<section class="report-section" id="summary">'
         f'{_section_heading("01", "执行摘要", "executive")}'
         f'<p class="lead-judgment">{_txt(summary.get("lead_judgment", ""))}</p>'
-        f'<div class="big-call-grid">{"".join(cards)}</div>'
+        f'<div class="big-call-grid summary-card-grid">{"".join(cards)}</div>'
         f'{_render_evidence_integrity(model)}'
         "</section>"
     )
@@ -896,7 +995,7 @@ def _render_portfolio(model: Dict[str, Any]) -> str:
             f'<td data-label="难度">{_e(row.get("difficulty_display", row.get("difficulty")))}</td>'
             f'<td data-label="分值">{_e(row.get("score"))}</td>'
             f'<td data-label="元数据置信度">{_e(_status_label(row.get("metadata_confidence")))}</td>'
-            f'<td data-label="核心问题与证据">{_txt(row.get("primary_issue"))}{_render_evidence(row.get("evidence_refs"))}</td>'
+            f'<td data-label="核心问题与证据">{_txt(row.get("primary_issue"))}{_render_evidence(row.get("evidence_refs"), compact_question_label=True)}</td>'
             f'<td data-label="动作">{_txt(row.get("action"))}</td>'
             "</tr>"
         )
@@ -924,18 +1023,16 @@ def _render_dive_integrity(dive: Dict[str, Any]) -> str:
     explanations = [_dict(item) for item in _items(integrity.get("failure_explanations"))]
     flags = _items(integrity.get("difficulty_flags"))
     rows = []
-    if integrity.get("analysis_failed") or any(
-        str(flag) in {"big_question_structure_failed", "big_question_points_mismatch", "feature_extraction_failed", "big_question_fallback"}
-        for flag in flags
-    ):
+    if integrity.get("analysis_failed") or any(str(flag) in FAIL_CLOSED_DIFFICULTY_FLAGS for flag in flags):
         reason = integrity.get("failure_reason") or "结构化证据不足"
         rows.append(f'<li>证据链异常：{_e(reason)}</li>')
     if flags:
-        rows.append(f'<li>难度回退/调整标记：{_e("、".join(str(flag) for flag in flags))}</li>')
+        flag_labels = "、".join(_display_value(flag) for flag in flags)
+        rows.append(f'<li>难度算法调整：{_e(flag_labels)}</li>')
     if integrity.get("source_excerpt_status") == "missing":
         rows.append("<li>原题/答案摘录未进入报告数据，复核时需回看原卷。</li>")
     if integrity.get("difficulty_source"):
-        rows.append(f'<li>难度来源：{_e(integrity.get("difficulty_source"))}</li>')
+        rows.append(f'<li>难度来源：{_txt(integrity.get("difficulty_source"))}</li>')
     if integrity.get("score_adjusted_from") is not None:
         rows.append(
             f'<li>分值规范化：原始 {_e(_display_value(integrity.get("score_adjusted_from")))} '
@@ -949,6 +1046,80 @@ def _render_dive_integrity(dive: Dict[str, Any]) -> str:
     )
 
 
+def _markdown_cells(line: str) -> List[str]:
+    stripped = line.strip().strip("|")
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_markdown_separator(line: str) -> bool:
+    cells = _markdown_cells(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def _render_source_text(text: str) -> str:
+    lines = str(text or "").splitlines()
+    blocks = []
+    paragraph = []
+    index = 0
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if paragraph:
+            blocks.append(f'<p class="source-paragraph">{_e(" ".join(paragraph).strip())}</p>')
+            paragraph = []
+
+    while index < len(lines):
+        line = lines[index]
+        if (
+            "|" in line
+            and index + 1 < len(lines)
+            and _is_markdown_separator(lines[index + 1])
+        ):
+            flush_paragraph()
+            headers = _markdown_cells(line)
+            index += 2
+            rows = []
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                rows.append(_markdown_cells(lines[index]))
+                index += 1
+            head = "".join(f"<th>{_e(cell)}</th>" for cell in headers)
+            body = "".join(
+                "<tr>" + "".join(f"<td>{_e(cell)}</td>" for cell in row) + "</tr>"
+                for row in rows
+            )
+            blocks.append(
+                '<table class="source-table">'
+                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+            )
+            continue
+        if line.strip():
+            paragraph.append(line.strip())
+        else:
+            flush_paragraph()
+        index += 1
+    flush_paragraph()
+    return "".join(blocks)
+
+
+def _render_source_excerpt(dive: Dict[str, Any]) -> str:
+    source = _dict(dive.get("source_excerpt"))
+    if source.get("status") != "available":
+        return '<div class="source-evidence missing">原题摘录缺失：需要回看原卷后复核本题。</div>'
+
+    question_html = _render_source_text(source.get("question_text", ""))
+    answer = str(source.get("answer") or "").strip()
+    answer_html = f'<p class="source-answer"><b>参考答案/解析摘录：</b>{_e(answer)}</p>' if answer else ""
+    truncated = '<p class="source-note">原题摘录已截断，完整内容以原卷为准。</p>' if source.get("truncated") else ""
+    empty_source = '<p class="source-paragraph muted">未带入题干文本。</p>'
+    return (
+        '<details class="source-evidence" open>'
+        '<summary>原题依据摘录</summary>'
+        f'{question_html or empty_source}'
+        f'{answer_html}{truncated}'
+        '</details>'
+    )
+
+
 def _render_deep_dives(model: Dict[str, Any]) -> str:
     panels = []
     for dive in _items(model.get("deep_dives")):
@@ -957,7 +1128,7 @@ def _render_deep_dives(model: Dict[str, Any]) -> str:
         integrity = _dict(dive.get("evidence_integrity"))
         if not metadata_warnings and (
             integrity.get("analysis_failed")
-            or integrity.get("difficulty_flags")
+            or _has_fail_closed_difficulty_flag(_items(integrity.get("difficulty_flags")))
             or integrity.get("difficulty_source") == "analysis_failed"
         ):
             metadata_warnings = ["证据链异常：该题存在未闭合的数据缺口。"]
@@ -967,6 +1138,7 @@ def _render_deep_dives(model: Dict[str, Any]) -> str:
             f'<div class="call-heading">{_icon("deep-dive")}<h3>第 {_e(dive.get("question_id"))} 题单题审查</h3></div>'
             f'<p class="headline">{_txt(dive.get("headline"))}</p>'
             f'<p>{_txt(dive.get("diagnosis"))}</p>'
+            f'{_render_source_excerpt(_dict(dive))}'
             '<div class="deep-grid">'
             '<section><h4>采分点与评分依据</h4>'
             f'{_render_seu_cards(dive.get("seu_breakdown"))}</section>'
@@ -999,7 +1171,7 @@ def _render_methodology(model: Dict[str, Any]) -> str:
     purpose_counts = _dict(summary.get("purpose_counts"))
     summary_cards = (
         '<div class="method-summary">'
-        f'<article><span>总调用次数</span><strong>{_e(summary.get("total", 0))}</strong></article>'
+        f'<article><span>逐题记录调用</span><strong>{_e(summary.get("total", 0))}</strong></article>'
         f'<article><span>调用目的数</span><strong>{len(purpose_counts)}</strong></article>'
         f'<article><span>字段解析数</span><strong>{len(_items(methodology.get("parsed_fields")))}</strong></article>'
         f'<article><span>质量门禁数</span><strong>{len(_items(methodology.get("quality_gates")))}</strong></article>'
@@ -1168,7 +1340,14 @@ h1 {
   text-wrap: balance;
   overflow-wrap: anywhere;
 }
-.exam-name { margin: 0; font-size: clamp(21px, 3vw, 34px); color: #fff; }
+.exam-name {
+  max-width: 100%;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(21px, 3vw, 34px);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .hero-note {
   width: min(100%, 820px);
   max-width: 820px;
@@ -1434,6 +1613,16 @@ h4 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 18px;
 }
+.summary-card-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: stretch;
+}
+.summary-card-grid .big-call {
+  grid-column: span 2;
+}
+.summary-card-grid .summary-scale-card {
+  grid-column: span 4;
+}
 .evidence-integrity-panel {
   margin-top: 22px;
   border: 1px solid #f0b8b8;
@@ -1477,8 +1666,11 @@ h4 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }
   background: #fff7f7;
   padding: 10px 12px;
   font-size: 14px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
-.integrity-trace ul { margin: 6px 0 0; padding-left: 18px; }
+.integrity-trace ul { margin: 6px 0 0; padding-left: 18px; min-width: 0; }
+.integrity-trace li { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .failure-explain-list {
   margin-top: 16px;
   display: grid;
@@ -1570,6 +1762,19 @@ h4 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }
   border-top: 1px solid var(--line);
 }
 .evidence-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.evidence-text-row {
+  align-items: baseline;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.evidence-label {
+  font-weight: 800;
+}
+.evidence-text {
+  overflow-wrap: anywhere;
+}
 .evidence-chip {
   display: inline-flex;
   max-width: 100%;
@@ -1606,7 +1811,7 @@ h4 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }
 .glance-card em { color: var(--muted); font-size: 13px; font-style: normal; }
 .chapter {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 96px 1fr;
   gap: 24px;
   padding: 34px 0;
   border-top: 1px solid var(--line);
@@ -1827,6 +2032,53 @@ figcaption { font-size: 22px; font-weight: 800; line-height: 1.25; }
   color: var(--accent);
   font-size: 28px;
 }
+.source-evidence {
+  margin: 14px 0 16px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 22px rgba(57,45,30,.06);
+}
+.source-evidence summary {
+  color: var(--bain-red);
+  font-weight: 850;
+  cursor: pointer;
+}
+.source-evidence.missing {
+  color: var(--muted);
+  font-size: 14px;
+}
+.source-paragraph,
+.source-answer,
+.source-note {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.source-note {
+  color: var(--muted);
+}
+.source-table {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.source-table th,
+.source-table td {
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.source-table th {
+  background: #f3f0ea;
+  font-weight: 800;
+}
 .data-table, .portfolio-table, .prompt-table {
   width: 100%;
   border-collapse: collapse;
@@ -2044,12 +2296,14 @@ li + li { margin-top: 4px; }
   .nav-links a { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
   .hero { min-height: auto; padding: 64px 24px 42px; }
   h1 { font-size: clamp(38px, 13vw, 50px); line-height: 1.04; }
-  .exam-name { font-size: 23px; }
+  .exam-name { font-size: 23px; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
   .hero-note { width: min(100%, 300px); max-width: 300px; padding-right: 0; font-size: 15px; overflow-wrap: break-word; }
   .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-section { width: calc(100% - 40px); padding: 64px 0; }
   .lead-judgment, .section-thesis, .chapter-thesis { max-width: 330px; font-size: 19px; overflow-wrap: break-word; }
   .big-call-grid, .glance-grid, .figure-grid, .method-grid, .deep-grid { grid-template-columns: 1fr; }
+  .summary-card-grid .big-call,
+  .summary-card-grid .summary-scale-card { grid-column: auto; }
   .report-section { width: calc(100% - 24px); }
   .report-figure { padding: 18px 14px; }
   .chart-frame, .wide-chart-frame {
@@ -2304,6 +2558,26 @@ body {
 .pdf-figure-matrix .pdf-figure {
   padding: 2mm;
 }
+.pdf-figure-spread {
+  display: flex;
+  gap: 3.2mm;
+  align-items: stretch;
+}
+.pdf-figure-spread .pdf-figure {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 138mm;
+}
+.pdf-figure-spread .chart-frame {
+  margin: 1.5mm 0;
+  padding: 1.2mm;
+}
+.pdf-figure-spread .report-chart {
+  height: 94mm;
+}
+.pdf-page-footnote {
+  margin-top: 3mm;
+}
 .pdf-figure-matrix .pdf-figure h3 {
   font-size: 8.4pt;
   margin: 0 0 1mm;
@@ -2392,7 +2666,11 @@ body {
   width: 100%;
   min-width: 0;
 }
-.pdf-figure .report-chart { height: 62mm; }
+.pdf-figure .chart-mobile-list,
+.pdf-wide-chart .chart-mobile-list {
+  display: none !important;
+}
+.pdf-figure .report-chart { height: 94mm; }
 .pdf-wide-chart .report-chart { height: 82mm; }
 .pdf-figure-matrix .pdf-figure .report-chart { height: 34mm; }
 .pdf-fine-page .pdf-figure {
@@ -2413,7 +2691,7 @@ body {
   padding: .8mm;
 }
 .pdf-fine-page .pdf-figure .report-chart {
-  height: 34mm;
+  height: 94mm;
 }
 .pdf-wide-chart {
   margin: 3mm 0;
@@ -2520,6 +2798,48 @@ def _render_pdf_summary(model: Dict[str, Any]) -> str:
     )
 
 
+def _render_pdf_figure_card(figure: Dict[str, Any]) -> str:
+    chart = render_figure_chart(figure)
+    return (
+        '<article class="pdf-figure">'
+        f'<div class="pdf-exhibit-label">{_e(_ref_label(figure.get("source")))}</div>'
+        f'<h3>{_txt(figure.get("title"))}</h3>'
+        f'<p><b>结论：</b>{_txt(figure.get("takeaway"))}</p>'
+        f'<div class="chart-frame"><div class="chart-kicker">图表展板</div>{chart or _render_data(figure.get("data"))}</div>'
+        f'<div class="pdf-source">来源：{_e(_ref_label(figure.get("source")))}</div>'
+        '</article>'
+    )
+
+
+def _render_pdf_figure_pages(
+    *,
+    number: str,
+    title: Any,
+    thesis: Any,
+    figures: List[Dict[str, Any]],
+    implications: List[Any] | None = None,
+    panel_title: str = "综合判读",
+    page_class: str = "",
+    per_page: int = 1,
+) -> str:
+    if not figures:
+        return ""
+    page_chunks = [figures[index : index + per_page] for index in range(0, len(figures), per_page)]
+    pages = []
+    extra_class = f" {page_class}" if page_class else ""
+    total_pages = len(page_chunks)
+    for index, chunk in enumerate(page_chunks):
+        page_number = number if total_pages == 1 else f"{number}.{index + 1}"
+        page_title = title if total_pages == 1 else f"{title}（{index + 1}/{total_pages}）"
+        pages.append(
+            f'<section class="pdf-page pdf-content{extra_class}">'
+            f'{_render_pdf_page_header(page_number, page_title, thesis)}'
+            f'<div class="pdf-grid-2 pdf-figure-spread">{"".join(_render_pdf_figure_card(figure) for figure in chunk)}</div>'
+            '</section>'
+        )
+    return "".join(pages)
+
+
 def _render_pdf_chapter_pages(model: Dict[str, Any]) -> str:
     figures = []
     implications: List[Any] = []
@@ -2527,24 +2847,15 @@ def _render_pdf_chapter_pages(model: Dict[str, Any]) -> str:
         chapter = _dict(chapter)
         implications.extend(_items(chapter.get("implications"))[:1])
         for figure in _items(chapter.get("figures")):
-            figure = _dict(figure)
-            chart = render_figure_chart(figure)
-            figures.append(
-                '<article class="pdf-figure">'
-                f'<div class="pdf-exhibit-label">{_e(_ref_label(figure.get("source")))}</div>'
-                f'<h3>{_txt(figure.get("title"))}</h3>'
-                f'<p><b>结论：</b>{_txt(figure.get("takeaway"))}</p>'
-                f'<div class="chart-frame"><div class="chart-kicker">图表展板</div>{chart or _render_data(figure.get("data"))}</div>'
-                f'<div class="pdf-source">来源：{_e(_ref_label(figure.get("source")))}</div>'
-                '</article>'
-            )
-    return (
-        '<section class="pdf-page pdf-content">'
-        f'{_render_pdf_page_header("02", "核心图表矩阵", "难度、认知层级、知识点、素养、风险与元数据在一页内交叉读取。")}'
-        f'<div class="pdf-grid-3 pdf-figure-matrix">{"".join(figures[:6])}</div>'
-        '<div class="pdf-panel" style="margin-top:2.5mm"><h3>综合判读</h3>'
-        f'{_render_list(implications[:4])}'
-        '</div></section>'
+            figures.append(_dict(figure))
+    return _render_pdf_figure_pages(
+        number="02",
+        title="核心图表矩阵",
+        thesis="难度、认知层级、知识点、素养、风险与元数据分组展示，避免压缩后失真。",
+        figures=figures[:6],
+        implications=implications[:4],
+        panel_title="综合判读",
+        page_class="pdf-core-chart-page",
     )
 
 
@@ -2560,24 +2871,15 @@ def _render_pdf_fine_grained(model: Dict[str, Any]) -> str:
 
     figures = []
     for figure in _items(target.get("figures"))[:3]:
-        figure = _dict(figure)
-        chart = render_figure_chart(figure)
-        figures.append(
-            '<article class="pdf-figure">'
-            f'<div class="pdf-exhibit-label">{_e(_ref_label(figure.get("source")))}</div>'
-            f'<h3>{_txt(figure.get("title"))}</h3>'
-            f'<p><b>结论：</b>{_txt(figure.get("takeaway"))}</p>'
-            f'<div class="chart-frame"><div class="chart-kicker">图表展板</div>{chart or _render_data(figure.get("data"))}</div>'
-            f'<div class="pdf-source">来源：{_e(_ref_label(figure.get("source")))}</div>'
-            '</article>'
-        )
-    return (
-        '<section class="pdf-page pdf-content">'
-        f'{_render_pdf_page_header("03", target.get("title", "审题证据矩阵"), target.get("thesis", ""))}'
-        f'<div class="pdf-grid-3 pdf-figure-matrix">{"".join(figures)}</div>'
-        '<div class="pdf-panel" style="margin-top:2.5mm"><h3>业务含义</h3>'
-        f'{_render_list(_items(target.get("implications"))[:3])}'
-        '</div></section>'
+        figures.append(_dict(figure))
+    return _render_pdf_figure_pages(
+        number="03",
+        title=target.get("title", "审题证据矩阵"),
+        thesis=target.get("thesis", ""),
+        figures=figures,
+        implications=_items(target.get("implications"))[:3],
+        panel_title="业务含义",
+        page_class="pdf-fine-page",
     )
 
 
