@@ -105,6 +105,83 @@ def test_get_providers_applies_policy_to_native_provider():
         os.unlink(sa_path)
 
 
+def test_qwen_vision_provider_is_used_only_for_image_requests(monkeypatch):
+    from llm_config import get_providers
+
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_SA_CREDENTIALS", raising=False)
+
+    assert get_providers(purpose="question_analysis", requires_images=False) == []
+
+    providers = get_providers(purpose="question_analysis", requires_images=True)
+    assert [provider["name"] for provider in providers] == ["qwen_vision"]
+    assert providers[0]["model"] == "qwen3-vl-plus"
+    assert providers[0]["key_env"] == "QWEN_API_KEY"
+    assert providers[0]["response_format"] == "json_object"
+
+
+def test_qwen_vision_does_not_validate_unused_native_model(monkeypatch):
+    from llm_config import get_providers
+
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen")
+    monkeypatch.setenv("LLM_VISION_PROVIDER", "qwen")
+    monkeypatch.setenv(
+        "LLM_EXAM_REVIEW_PRO_MODEL",
+        "publishers/google/models/gemini-3-pro-preview",
+    )
+    monkeypatch.delenv("LLM_SA_CREDENTIALS", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    providers = get_providers(purpose="question_analysis", requires_images=True)
+
+    assert [provider["name"] for provider in providers] == ["qwen_vision"]
+
+
+def test_image_requests_auto_prefer_configured_qwen_over_native_provider():
+    from llm_config import get_providers
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(b"{}")
+        sa_path = f.name
+    env = {
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_SA_CREDENTIALS": sa_path,
+        "LLM_SDK_MODULE": "google.genai",
+        "LLM_CLOUD_MODE": "true",
+        "DEEPSEEK_API_KEY": "",
+    }
+    try:
+        with patch.dict(os.environ, env, clear=True):
+            providers = get_providers(purpose="question_split", requires_images=True)
+            assert [provider["name"] for provider in providers] == ["qwen_vision"]
+    finally:
+        os.unlink(sa_path)
+
+
+def test_image_requests_can_force_native_vision_provider():
+    from llm_config import get_providers
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(b"{}")
+        sa_path = f.name
+    env = {
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_VISION_PROVIDER": "native",
+        "LLM_SA_CREDENTIALS": sa_path,
+        "LLM_SDK_MODULE": "google.genai",
+        "LLM_CLOUD_MODE": "true",
+        "DEEPSEEK_API_KEY": "",
+    }
+    try:
+        with patch.dict(os.environ, env, clear=True):
+            providers = get_providers(purpose="question_split", requires_images=True)
+            assert [provider["name"] for provider in providers] == ["primary"]
+    finally:
+        os.unlink(sa_path)
+
+
 def test_legacy_native_model_env_does_not_override_policy_by_default():
     from llm_config import get_providers
 

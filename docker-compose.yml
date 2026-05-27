@@ -40,6 +40,11 @@ services:
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - QWEN_VISION_MODEL=${QWEN_VISION_MODEL:-qwen3-vl-plus}
+      - LLM_VISION_PROVIDER=${LLM_VISION_PROVIDER:-auto}
       - LLM_SA_CREDENTIALS=${LLM_SA_CREDENTIALS}
       - GOOGLE_APPLICATION_CREDENTIALS=${LLM_SA_CREDENTIALS}
       - LLM_PROJECT=${LLM_PROJECT}

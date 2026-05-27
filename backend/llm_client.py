@@ -125,8 +125,18 @@ def _get_url(provider: dict) -> str:
     if env_key:
         url = os.environ.get(env_key, "")
         if url:
-            return url
-    return provider["base_url_default"]
+            return _append_api_path(url, provider.get("api_path"))
+    return _append_api_path(provider["base_url_default"], provider.get("api_path"))
+
+
+def _append_api_path(url: str, api_path: str | None) -> str:
+    if not api_path:
+        return url
+    normalized_url = str(url or "").rstrip("/")
+    normalized_path = "/" + str(api_path or "").strip("/")
+    if normalized_url.endswith(normalized_path):
+        return normalized_url
+    return normalized_url + normalized_path
 
 
 def _get_proxy(provider: dict) -> str | None:
@@ -291,12 +301,15 @@ def _build_request_body(provider: dict, messages: list, max_tokens: int,
                 "role": msg["role"],
                 "content": _convert_content_chat(msg["content"]),
             })
-        return {
+        body = {
             "model": model,
             "messages": converted,
             "max_tokens": capped_tokens,
             "temperature": temperature,
         }
+        if provider.get("response_format") == "json_object":
+            body["response_format"] = {"type": "json_object"}
+        return body
 
 
 def _extract_text(api_format: str, data: dict) -> str:
@@ -708,7 +721,12 @@ async def llm_call(
                 "operation": "generate_grounded_content",
             })
             raise
-    providers = get_providers(purpose=purpose, model_override=model)
+    requires_images = _messages_include_images(messages)
+    providers = get_providers(
+        purpose=purpose,
+        model_override=model,
+        requires_images=requires_images,
+    )
     if not providers:
         _last_call_metadata.set({
             "status": "provider_failed",

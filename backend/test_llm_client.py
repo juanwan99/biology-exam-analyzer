@@ -85,6 +85,8 @@ class TestLlmConfig:
         for p in PROVIDERS:
             if p.get("key_env"):
                 clear[p["key_env"]] = ""
+            for env_name in p.get("key_envs") or []:
+                clear[env_name] = ""
             if p.get("sa_file_env"):
                 clear[p["sa_file_env"]] = ""
         with patch.dict(os.environ, clear):
@@ -225,6 +227,7 @@ class TestFallback:
                 get_providers.assert_called_once_with(
                     purpose="question_split",
                     model_override="publishers/google/models/gemini-3-flash-preview",
+                    requires_images=False,
                 )
                 metadata = get_last_llm_call_metadata()
                 assert metadata["purpose"] == "question_split"
@@ -489,6 +492,41 @@ class TestFormatConversion:
         ]}]
         body = _build_request_body(provider, messages, 4096, 0)
         assert body["messages"][0]["content"] == "line 1\nline 2"
+
+    def test_qwen_vision_body_preserves_image_and_requests_json(self):
+        from llm_client import _build_request_body
+
+        provider = {
+            "name": "qwen_vision",
+            "model": "qwen3-vl-plus",
+            "api_format": "openai_chat",
+            "max_tokens": 8192,
+            "response_format": "json_object",
+        }
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "return json"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abcd"}},
+        ]}]
+
+        body = _build_request_body(provider, messages, 4096, 0)
+
+        assert body["model"] == "qwen3-vl-plus"
+        assert body["response_format"] == {"type": "json_object"}
+        assert body["messages"][0]["content"][1]["type"] == "image_url"
+
+    def test_qwen_base_url_gets_chat_completions_path(self, monkeypatch):
+        from llm_client import _get_url
+
+        provider = {
+            "base_url_env": "QWEN_API_BASE",
+            "base_url_default": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_path": "/chat/completions",
+        }
+        monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+        assert _get_url(provider) == (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        )
 
     def test_native_data_image_converts_to_inline_data(self):
         from llm_client import _convert_messages_to_native

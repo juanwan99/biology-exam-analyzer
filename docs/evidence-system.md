@@ -65,6 +65,10 @@ EXAM_REVIEW_CHANNEL=app_builder
 LLM_LOCATION=global
 LLM_EXAM_REVIEW_FLASH_MODEL=publishers/google/models/gemini-3-flash-preview
 LLM_EXAM_REVIEW_PRO_MODEL=publishers/google/models/gemini-3.1-pro-preview
+LLM_VISION_PROVIDER=qwen
+QWEN_API_KEY=
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_VISION_MODEL=qwen3-vl-plus
 
 DISCOVERY_ENGINE_PROJECT_ID=
 DISCOVERY_ENGINE_CREDENTIALS=
