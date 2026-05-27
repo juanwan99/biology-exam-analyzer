@@ -137,6 +137,24 @@ pages=15
 problem_count=0
 ```
 
+干净基准全新 E2E：
+
+```text
+channel=agent_search
+questions=21
+pipeline_status=ok
+blockers=0
+warnings=0
+discovery_rank_count=21
+agent_search_answer_count=21
+discovery_grounding_check_count=58
+unsupported_generation_count=0
+missing_rank_question_ids=[]
+evidence_gap_questions=[]
+pdf_pages=15
+pdf_problem_count=0
+```
+
 最新报告位置：
 
 ```text
@@ -147,6 +165,9 @@ problem_count=0
 本机：
 C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.html
 C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_arch_agent_search_qualityroot_pdfrootfix_20260527.pdf
+C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_fresh_agent_search_e2e_20260527_085740.html
+C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_fresh_agent_search_e2e_20260527_085740.pdf
+C:\Users\Administrator\Documents\New project\api\reports\zhuzhou_yimo_fresh_agent_search_e2e_20260527_085740.response.json
 ```
 
 本机干净代码副本：
