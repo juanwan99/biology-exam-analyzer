@@ -70,3 +70,10 @@
 - dependencies 的 from/to 只能引用 subquestions 中存在的 id。
 - "strong" 表示前一问结论/产物是后一问前提；"weak" 表示仅有背景帮助。
 - global_method_novelty: 1=全教材内，2=部分需要迁移，3=核心方法教材外。
+
+难度构念判定补充：
+- reasoning_steps 只计最少认知操作数，不按填空数量累计；同一小问多个空如果只是同一步推理的答案拆分，仍按一步或两步计。
+- trap_density 只计真实可混淆路径，不按采分点数量累计。
+- novelty=3 适用于核心解法依赖教材外或明显超常规迁移的方法，例如三引物PCR鉴定插入方向、GFP/融合蛋白定位、复杂载体构建、CRISPR、In-Fusion 克隆等；普通 PCR 或常规遗传判断不能自动给 3。
+- 若题目要求引物方向/序列位置/融合蛋白/插入方向判断，representation_complexity 通常不低于 3；涉及多个候选引物或方向判断的小问 trap_density 通常不低于 2。
+- global_method_novelty 评估整题核心方法，不是知识点数量；同一方法在多个小问重复出现不能重复抬高难度。

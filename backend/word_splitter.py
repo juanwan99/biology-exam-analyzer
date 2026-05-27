@@ -99,7 +99,7 @@ class WordQuestionSplitter:
                 text = para.text.strip()
 
                 # 提取段落中的图片
-                images = self._extract_images_from_paragraph(para, doc)
+                images, image_warnings = self._extract_images_from_paragraph(para, doc)
 
                 if not text and not images:
                     continue
@@ -108,6 +108,7 @@ class WordQuestionSplitter:
                     "type": "paragraph",
                     "text": text,
                     "images": images,
+                    "warnings": image_warnings,
                     "element": para
                 })
 
@@ -116,21 +117,26 @@ class WordQuestionSplitter:
                 table = DocxTable(element, doc)
                 table_image = self._table_to_image(table)
                 table_text = self._table_to_markdown(table)
+                table_warnings = []
+                if table_text and not table_image:
+                    table_warnings.append("table_media_render_failed")
 
                 elements.append({
                     "type": "table",
                     "image_base64": table_image,
                     "text": table_text,
+                    "warnings": table_warnings,
                     "element": table
                 })
 
         return elements
 
-    def _extract_images_from_paragraph(self, para: DocxParagraph, doc: Document) -> List[str]:
+    def _extract_images_from_paragraph(self, para: DocxParagraph, doc: Document) -> Tuple[List[str], List[str]]:
         """
         从段落中提取图片的base64编码
         """
         images = []
+        warnings = []
 
         for run in para.runs:
             # 查找drawing元素（图片）
@@ -159,8 +165,9 @@ class WordQuestionSplitter:
                             logger.debug(f"[图片提取] 提取图片，大小={len(image_base64)}字节")
                         except Exception as e:
                             logger.warning(f"[图片提取] 失败: {str(e)}")
+                            warnings.append("image_media_extract_failed")
 
-        return images
+        return images, list(dict.fromkeys(warnings))
 
     def _is_valid_image(self, image_bytes: bytes) -> bool:
         """
@@ -333,7 +340,7 @@ class WordQuestionSplitter:
                             {"type": "image", "base64": img_base64}
                             for img_base64 in element["images"]
                         ],
-                        warnings=[],
+                        warnings=list(element.get("warnings", [])),
                         section_header=current_section_header  # 附加分节标题
                     )
                     logger.debug(f"[题号检测] 识别到题目{question_id}，模式={pattern_type}")
@@ -342,6 +349,9 @@ class WordQuestionSplitter:
                     if current_question:
                         if text:
                             current_question.content += "\n" + text
+                        for warning in element.get("warnings", []):
+                            if warning not in current_question.warnings:
+                                current_question.warnings.append(warning)
                         current_question.images.extend(element["images"])
                         current_question.media.extend(
                             {"type": "image", "base64": img_base64}
@@ -351,6 +361,9 @@ class WordQuestionSplitter:
             elif element["type"] == "table":
                 # 表格归属到当前题目
                 if current_question:
+                    for warning in element.get("warnings", []):
+                        if warning not in current_question.warnings:
+                            current_question.warnings.append(warning)
                     current_question.tables.append({
                         "image_base64": element["image_base64"]
                     })
@@ -469,6 +482,10 @@ class WordQuestionSplitter:
             integrity_warnings.append("table_media_missing")
         if expected_image and image_count == 0:
             integrity_warnings.append("image_media_missing")
+        for warning in question.warnings:
+            if warning in {"table_media_render_failed", "image_media_extract_failed"}:
+                integrity_warnings.append(warning)
+        integrity_warnings = list(dict.fromkeys(integrity_warnings))
         for warning in integrity_warnings:
             if warning not in question.warnings:
                 question.warnings.append(warning)

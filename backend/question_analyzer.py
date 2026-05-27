@@ -6,10 +6,44 @@ from hashlib import sha256
 from pathlib import Path
 from logger import get_logger
 from config import PROMPT_DIR
-from llm_client import llm_call
+from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
+from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 
 logger = get_logger()
+
+
+def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
+    metadata = dict(metadata or {})
+    try:
+        trace = get_last_call_metadata() or {}
+    except Exception:
+        trace = {}
+    provider = trace.get("provider") or "llm_client"
+    model = trace.get("model") or "configured_provider_chain"
+    fallback_count = int(trace.get("fallback_count") or 0)
+    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+        if trace.get(key) is not None:
+            metadata[key] = trace.get(key)
+    return provider, model, fallback_count, metadata
+
+
+def _question_images_to_media_items(question_images: list | None) -> list[dict[str, str]]:
+    media_items: list[dict[str, str]] = []
+    for img_bytes in question_images or []:
+        if not img_bytes:
+            continue
+        media_items.append({
+            "type": "image",
+            "base64": base64.b64encode(img_bytes).decode("utf-8"),
+        })
+    return media_items
+
+
+def _question_messages(prompt: str, media_items: list | None) -> list[dict]:
+    if media_items:
+        return messages_with_media(prompt, media_items)
+    return [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
 
 class QuestionAnalyzer:
@@ -251,29 +285,20 @@ class QuestionAnalyzer:
         else:
             logger.debug("[拆分] 未检测到提取文字，使用纯OCR模式")
 
-        # 构建OpenAI格式的消息（支持多图）
-        message_content = [{"type": "text", "text": split_prompt}]
-
-        # 添加图片（使用base64格式）
-        for idx, img_bytes in enumerate(image_bytes):
-            base64_image = base64.b64encode(img_bytes).decode('utf-8')
-            message_content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_image}"
-                }
-            })
-            logger.debug(f"[拆分] 已添加图片 {idx + 1}/{len(image_bytes)}")
+        split_media_items = _question_images_to_media_items(image_bytes)
+        for idx, _ in enumerate(split_media_items):
+            logger.debug(f"[拆分] 已添加图片 {idx + 1}/{len(split_media_items)}")
 
         try:
             logger.debug("[拆分] 准备调用 llm_call（统一 fallback 客户端）")
             logger.debug("[拆分] 请求参数 - max_tokens: 8192, temperature: 0")
 
             response_text = await llm_call(
-                messages=[{"role": "user", "content": message_content}],
+                messages=_question_messages(split_prompt, split_media_items),
                 max_tokens=8192,
                 temperature=0,
                 timeout=120.0,
+                purpose="question_split",
             )
             finish_reason = "stop"  # fallback 客户端已处理截断重试
 
@@ -295,13 +320,19 @@ class QuestionAnalyzer:
             # 提取并解析JSON
             json_text = self.extract_json(response_text)
             questions = json.loads(json_text)
+            split_metadata = {
+                "response_length": len(response_text),
+                "question_count": len(questions) if isinstance(questions, list) else 0,
+                "finish_reason": finish_reason,
+            }
+            provider, model, fallback_count, split_metadata = _llm_call_trace(split_metadata)
             split_call = LLMCallRecord(
                 call_id="exam-split-questions",
                 purpose="split_questions",
                 prompt_id="biology.split_questions",
                 prompt_hash=sha256(split_prompt.encode("utf-8")).hexdigest(),
-                provider="llm_client",
-                model="configured_provider_chain",
+                provider=provider,
+                model=model,
                 input_refs={
                     "image_count": len(image_bytes),
                     "has_extracted_text": bool(extracted_text),
@@ -309,11 +340,8 @@ class QuestionAnalyzer:
                 },
                 parsed_schema="SplitQuestionList",
                 confidence=1.0,
-                metadata={
-                    "response_length": len(response_text),
-                    "question_count": len(questions) if isinstance(questions, list) else 0,
-                    "finish_reason": finish_reason,
-                },
+                fallback_count=fallback_count,
+                metadata=split_metadata,
             ).model_dump()
             if isinstance(questions, list):
                 for question in questions:
@@ -335,7 +363,10 @@ class QuestionAnalyzer:
         question_images: list,
         question_id: int,
         question_type: str = "unknown",
-        section_header: str = None
+        section_header: str = None,
+        evidence_context_provider=None,
+        evidence_ranking_enabled: bool | str | None = None,
+        agent_search_enabled: bool | str | None = None,
     ) -> dict:
         """
         第二次调用：分析单道题目
@@ -379,6 +410,9 @@ class QuestionAnalyzer:
 
         prompt_hash = sha256(analysis_prompt_template.encode("utf-8")).hexdigest()
         analysis_prompt_id = "biology.question_analysis." + ("v" + "2" if use_v2 else "v1")
+        evidence_context_meta = None
+        question_media_items = _question_images_to_media_items(question_images)
+        question_media_refs = media_input_refs(question_media_items)
 
         def build_call_record(payload: dict, parsed_schema: str, confidence: float,
                               validation_errors: list = None, *,
@@ -391,23 +425,28 @@ class QuestionAnalyzer:
             }
             if metadata_extra:
                 metadata.update(metadata_extra)
+            if evidence_context_meta:
+                metadata["evidence_context"] = evidence_context_meta
+            provider, model, fallback_count, metadata = _llm_call_trace(metadata)
             call = LLMCallRecord(
                 call_id=f"question-{question_id}-{call_suffix}",
                 question_id=question_id,
                 purpose="question_analysis",
                 prompt_id=prompt_id or analysis_prompt_id,
                 prompt_hash=prompt_hash_value or prompt_hash,
-                provider="llm_client",
-                model="configured_provider_chain",
+                provider=provider,
+                model=model,
                 input_refs={
                     "question_id": question_id,
                     "question_type": question_type,
                     "section_header": section_header,
-                    "image_count": len(question_images),
+                    "image_count": len(question_media_items),
+                    **question_media_refs,
                 },
                 parsed_schema=parsed_schema,
                 confidence=confidence,
                 validation_errors=validation_errors or [],
+                fallback_count=fallback_count,
                 retry_count=retry_count,
                 metadata=metadata,
             )
@@ -432,35 +471,49 @@ class QuestionAnalyzer:
         analysis_prompt = analysis_prompt.replace("{section_header}", section_header or "未提供")
 
         # 构造完整Prompt
-        full_prompt = f"{analysis_prompt}\n\n题目内容：\n{question_text}"
+        prompt_sections = [analysis_prompt]
+        from services.evidence_context import (
+            QuestionEvidenceContextBuilder,
+            evidence_ranking_enabled as _evidence_ranking_enabled,
+        )
+        if _evidence_ranking_enabled(evidence_ranking_enabled):
+            provider = evidence_context_provider or QuestionEvidenceContextBuilder()
+            try:
+                evidence_context = await provider.build_question_context(
+                    question_text=question_text,
+                    question_id=question_id,
+                    question_type=question_type,
+                    section_header=section_header,
+                    agent_search_enabled=agent_search_enabled,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"题目{question_id}证据重排失败（Discovery Engine Ranking）: {exc}"
+                ) from exc
+            evidence_context_text = str(evidence_context.get("context_text") or "").strip()
+            if not evidence_context_text:
+                raise RuntimeError(
+                    f"题目{question_id}证据重排失败（Discovery Engine Ranking）: empty context"
+                )
+            prompt_sections.append(evidence_context_text)
+            evidence_context_meta = evidence_context.get("metadata") or {}
 
-        # 构建消息内容
-        message_content = [{"type": "text", "text": full_prompt}]
-
-        # 添加题目图片
-        if question_images:
-            for idx, img_bytes in enumerate(question_images):
-                base64_image = base64.b64encode(img_bytes).decode('utf-8')
-                message_content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}"
-                    }
-                })
+        full_prompt = "\n\n".join(prompt_sections + [f"题目内容：\n{question_text}"])
 
         try:
             logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")
-            logger.debug(f"[分析] 请求包含 {len(question_images)} 张图片")
+            logger.debug(f"[分析] 请求包含 {len(question_media_items)} 张图片")
             if question_images:
-                total_img_size = sum(len(img) for img in question_images)
+                total_img_size = sum(len(img) for img in question_images if img)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
             analysis_timeout = 240.0 if question_type in ("short_answer", "non_choice") or len(question_text) > 500 else 120.0
             response_text = await llm_call(
-                messages=[{"role": "user", "content": message_content}],
+                messages=_question_messages(full_prompt, question_media_items),
                 max_tokens=8192,
                 temperature=0,
                 timeout=analysis_timeout,
+                purpose="question_analysis",
             )
             finish_reason = "stop"  # fallback 客户端已处理截断重试
 
@@ -495,6 +548,9 @@ class QuestionAnalyzer:
             try:
                 result = json.loads(json_text)
                 v2_fallback_errors = []
+
+                if use_v2 and not result.get("scoring_units"):
+                    raise ValueError("v2_structured_analysis_missing_scoring_units")
 
                 if use_v2 and result.get("scoring_units"):
                     # v2 细粒度解析路径（F-001 修复：全链路 try/except 保证 fallback）
@@ -561,6 +617,7 @@ class QuestionAnalyzer:
                                 question_type=question_type,
                                 section_header=section_header,
                                 question_text=question_text,
+                                question_media_items=question_media_items,
                                 timeout=analysis_timeout,
                             )
                             return validated
@@ -599,7 +656,6 @@ class QuestionAnalyzer:
                 # 如果是因为截断导致的 JSON 格式错误，直接报错，避免生成伪分析。
                 if finish_reason == 'length':
                     raise RuntimeError(f"question analysis truncated: question {question_id}")
-
                 if use_v2:
                     logger.warning(f"[分析] 题目{question_id} 尝试 compact v2 prompt 重试")
                     compact_prompt = self._get_compact_analysis_retry_prompt(
@@ -607,14 +663,16 @@ class QuestionAnalyzer:
                         section_header=section_header,
                     )
                     compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
-                    compact_prompt_id = "biology.question_analysis.v2.compact_retry"
+                    compact_prompt_id = "biology.question_analysis.v2.json_repair"
                     compact_response = await llm_call(
-                        messages=[{"role": "user", "content": [
-                            {"type": "text", "text": f"{compact_prompt}\n\n题目内容：\n{question_text}"}
-                        ]}],
+                        messages=_question_messages(
+                            f"{compact_prompt}\n\n题目内容：\n{question_text}",
+                            question_media_items,
+                        ),
                         max_tokens=8192,
                         temperature=0,
                         timeout=analysis_timeout,
+                        purpose="question_analysis_retry",
                     )
                     compact_response_length = len(compact_response) if compact_response else 0
                     compact_json = self.extract_json(compact_response)
@@ -654,7 +712,7 @@ class QuestionAnalyzer:
                         "stimulus_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.stimulus_units],
                     }
                     validated["_extraction_confidence"] = ext_conf
-                    validated["_analysis_version"] = "v2_compact_retry"
+                    validated["_analysis_version"] = "v2_json_repair"
                     if val_errors:
                         validated["_validation_errors"] = val_errors
                     logger.info(f"[分析] 题目{question_id} compact v2 重试完成 (confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)})")
@@ -666,7 +724,7 @@ class QuestionAnalyzer:
                         prompt_id=compact_prompt_id,
                         prompt_hash_value=compact_prompt_hash,
                         response_len=compact_response_length,
-                        call_suffix="analysis-retry",
+                        call_suffix="analysis-repair",
                         retry_count=1,
                         metadata_extra={
                             "initial_parse_error": str(json_err),
@@ -680,6 +738,7 @@ class QuestionAnalyzer:
                         question_type=question_type,
                         section_header=section_header,
                         question_text=question_text,
+                        question_media_items=question_media_items,
                         timeout=analysis_timeout,
                     )
                     return validated
@@ -718,6 +777,7 @@ class QuestionAnalyzer:
         section_header: str,
         question_text: str,
         timeout: float,
+        question_media_items: list | None = None,
     ) -> dict:
         if not self._needs_evidence_units(analysis_payload, question_type):
             return analysis_payload
@@ -738,12 +798,14 @@ class QuestionAnalyzer:
 
         try:
             response_text = await llm_call(
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": f"{prompt}\n\n题目内容：\n{question_text}"}
-                ]}],
+                messages=_question_messages(
+                    f"{prompt}\n\n题目内容：\n{question_text}",
+                    question_media_items or [],
+                ),
                 max_tokens=2048,
                 temperature=0,
                 timeout=min(timeout, 120.0),
+                purpose="missing_evidence_repair",
             )
             json_text = self.extract_json(response_text)
             if not json_text.startswith('{'):
@@ -796,30 +858,34 @@ class QuestionAnalyzer:
             validation_errors.append(str(exc))
             logger.warning(f"[分析] 题目{question_id} evidence units 补充失败: {exc}")
 
+        retry_metadata = {
+            "response_length": len(response_text or ""),
+            "validation_errors": validation_errors,
+            "diagnostic_units_count": len(fine_grained.get("diagnostic_units") or []),
+            "stimulus_units_count": len(fine_grained.get("stimulus_units") or []),
+        }
+        provider, model, fallback_count, retry_metadata = _llm_call_trace(retry_metadata)
         call = LLMCallRecord(
             call_id=f"question-{question_id}-evidence-retry",
             question_id=question_id,
             purpose="question_analysis",
             prompt_id="biology.question_analysis.v2.evidence_retry",
             prompt_hash=prompt_hash,
-            provider="llm_client",
-            model="configured_provider_chain",
+            provider=provider,
+            model=model,
             input_refs={
                 "question_id": question_id,
                 "question_type": question_type,
                 "section_header": section_header,
                 "scoring_unit_count": len(fine_grained.get("scoring_units") or []),
+                **media_input_refs(question_media_items or []),
             },
             parsed_schema="EvidenceUnitsResult",
             confidence=confidence,
             validation_errors=validation_errors,
+            fallback_count=fallback_count,
             retry_count=1,
-            metadata={
-                "response_length": len(response_text or ""),
-                "validation_errors": validation_errors,
-                "diagnostic_units_count": len(fine_grained.get("diagnostic_units") or []),
-                "stimulus_units_count": len(fine_grained.get("stimulus_units") or []),
-            },
+            metadata=retry_metadata,
         )
         analysis_payload.setdefault("_llm_calls", []).append(call.model_dump())
         return analysis_payload
@@ -909,5 +975,4 @@ class QuestionAnalyzer:
 
 
 # Backward compatibility
-# 兼容别名
 Analyzer = QuestionAnalyzer

@@ -62,12 +62,143 @@ RISK_CONTRAST_TERMS = (
 )
 
 
+SAFE_DISTRACTOR_TERMS = (
+    "干扰项",
+    "错误选项",
+    "错误设置",
+    "错误性逻辑",
+    "作为错误选项",
+    "错误说法",
+)
+
+SAFE_OPTION_TERMS = (
+    "选项",
+    "A选项",
+    "B选项",
+    "C选项",
+    "D选项",
+    "A项",
+    "B项",
+    "C项",
+    "D项",
+    "A、B、C、D",
+    "A、B、D",
+    "B、C、D",
+)
+
+SAFE_DESIGN_QUALITY_TERMS = (
+    "符合",
+    "合理",
+    "严谨",
+    "唯一",
+    "恰当",
+    "科学事实",
+    "科学准确",
+    "考查意图",
+    "不影响核心逻辑",
+    "有效考查",
+)
+
+HARD_RISK_PATTERNS = (
+    "科学性错误",
+    "答案与事实不符",
+    "答案不唯一",
+    "题目失效",
+    "正确答案",
+    "误导性",
+    "存在矛盾",
+    "舆论隐患",
+    "严重",
+    "人工复核",
+    "需复核",
+    "需要复核",
+)
+
+
+BENIGN_NEGATED_RISK_PHRASES = (
+    "无明显科学性错误",
+    "整体无明显科学性错误",
+    "无明显质量问题",
+    "无明显问题",
+    "未发现显性质量问题",
+    "没有明显的歧义",
+    "没有明显歧义",
+)
+
+
+TEACHING_DIAGNOSTIC_TERMS = (
+    "学生典型错误",
+    "典型错误路径",
+    "教学建议",
+    "教学中",
+    "误选",
+    "错选",
+)
+
+
+def _review_text(value: str) -> str:
+    text = value
+    for phrase in BENIGN_NEGATED_RISK_PHRASES:
+        text = text.replace(phrase, "")
+    return text
+
+
+def _risk_clauses(text: str) -> list[str]:
+    return [
+        clause.strip()
+        for clause in (
+            text.replace("。", "；")
+            .replace("，", "；")
+            .replace(",", "；")
+            .replace("；", "\n")
+            .replace(":", "\n")
+            .replace("：", "\n")
+            .splitlines()
+        )
+        if clause.strip() and any(term in clause for term in RISK_TERMS)
+    ]
+
+
+def _is_safe_distractor_clause(clause: str) -> bool:
+    if any(pattern in clause for pattern in HARD_RISK_PATTERNS):
+        return False
+    if any(term in clause for term in TEACHING_DIAGNOSTIC_TERMS):
+        return True
+    has_error_word = "错误" in clause or "不准确" in clause or "不当" in clause
+    if not has_error_word:
+        return False
+    has_option_context = any(term in clause for term in SAFE_OPTION_TERMS)
+    has_distractor_context = any(term in clause for term in SAFE_DISTRACTOR_TERMS)
+    has_design_quality = any(term in clause for term in SAFE_DESIGN_QUALITY_TERMS)
+    return (has_option_context or has_distractor_context) and has_design_quality
+
+
+def _is_safe_option_design_text(text: str) -> bool:
+    if any(pattern in text for pattern in HARD_RISK_PATTERNS):
+        return False
+    has_error_word = "错误" in text or "不准确" in text or "不当" in text
+    has_option_context = any(term in text for term in SAFE_OPTION_TERMS)
+    has_distractor_context = any(term in text for term in SAFE_DISTRACTOR_TERMS)
+    has_design_quality = any(term in text for term in SAFE_DESIGN_QUALITY_TERMS)
+    return has_error_word and (has_option_context or has_distractor_context) and has_design_quality
+
+
+def _only_safe_distractor_risks(text: str) -> bool:
+    clauses = _risk_clauses(text)
+    if not clauses:
+        return False
+    return all(_is_safe_distractor_clause(clause) for clause in clauses) or _is_safe_option_design_text(text)
+
+
 def contains_risk_text(value: Any) -> bool:
     """Return True only when the text carries an actionable review risk."""
     text = str(value or "").strip()
-    if not text or not any(term in text for term in RISK_TERMS):
+    review_text = _review_text(text)
+    if not review_text or not any(term in review_text for term in RISK_TERMS):
         return False
-    if text.startswith(RISK_NEGATION_PREFIXES) and not any(term in text for term in RISK_CONTRAST_TERMS):
+    if _only_safe_distractor_risks(review_text):
+        return False
+    if text.startswith(RISK_NEGATION_PREFIXES) and not any(term in review_text for term in RISK_CONTRAST_TERMS):
         return False
     return True
 
@@ -88,6 +219,21 @@ def _is_data_gap_warning(value: Any) -> bool:
         "stimulus_units_blank",
         "missing_llm_calls",
     ))
+
+
+def _question_failure_reason(question: Dict[str, Any]) -> str:
+    difficulty = question.get("difficulty")
+    if isinstance(difficulty, dict) and difficulty.get("failure_reason"):
+        return str(difficulty.get("failure_reason"))
+    return str(question.get("failure_reason") or "")
+
+
+def _is_quality_blocked(question: Dict[str, Any]) -> bool:
+    if _question_failure_reason(question) == "quality_score_too_low":
+        return True
+    difficulty = question.get("difficulty")
+    flags = _as_list(difficulty.get("flags")) if isinstance(difficulty, dict) else []
+    return "quality_score_too_low" in {str(flag) for flag in flags}
 
 
 def metadata_status(metadata: Dict[str, Any]) -> str:
@@ -120,6 +266,8 @@ def question_risk_level(question: Dict[str, Any]) -> str:
     feature_status = str(question.get("feature_status") or "ok").lower()
     issue = primary_issue(question)
 
+    if _is_quality_blocked(question):
+        return "high"
     if (
         question.get("analysis_failed")
         or feature_status in {"failed", "missing"}
@@ -152,6 +300,19 @@ def primary_issue(question: Dict[str, Any]) -> str:
     if explicit:
         return str(explicit)
 
+    if _is_quality_blocked(question):
+        for key in (
+            "quality_scientific",
+            "quality_normative",
+            "quality_language",
+            "quality_context",
+            "teacher_comment",
+        ):
+            value = question.get(key)
+            if value:
+                return f"题目质量阻断：{value}"
+        return "题目质量评分低于阈值，需先核对答案、科学性和评分口径。"
+
     structure_warnings = [str(item) for item in _as_list(question.get("structure_warnings")) if item]
     if structure_warnings:
         return "题面结构需复核：" + "；".join(structure_warnings)
@@ -167,7 +328,6 @@ def primary_issue(question: Dict[str, Any]) -> str:
         "quality_normative",
         "quality_public_opinion",
         "quality_context",
-        "teacher_comment",
     ):
         value = question.get(key)
         if value and _contains_risk_text(value):
@@ -193,6 +353,8 @@ def primary_issue(question: Dict[str, Any]) -> str:
 def action_for_question(question: Dict[str, Any]) -> str:
     risk = question_risk_level(question)
     issue = primary_issue(question)
+    if _is_quality_blocked(question):
+        return "先核对答案、科学性、设问边界和评分口径；修正前不要纳入难度均值。"
     if risk == "data_gap":
         return "先补齐分析数据，再判断题目质量和讲评优先级。"
     if risk == "high":

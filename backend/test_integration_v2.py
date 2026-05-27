@@ -30,15 +30,20 @@ if "config" not in sys.modules:
     _config_mod.RULES_DIR = _Path(__file__).parent / "rules"
     sys.modules["config"] = _config_mod
 
-# llm_client（llm_call 由测试动态 mock）
-if "llm_client" not in sys.modules:
-    _llm_mod = types.ModuleType("llm_client")
+# llm_client（llm_call 由测试动态 mock）。优先使用真实模块，避免污染
+# sys.modules 后影响 test_llm_client 等同进程测试。
+try:
+    import llm_client  # noqa: F401
+except ImportError:
+    if "llm_client" not in sys.modules:
+        _llm_mod = types.ModuleType("llm_client")
 
-    async def _stub_llm_call(**kwargs):
-        raise RuntimeError("llm_call not mocked for this test")
+        async def _stub_llm_call(**kwargs):
+            raise RuntimeError("llm_call not mocked for this test")
 
-    _llm_mod.llm_call = _stub_llm_call
-    sys.modules["llm_client"] = _llm_mod
+        _llm_mod.llm_call = _stub_llm_call
+        _llm_mod.get_last_llm_call_metadata = lambda: {}
+        sys.modules["llm_client"] = _llm_mod
 
 from services.analysis_service import AnalysisService
 from llm_schemas import (

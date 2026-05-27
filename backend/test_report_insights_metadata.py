@@ -70,14 +70,15 @@ async def test_generate_insights_attaches_report_llm_call_metadata(monkeypatch):
 
     monkeypatch.setattr(report_insights, "send_message_gpt", fake_send_message)
 
-    result = await generate_insights(_report_data(), mode="brief")
+    result = await generate_insights(_report_data(), mode="brief", grounding_enabled=False)
 
     assert len(prompts) == 2
     assert result["_llm_calls"][0]["purpose"] == "report_insights"
     assert result["_llm_calls"][0]["prompt_id"] == "biology.report_insights"
     assert result["_llm_calls"][0]["parsed_schema"] == "InsightsResult"
     assert result["_llm_calls"][0]["confidence"] == 1.0
-    assert result["_llm_calls"][1]["purpose"] == "report_teaching_suggestions"
-    assert result["_llm_calls"][1]["prompt_id"] == "biology.report_teaching_suggestions"
-    assert result["_llm_calls"][1]["parsed_schema"] == "TeachingSuggestions"
-    assert len(result["_llm_calls"][1]["prompt_hash"]) == 64
+    calls_by_purpose = {call["purpose"]: call for call in result["_llm_calls"]}
+    teaching_call = calls_by_purpose["report_teaching_suggestions"]
+    assert teaching_call["prompt_id"] == "biology.report_teaching_suggestions"
+    assert teaching_call["parsed_schema"] == "TeachingSuggestions"
+    assert len(teaching_call["prompt_hash"]) == 64

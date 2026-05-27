@@ -1,10 +1,26 @@
-from pdf2image import convert_from_path
-import pdfplumber
-from docx import Document
-from docx.oxml.table import CT_Tbl
-from docx.oxml.text.paragraph import CT_P
-from docx.table import _Cell, Table
-from docx.text.paragraph import Paragraph
+try:
+    from pdf2image import convert_from_path
+except ImportError as exc:
+    def convert_from_path(*args, **kwargs):
+        raise RuntimeError("pdf2image dependency missing") from exc
+try:
+    import pdfplumber
+except ImportError as exc:
+    class _MissingPdfPlumber:
+        @staticmethod
+        def open(*args, **kwargs):
+            raise RuntimeError("pdfplumber dependency missing") from exc
+    pdfplumber = _MissingPdfPlumber()
+try:
+    from docx import Document
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import _Cell, Table
+    from docx.text.paragraph import Paragraph
+except ImportError as exc:
+    def Document(*args, **kwargs):
+        raise RuntimeError("python-docx dependency missing") from exc
+    CT_Tbl = CT_P = _Cell = Table = Paragraph = object
 from PIL import Image
 import io
 import os
@@ -48,6 +64,7 @@ class DocumentProcessor:
             content_parts = []
             elements = []
             image_counter = 0
+            failure_events = []
 
             # 遍历文档的所有块级元素（保持顺序）
             for block in doc.element.body:
@@ -91,6 +108,13 @@ class DocumentProcessor:
                                                 image_counter += 1
                                             except Exception as e:
                                                 logger.warning(f"提取内联图片失败: {e}")
+                                                failure_events.append({
+                                                    "stage": "document_media_extraction",
+                                                    "severity": "blocked",
+                                                    "file_type": "docx",
+                                                    "media_type": "inline_image",
+                                                    "reason": str(e),
+                                                })
 
                     # 添加段落文字。即使段落中同时含图，也要保留文本边界。
                     if para_text:
@@ -124,6 +148,13 @@ class DocumentProcessor:
                             pass
                     except Exception as e:
                         logger.warning(f"处理浮动图片失败: {e}")
+                        failure_events.append({
+                            "stage": "document_media_extraction",
+                            "severity": "blocked",
+                            "file_type": "docx",
+                            "media_type": "floating_image",
+                            "reason": str(e),
+                        })
 
             complete_text = "\n\n".join(content_parts)
             logger.info(f"Word内容提取完成: {len(complete_text)} 字符, {len(extracted_images)} 张图片, {len(elements)} 个元素")
@@ -131,12 +162,23 @@ class DocumentProcessor:
             return {
                 "text": complete_text,
                 "images": extracted_images,
-                "elements": elements
+                "elements": elements,
+                "failure_events": failure_events,
             }
 
         except Exception as e:
             logger.error(f"Word内容提取失败: {str(e)}", exc_info=True)
-            return {"text": "", "images": [], "elements": []}
+            return {
+                "text": "",
+                "images": [],
+                "elements": [],
+                "failure_events": [{
+                    "stage": "document_extraction",
+                    "severity": "blocked",
+                    "file_type": "docx",
+                    "reason": str(e),
+                }],
+            }
 
     @staticmethod
     def extract_pdf_content(file_path: str) -> Dict[str, Any]:
@@ -165,6 +207,7 @@ class DocumentProcessor:
             content_parts = []
             elements = []
             image_counter = 0
+            failure_events = []
 
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages):
@@ -242,6 +285,14 @@ class DocumentProcessor:
 
                             except Exception as img_error:
                                 logger.warning(f"提取图片失败: {img_error}")
+                                failure_events.append({
+                                    "stage": "document_media_extraction",
+                                    "severity": "blocked",
+                                    "file_type": "pdf",
+                                    "media_type": "embedded_image",
+                                    "page": page_num + 1,
+                                    "reason": str(img_error),
+                                })
 
             complete_text = "\n\n".join(content_parts)
             logger.info(f"PDF内容提取完成: {len(complete_text)} 字符, {len(extracted_images)} 张图片, {len(elements)} 个元素")
@@ -249,12 +300,23 @@ class DocumentProcessor:
             return {
                 "text": complete_text,
                 "images": extracted_images,
-                "elements": elements
+                "elements": elements,
+                "failure_events": failure_events,
             }
 
         except Exception as e:
             logger.error(f"PDF内容提取失败: {str(e)}", exc_info=True)
-            return {"text": "", "images": [], "elements": []}
+            return {
+                "text": "",
+                "images": [],
+                "elements": [],
+                "failure_events": [{
+                    "stage": "document_extraction",
+                    "severity": "blocked",
+                    "file_type": "pdf",
+                    "reason": str(e),
+                }],
+            }
 
     @staticmethod
     def _pdf_table_to_markdown(table: List[List[str]]) -> str:
@@ -386,10 +448,11 @@ class DocumentProcessor:
             extracted_text = pdf_content.get("text", "")
             extracted_images = pdf_content.get("images", [])
             elements = pdf_content.get("elements", [])
+            failure_events = pdf_content.get("failure_events", [])
 
             logger.info(f"PDF内容提取: {len(extracted_text)} 字符, {len(extracted_images)} 张图片, {len(elements)} 个元素")
 
-            # 2. 转换PDF为图片（用于布局参考和AI视觉识别）
+            # 2. 转换PDF为图片（用于布局参考和Gemini视觉识别）
             layout_images = convert_from_path(
                 file_path,
                 dpi=dpi,
@@ -402,6 +465,7 @@ class DocumentProcessor:
                 # 将提取的文字存储到第一张图片的 info 属性
                 layout_images[0].info['extracted_text'] = extracted_text
                 layout_images[0].info['elements'] = elements
+                layout_images[0].info['failure_events'] = failure_events
 
                 # 如果提取到了嵌入图片，也存储起来（供后续使用）
                 if extracted_images:
@@ -435,6 +499,7 @@ class DocumentProcessor:
         extracted_text = word_content.get("text", "")
         extracted_images = word_content.get("images", [])
         elements = word_content.get("elements", [])
+        failure_events = word_content.get("failure_events", [])
 
         if extracted_text:
             logger.info(f"成功提取Word内容，共 {len(extracted_text)} 字符")
@@ -481,7 +546,9 @@ class DocumentProcessor:
             if layout_images:
                 # 将提取的文字存储到第一张图片的 info 属性
                 layout_images[0].info['extracted_text'] = extracted_text
+                existing_failure_events = layout_images[0].info.get('failure_events', [])
                 layout_images[0].info['elements'] = elements
+                layout_images[0].info['failure_events'] = list(existing_failure_events or []) + list(failure_events or [])
 
                 # 如果提取到了嵌入图片，也存储起来（供后续使用）
                 if extracted_images:
@@ -510,7 +577,7 @@ class DocumentProcessor:
     @staticmethod
     def images_to_bytes(images: List[Image.Image]) -> List[bytes]:
         """
-        将PIL Image转换为字节流（用于API调用）
+        将PIL Image转换为字节流（用于Gemini API）
 
         Args:
             images: PIL Image列表

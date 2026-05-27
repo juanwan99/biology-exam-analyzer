@@ -130,6 +130,11 @@ class AnalysisService:
             fine_grained = analysis.get("_fine_grained")
             need_independent_competency = True
             v2_seu_competency = None  # SEU 派生的权重数据（F-003: 保留用于合并）
+            analysis_warnings = []
+
+            def add_analysis_warning(value: str) -> None:
+                if value and value not in analysis_warnings:
+                    analysis_warnings.append(value)
             if fine_grained and fine_grained.get("scoring_units"):
                 try:
                     from llm_schemas import FineGrainedResult, compute_summary_from_units
@@ -159,7 +164,8 @@ class AnalysisService:
                     }
                     logger.info(f"[分析] 题目{q_id} 从v2 SEU派生素养权重 (primary={summary['primary_competency']})")
                 except Exception as e:
-                    logger.warning(f"[分析] 题目{q_id} v2素养派生失败: {e}，fallback独立分析")
+                    add_analysis_warning(f"seu_derivation_failed:{type(e).__name__}")
+                    logger.warning(f"[分析] 题目{q_id} v2素养派生失败: {e}，改用独立素养分析并写入元数据告警")
 
             if v2_seu_competency:
                 # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
@@ -187,7 +193,10 @@ class AnalysisService:
                                 merged[dim]["分析说明"] = sup_dim["分析说明"]
                     logger.info(f"[分析] 题目{q_id} v2素养合并完成 (SEU权重+独立分析文字)")
                 else:
-                    logger.info(f"[分析] 题目{q_id} v2素养独立补充失败，仅使用SEU权重")
+                    reason = supplement.get("error") if isinstance(supplement, dict) else "invalid_competency_supplement"
+                    reason_text = str(reason or "unknown")[:80]
+                    add_analysis_warning(f"competency_supplement_failed:{reason_text}")
+                    logger.info(f"[分析] 题目{q_id} v2素养独立补充失败，仅使用SEU权重；已写入元数据告警")
                 question["competency"] = merged
                 if isinstance(supplement, dict) and supplement.get("_llm_calls"):
                     question["competency"]["_llm_calls"] = supplement["_llm_calls"]
@@ -204,7 +213,8 @@ class AnalysisService:
                         need_independent_competency = False
                         logger.info(f"[分析] 题目{q_id} 使用合并素养结果 (primary={merged_competency.get('primary_competency')})")
                     else:
-                        logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，fallback 独立分析")
+                        add_analysis_warning(f"competency_merged_incomplete:weight_sum={weight_sum:.2f}")
+                        logger.info(f"[分析] 题目{q_id} 合并素养权重和={weight_sum:.2f}<0.9，改用独立素养分析并写入元数据告警")
 
             if need_independent_competency:
                 competency_q = {
@@ -253,6 +263,8 @@ class AnalysisService:
                 if isinstance(d_conf, (int, float)):
                     confidence += 0.15 * d_conf
             question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
+            if analysis_warnings:
+                question["_analysis_warnings"] = analysis_warnings
             self._attach_metadata_envelope(question)
 
             reset_llm_review_channel(review_channel_token)
@@ -733,6 +745,9 @@ class AnalysisService:
             "llm_parse_failure:",
             "llm_provider_error:",
             "media_not_passed:",
+            "seu_derivation_failed:",
+            "competency_supplement_failed:",
+            "competency_merged_incomplete:",
         )
         hard_warning_values = {
             "missing_llm_calls",
@@ -1048,6 +1063,8 @@ class AnalysisService:
         invalid_call_errors = question.get("_invalid_llm_call_errors") or []
         if invalid_call_errors:
             add_warning(f"invalid_llm_call:{len(invalid_call_errors)}")
+        for warning in question.get("_analysis_warnings") or []:
+            add_warning(str(warning))
         if not calls:
             add_warning("missing_llm_calls")
         if features.get("_feature_status") in ("partial", "failed"):

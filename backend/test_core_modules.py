@@ -320,22 +320,23 @@ class TestCriticalPath:
         assert path_nodes[0]["id"] == 2
         assert path_steps == 5
 
-    def test_weak_deps_ignored(self):
-        """weak 依赖不构成路径。"""
+    def test_weak_deps_kept_as_context_path(self):
+        """weak 依赖也构成共同情境路径，但后续聚合会折减增量负荷。"""
         sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
         deps = [self._dep(1, 2, "weak"), self._dep(2, 3, "weak")]
         path_nodes, path_steps = self.find(sqs, deps)
-        assert len(path_nodes) == 1  # 退化为单节点
-        assert path_nodes[0]["id"] == 3  # 最大 steps
+        path_ids = [n["id"] for n in path_nodes]
+        assert path_ids == [1, 2, 3]
+        assert path_steps == 12
 
     def test_partial_strong(self):
-        """1→2(strong), 2→3(weak) → 关键路径 = [1,2]。"""
+        """1→2(strong), 2→3(weak) → weak 后续不应被丢弃。"""
         sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
         deps = [self._dep(1, 2, "strong"), self._dep(2, 3, "weak")]
         path_nodes, path_steps = self.find(sqs, deps)
         path_ids = [n["id"] for n in path_nodes]
-        assert path_ids == [1, 2]
-        assert path_steps == 7
+        assert path_ids == [1, 2, 3]
+        assert path_steps == 12
 
     def test_diamond_dag(self):
         """菱形: 1→2, 1→3, 2→4, 3→4 → 选最长路径。"""
@@ -353,14 +354,12 @@ class TestCriticalPath:
         assert len(path_nodes) == 1
         assert path_steps == 4
 
-    def test_cycle_returns_single_node(self):
-        """环依赖 -> 退化为最大 steps 的单节点。A-001"""
+    def test_cycle_is_rejected_not_silently_downgraded(self):
+        """Cyclic dependency must be an explicit structure error."""
         sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
         deps = [self._dep(1, 2), self._dep(2, 3), self._dep(3, 1)]  # cycle
-        path_nodes, path_steps = self.find(sqs, deps)
-        assert len(path_nodes) == 1, f"环应退化为单节点，实际 {len(path_nodes)} 个"
-        assert path_nodes[0]["id"] == 3, f"应选最大 steps 节点(id=3,steps=5)，实际 id={path_nodes[0]['id']}"
-        assert path_steps == 5, f"步数应为 5，实际 {path_steps}"
+        with pytest.raises(ValueError, match="dependency graph contains a cycle"):
+            self.find(sqs, deps)
 
     def test_self_loop_ignored(self):
         """自环 -> 忽略自环边。A-001"""
@@ -401,26 +400,67 @@ class TestAggregation:
         global_features = {"shared_context_load": 2, "global_method_novelty": 3}
         result = self.aggregate(sqs, deps, global_features)
 
-        # effective_steps: critical_path=[2,3], steps=3+4=7, total=10, eff=7+0.35*3=8.05
-        assert abs(result["effective_steps"] - 8.05) < 0.01
-        # wm: max(4,4)=4, path_len=2, ctx=2 → 4+0.4+0.6=5.0
+        # weak and strong edges both keep the shared-method chain visible, while
+        # dependent follow-up subquestions only add incremental load.
+        assert abs(result["effective_steps"] - 7.36) < 0.01
+        # wm: structural nodes include the critical path and substantial nodes.
         assert result["working_memory"] == 5
-        # trap: max on path = max(2,3) = 3
+        # trap: max on structural nodes = max(1,2,3) = 3
         assert result["trap_density"] == 3
         # novelty: max(3, weighted_avg) = 3
         assert result["novelty"] == 3
-        # breadth: max(2,2,2) = 2
-        assert result["knowledge_breadth"] == 2
-        # chain_coupling: path_points=10, total=14, share=0.71 → 3
-        assert result["chain_coupling"] == 3
+        # breadth: large integrated big question with dependency + high method novelty -> whole-question breadth 3
+        assert result["knowledge_breadth"] == 3
+        # chain_coupling: two-node strong chain is coupled but not all-chain.
+        assert result["chain_coupling"] == 2
 
     def test_parallel_subquestions(self):
         """全并列小问（无 strong 依赖）→ effective_steps 低于总和。"""
         sqs = [self._sq(1, 3), self._sq(2, 3), self._sq(3, 3)]
         global_features = {"shared_context_load": 1, "global_method_novelty": 1}
         result = self.aggregate(sqs, [], global_features)
-        # critical_path = 单节点(3), total=9, eff = 3 + 0.35*6 = 5.1
-        assert abs(result["effective_steps"] - 5.1) < 0.01
+        # critical_path = 单节点(3); parallel load is bounded, not linear.
+        assert abs(result["effective_steps"] - 4.03) < 0.01
+
+    def test_long_weak_chain_is_bounded(self):
+        """A long weak chain is contextual continuity, not a full procedural chain."""
+        sqs = [self._sq(i, 2, points=1, wm=2, trap=1, novelty=1, breadth=1)
+               for i in range(1, 10)]
+        deps = [self._dep(i, i + 1, "weak") for i in range(1, 9)]
+
+        result = self.aggregate(
+            sqs,
+            deps,
+            {"shared_context_load": 1, "global_method_novelty": 1},
+        )
+
+        assert result["effective_steps"] <= 4.5
+
+    def test_global_feature_values_are_clamped_in_aggregation(self):
+        """Aggregation must not trust upstream clamps blindly."""
+        sqs = [self._sq(1, 3), self._sq(2, 4), self._sq(3, 5)]
+        deps = [self._dep(1, 2, "weak"), self._dep(2, 3, "strong")]
+
+        result = self.aggregate(
+            sqs,
+            deps,
+            {"shared_context_load": 99, "global_method_novelty": 99},
+        )
+
+        assert result["novelty"] <= 3
+        assert result["effective_steps"] < 10
+
+    def test_malformed_dependency_items_are_ignored(self):
+        """Malformed dependency entries should not crash aggregation."""
+        sqs = [self._sq(1, 3), self._sq(2, 4)]
+
+        result = self.aggregate(
+            sqs,
+            ["bad", {"from": 1, "to": 2, "strength": "strong"}],
+            {"shared_context_load": 1, "global_method_novelty": 1},
+        )
+
+        assert result["chain_coupling"] == 2
 
     def test_single_subquestion_passthrough(self):
         """单小问 → 特征原样传递（无聚合变换效果）。"""

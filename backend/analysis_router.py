@@ -25,6 +25,7 @@ import json
 import re
 import aiofiles
 import base64
+import time
 
 from logger import get_logger
 from config import UPLOAD_DIR, REPORTS_DIR
@@ -50,6 +51,9 @@ logger = get_logger()
 
 router = APIRouter(tags=["analysis"])
 
+_APP_BUILDER_READY_CACHE: Dict[str, float] = {}
+_APP_BUILDER_READY_TTL_SECONDS = 300
+
 
 # ============ 枚举（路由参数用） ============
 
@@ -64,11 +68,17 @@ class AnalysisMode(str, Enum):
 async def analyze_question_full(
     question: Dict[str, Any],
     image_bytes: List[bytes],
-    mode: str = "deep"
+    mode: str = "deep",
+    exam_review_channel: Optional[str] = None,
 ) -> Dict[str, Any]:
     """单题完整分析 — 委托给 AnalysisService。"""
     svc = get_analysis_service()
-    return await svc.analyze_question(question, image_bytes, mode)
+    return await svc.analyze_question(
+        question,
+        image_bytes,
+        mode,
+        exam_review_channel=exam_review_channel,
+    )
 
 
 def _compute_route_metadata_quality(questions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -83,6 +93,49 @@ def _validate_report_metadata_for_route(questions: List[Dict[str, Any]]) -> None
     get_analysis_service().validate_report_metadata(questions)
 
 
+def _ensure_review_channel_ready(exam_review_channel: Optional[str]) -> str | None:
+    """Fail fast before consuming user credits when App Builder is unavailable."""
+    from services.review_channel import channel_uses_app_builder, normalize_review_channel
+
+    channel = normalize_review_channel(exam_review_channel)
+    if not channel_uses_app_builder(exam_review_channel):
+        return channel
+
+    try:
+        from services.discovery_engine_client import DiscoveryEngineClient, DiscoveryEngineConfig
+
+        config = DiscoveryEngineConfig.from_env()
+        credentials_path = Path(config.credentials_file)
+        if not credentials_path.is_file():
+            raise RuntimeError(f"credentials file not found: {config.credentials_file}")
+
+        cache_key = "|".join(
+            [
+                config.project_id,
+                config.credentials_file,
+                config.location,
+                config.ranking_config,
+                config.grounding_config,
+            ]
+        )
+        now = time.time()
+        if _APP_BUILDER_READY_CACHE.get(cache_key, 0) > now:
+            return channel
+
+        DiscoveryEngineClient(config)._access_token()
+        _APP_BUILDER_READY_CACHE.clear()
+        _APP_BUILDER_READY_CACHE[cache_key] = now + _APP_BUILDER_READY_TTL_SECONDS
+        return channel
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("[审题渠道] App Builder preflight failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            503,
+            detail=f"1000赠金审题渠道不可用，请切换普通模型渠道或检查 Discovery Engine 配置：{exc}",
+        ) from exc
+
+
 async def _generate_route_report_artifacts(
     questions: List[Dict[str, Any]],
     competency_summary: Dict[str, Any],
@@ -90,16 +143,22 @@ async def _generate_route_report_artifacts(
     exam_info: Dict[str, Any],
     report_mode: str,
     pdf_path: Path,
+    exam_review_channel: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
     """Generate PDF and HTML reports for legacy route-level flows."""
     from report_data import aggregate_report_data
     from report_insights import generate_insights
     from report_product_publish import write_report_artifacts
+    from services.review_channel import channel_grounding_enabled
 
     rdata = aggregate_report_data(
         questions, competency_summary, exam_statistics, exam_info
     )
-    insights = await generate_insights(rdata, mode=report_mode)
+    insights = await generate_insights(
+        rdata,
+        mode=report_mode,
+        grounding_enabled=channel_grounding_enabled(exam_review_channel),
+    )
     return write_report_artifacts(rdata, insights, mode=report_mode, pdf_path=pdf_path)
 
 
@@ -114,6 +173,7 @@ async def analyze_document(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
+    exam_review_channel: Optional[str] = Form(None),
 ):
     """主接口：上传文档并完成完整分析流程。"""
     svc = get_analysis_service()
@@ -122,6 +182,7 @@ async def analyze_document(
 
     file_path = None
     try:
+        effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
         file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
         async with aiofiles.open(file_path, 'wb') as f:
             file_content = await file.read()
@@ -138,6 +199,7 @@ async def analyze_document(
             report_mode=report_mode,
             reports_dir=str(REPORTS_DIR),
             exam_id=exam_id,
+            exam_review_channel=effective_review_channel,
         )
 
         elapsed = (datetime.now() - start_time).total_seconds()
@@ -154,6 +216,7 @@ async def analyze_document(
             "html_report_url": result.get("html_report_url"),
             "report_error": result.get("report_error"),
             "mode": mode,
+            "exam_review_channel": effective_review_channel,
         }
 
     except HTTPException:
@@ -202,6 +265,7 @@ async def analyze_auto(
     mode: AnalysisMode = Form(AnalysisMode.DEEP),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
+    exam_review_channel: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
     """
@@ -235,6 +299,8 @@ async def analyze_auto(
     except Exception as e:
         logger.error(f"[积分] 余额查询失败: {e}")
         raise HTTPException(500, detail="积分查询失败，请稍后重试")
+
+    effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
 
     doc_processor = get_doc_processor()
     word_splitter = get_word_splitter()
@@ -306,7 +372,12 @@ async def analyze_auto(
         async def analyze_one(q):
             async with sem:
                 try:
-                    return await analyze_question_full(q, image_bytes, mode)
+                    return await analyze_question_full(
+                        q,
+                        image_bytes,
+                        mode,
+                        exam_review_channel=effective_review_channel,
+                    )
                 except Exception as e:
                     logger.error(f"题目 {q.get('id')} 分析失败: {e}")
                     q["error"] = str(e)
@@ -347,7 +418,7 @@ async def analyze_auto(
                 artifacts = await _generate_route_report_artifacts(
                     questions, competency_summary, exam_statistics,
                     {"name": file.filename, "total": len(questions), "mode": mode},
-                    report_mode, pdf_path,
+                    report_mode, pdf_path, effective_review_channel,
                 )
 
                 report_url = f"/api/reports/{exam_id}.pdf"
@@ -417,6 +488,7 @@ async def analyze_auto(
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
+            "exam_review_channel": effective_review_channel,
         }
 
         # 添加分数预估（如果有）
@@ -563,6 +635,7 @@ async def confirm_split(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
+    exam_review_channel: Optional[str] = Form(None),
 ):
     """
     第二阶段：确认拆分结果（人工修正后）并继续分析（v3.0：使用Word媒体数据）
@@ -583,6 +656,7 @@ async def confirm_split(
 
     try:
         # 1. 获取session数据
+        effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
         session_data = get_session(session_id)
         if not session_data:
             raise HTTPException(404, "Session已过期或不存在")
@@ -675,7 +749,12 @@ async def confirm_split(
         async def analyze_one(q):
             async with sem:
                 try:
-                    result = await analyze_question_full(q, [], mode)
+                    result = await analyze_question_full(
+                        q,
+                        [],
+                        mode,
+                        exam_review_channel=effective_review_channel,
+                    )
                     if "_media_for_ai" in result:
                         del result["_media_for_ai"]
                     return result
@@ -721,7 +800,7 @@ async def confirm_split(
                 artifacts = await _generate_route_report_artifacts(
                     questions_with_media, competency_summary, exam_statistics,
                     {"name": session_data["filename"], "total": len(questions_with_media), "mode": mode},
-                    report_mode, pdf_path,
+                    report_mode, pdf_path, effective_review_channel,
                 )
 
                 report_url = f"/api/reports/{exam_id}.pdf"
@@ -753,7 +832,8 @@ async def confirm_split(
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
-            "mode": mode
+            "mode": mode,
+            "exam_review_channel": exam_review_channel,
         }
 
     except Exception as e:

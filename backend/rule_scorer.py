@@ -85,6 +85,8 @@ def compute_difficulty(features: dict) -> float:
     raw += _interaction_bonus(wm, effective_steps, trap, novelty, breadth)
     if representation >= 2 and info_density >= 3 and wm >= 3:
         raw += 0.04
+    if novelty >= 3 and representation >= 3 and info_density >= 3 and wm >= 4:
+        raw += 0.03
 
     score = 2.0 + raw * 8.0
     return min(10.0, round(score, 1))
@@ -102,43 +104,43 @@ def score_to_label(score: float) -> str:
 
 # ── 大题结构化聚合 v3.1 ────────────────────────────────────────
 
-def find_critical_path(subquestions: list, dependencies: list) -> tuple:
-    """找到 strong 依赖构成的加权最长路径。
+def _valid_dependency_edges(subquestions: list, dependencies: list) -> list:
+    sq_ids = {
+        sq.get("id")
+        for sq in subquestions
+        if isinstance(sq, dict) and "id" in sq
+    }
+    edges = []
+    for dep in dependencies:
+        if not isinstance(dep, dict):
+            continue
+        fr = dep.get("from")
+        to = dep.get("to")
+        strength = dep.get("strength")
+        if (
+            fr in sq_ids
+            and to in sq_ids
+            and fr != to
+            and strength in ("weak", "strong")
+        ):
+            edges.append((fr, to, strength))
+    return edges
 
-    节点权重 = reasoning_steps * (points / total_points)，确保高分值+高步数
-    的子题优先入选关键路径，同时防止低分值异常高步数的子题劫持整题。
 
-    Args:
-        subquestions: [{"id": int, "reasoning_steps": int, "points": int, ...}, ...]
-        dependencies: [{"from": int, "to": int, "strength": "strong"|"weak"}, ...]
+def _bounded_int(value, low: int, high: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, parsed))
 
-    Returns:
-        (path_nodes: list[dict], path_steps: int)
-    """
-    sq_map = {sq["id"]: sq for sq in subquestions}
-    ids = [sq["id"] for sq in subquestions]
-    total_points = sum(sq["points"] for sq in subquestions) or 1
 
-    strong_edges = [
-        (d["from"], d["to"])
-        for d in dependencies
-        if d.get("strength") == "strong" and d["from"] != d["to"]
-    ]
-
-    # Node weight: reasoning_steps weighted by score share
-    def node_weight(sq_id):
-        sq = sq_map[sq_id]
-        return sq["reasoning_steps"] * (sq["points"] / total_points)
-
-    if not strong_edges:
-        best = max(subquestions, key=lambda s: s["reasoning_steps"] * (s["points"] / total_points))
-        return [best], best["reasoning_steps"]
-
+def _topological_order(ids: list, edges: list) -> tuple[list, dict]:
     adj = {i: [] for i in ids}
     in_degree = {i: 0 for i in ids}
-    for fr, to in strong_edges:
+    for fr, to, strength in edges:
         if fr in adj and to in adj:
-            adj[fr].append(to)
+            adj[fr].append((to, strength))
             in_degree[to] += 1
 
     from collections import deque
@@ -148,20 +150,56 @@ def find_critical_path(subquestions: list, dependencies: list) -> tuple:
     while queue:
         node = queue.popleft()
         topo_order.append(node)
-        for nxt in adj[node]:
+        for nxt, _strength in adj[node]:
             in_degree[nxt] -= 1
             if in_degree[nxt] == 0:
                 queue.append(nxt)
 
     if len(topo_order) < len(ids):
-        best = max(subquestions, key=lambda s: s["reasoning_steps"] * (s["points"] / total_points))
+        raise ValueError("dependency graph contains a cycle")
+    return topo_order, adj
+
+
+def find_critical_path(subquestions: list, dependencies: list) -> tuple:
+    """找到依赖构成的加权最长路径。
+
+    节点权重 = reasoning_steps * (0.45 + 0.55 * points / total_points)，
+    让分值影响关键路径，但不让小分值高瓶颈小问被完全忽略。
+    weak 依赖也代表共同情境/方法的认知延续，不能退化为独立小问。
+
+    Args:
+        subquestions: [{"id": int, "reasoning_steps": int, "points": int, ...}, ...]
+        dependencies: [{"from": int, "to": int, "strength": "strong"|"weak"}, ...]
+
+    Returns:
+        (path_nodes: list[dict], path_steps: int)
+    """
+    if not subquestions:
+        raise ValueError("subquestions is required")
+
+    sq_map = {sq["id"]: sq for sq in subquestions}
+    ids = [sq["id"] for sq in subquestions]
+    total_points = sum(sq["points"] for sq in subquestions) or 1
+
+    edges = _valid_dependency_edges(subquestions, dependencies)
+    def node_weight(sq_id):
+        sq = sq_map[sq_id]
+        point_share = sq["points"] / total_points
+        point_factor = 0.45 + 0.55 * point_share
+        return sq["reasoning_steps"] * point_factor
+
+    if not edges:
+        best = max(subquestions, key=lambda s: s["reasoning_steps"] * (0.45 + 0.55 * (s["points"] / total_points)))
         return [best], best["reasoning_steps"]
+
+    topo_order, adj = _topological_order(ids, edges)
 
     dist = {i: node_weight(i) for i in ids}
     prev = {i: None for i in ids}
     for node in topo_order:
-        for nxt in adj[node]:
-            new_dist = dist[node] + node_weight(nxt)
+        for nxt, strength in adj[node]:
+            edge_factor = 1.0 if strength == "strong" else 0.55
+            new_dist = dist[node] + edge_factor * node_weight(nxt)
             if new_dist > dist[nxt]:
                 dist[nxt] = new_dist
                 prev[nxt] = node
@@ -179,50 +217,113 @@ def find_critical_path(subquestions: list, dependencies: list) -> tuple:
     return path_nodes, path_steps
 
 
+def _dependent_path_load(path_nodes: list, dependencies: list) -> float:
+    """将依赖路径换算为认知负荷。
+
+    首个小问承担完整负荷；后续小问复用前文情境和已有结论，只计增量。
+    strong 增量高于 weak，但 weak 不能被丢弃。
+    """
+    if not path_nodes:
+        return 0.0
+    if len(path_nodes) == 1:
+        return float(path_nodes[0]["reasoning_steps"])
+
+    total_points = sum(node["points"] for node in path_nodes) or 1
+    avg_points = total_points / len(path_nodes)
+    first = path_nodes[0]
+    first_factor = 0.75 + 0.25 * min(1.0, first["points"] / avg_points)
+    load = first["reasoning_steps"] * first_factor
+    edge_strength = {
+        (dep.get("from"), dep.get("to")): dep.get("strength")
+        for dep in dependencies
+        if isinstance(dep, dict) and dep.get("strength") in ("weak", "strong")
+    }
+    strong_increment = 0.0
+    weak_increment = 0.0
+    for left, right in zip(path_nodes, path_nodes[1:]):
+        strength = edge_strength.get((left["id"], right["id"]), "weak")
+        if strength == "strong":
+            strong_increment += 0.58 * right["reasoning_steps"]
+        else:
+            weak_increment += 0.40 * right["reasoning_steps"]
+    return load + strong_increment + min(2.2, weak_increment)
+
+
 def aggregate_big_question(subquestions: list, dependencies: list,
                            global_features: dict) -> dict:
     """将结构化大题特征聚合为标准 v3 特征向量。"""
+    if not subquestions:
+        raise ValueError("subquestions is required")
+
     path_nodes, critical_path_steps = find_critical_path(subquestions, dependencies)
     total_steps = sum(sq["reasoning_steps"] for sq in subquestions)
     off_path = total_steps - critical_path_steps
 
-    effective_steps = critical_path_steps + 0.35 * off_path
+    valid_edges = _valid_dependency_edges(subquestions, dependencies)
+    has_strong_dependency = any(strength == "strong" for _, _, strength in valid_edges)
+    has_weak_dependency = any(strength == "weak" for _, _, strength in valid_edges)
+    has_dependency = bool(valid_edges)
+    branch_cap = 2.2 if has_dependency else 1.4
+    branch_load = min(branch_cap, 0.42 * (max(0, off_path) ** 0.5))
 
-    path_wm = [sq["working_memory"] for sq in path_nodes]
     path_length = len(path_nodes)
-    shared_ctx = global_features.get("shared_context_load", 1)
-    wm_raw = max(path_wm) + 0.4 * (path_length - 1) + 0.3 * shared_ctx
-    wm = min(5, max(1, round(wm_raw)))
+    shared_ctx = _bounded_int(global_features.get("shared_context_load", 1), 1, 3, 1)
+    method_novelty = _bounded_int(global_features.get("global_method_novelty", 1), 1, 3, 1)
+    context_load = 0.25 * max(0, shared_ctx - 1) + 0.35 * max(0, method_novelty - 1)
+    effective_steps = _dependent_path_load(path_nodes, dependencies) + branch_load + context_load
 
     total_points = sum(sq["points"] for sq in subquestions)
-    weighted_novelty = (
-        sum(sq["novelty"] * sq["points"] for sq in subquestions) / total_points
-        if total_points > 0
-        else 2
-    )
-    method_novelty = global_features.get("global_method_novelty", 1)
-    novelty = max(method_novelty, round(weighted_novelty))
+    substantial_nodes = [
+        sq for sq in subquestions
+        if total_points > 0 and sq["points"] / total_points >= 0.15
+    ] or list(path_nodes)
+    structural_nodes = list(path_nodes)
+    for sq in substantial_nodes:
+        if sq not in structural_nodes:
+            structural_nodes.append(sq)
 
-    trap = max(sq["trap_density"] for sq in path_nodes)
-    breadth = max(sq["knowledge_breadth"] for sq in subquestions)
-    max_trap = max(sq["trap_density"] for sq in subquestions)
-    has_dependency = any(dep.get("strength") == "strong" for dep in dependencies)
+    wm_raw = max(sq["working_memory"] for sq in structural_nodes) + 0.25 * (path_length - 1) + 0.25 * shared_ctx
+    wm = min(5, max(1, round(wm_raw)))
+
+    novelty = max(
+        method_novelty,
+        max(sq["novelty"] for sq in path_nodes),
+        max(sq["novelty"] for sq in substantial_nodes),
+    )
+
+    trap = max(sq["trap_density"] for sq in structural_nodes)
+    breadth = max(
+        max(sq["knowledge_breadth"] for sq in path_nodes),
+        max(sq["knowledge_breadth"] for sq in substantial_nodes),
+    )
     if (
         total_points >= 12
-        and len(subquestions) >= 3
-        and (method_novelty >= 3 or max_trap >= 3 or has_dependency)
+        and len(substantial_nodes) >= 3
+        and (method_novelty >= 3 or trap >= 3 or has_dependency)
     ):
         # 大题的知识广度是整题层面的负荷，不能只取单个小问的最大值。
         breadth = max(breadth, 3)
 
-    path_points = sum(sq["points"] for sq in path_nodes)
-    score_share = path_points / total_points if total_points > 0 else 0
-    if score_share < 0.35:
-        chain_coupling = 1
-    elif score_share <= 0.70:
+    dependency_strengths = {
+        (dep.get("from"), dep.get("to")): dep.get("strength")
+        for dep in dependencies
+        if isinstance(dep, dict)
+    }
+    path_edge_strengths = [
+        dependency_strengths.get((left["id"], right["id"]))
+        for left, right in zip(path_nodes, path_nodes[1:])
+    ]
+    if path_length >= 3 and path_edge_strengths and all(strength == "strong" for strength in path_edge_strengths):
+        chain_coupling = 3
+    elif (
+        has_strong_dependency
+        or has_weak_dependency
+        or path_length >= 2
+        or (shared_ctx >= 2 and method_novelty >= 3 and total_points >= 10 and len(subquestions) >= 3)
+    ):
         chain_coupling = 2
     else:
-        chain_coupling = 3
+        chain_coupling = 1
 
     return {
         "effective_steps": round(effective_steps, 2),

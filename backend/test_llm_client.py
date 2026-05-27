@@ -91,6 +91,99 @@ class TestLlmConfig:
             result = get_providers()
             assert result == []
 
+    def test_native_provider_requires_sdk_module(self):
+        import os
+        import tempfile
+        from llm_config import get_providers
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"{}")
+            sa_path = f.name
+        env = {
+            "LLM_SA_CREDENTIALS": sa_path,
+            "LLM_SDK_MODULE": "",
+            "DEEPSEEK_API_KEY": "",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=False):
+                result = get_providers()
+                assert all(provider.get("api_format") != "native_sdk" for provider in result)
+        finally:
+            os.unlink(sa_path)
+
+    def test_native_provider_accepts_explicit_model_override_and_supports_images(self):
+        import os
+        import tempfile
+        from llm_config import get_providers
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"{}")
+            sa_path = f.name
+        env = {
+            "LLM_SA_CREDENTIALS": sa_path,
+            "LLM_SDK_MODULE": "google.genai",
+            "DEEPSEEK_API_KEY": "",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=False):
+                result = get_providers(
+                    model_override="publishers/google/models/gemini-3-flash-preview"
+                )
+                native = [p for p in result if p.get("api_format") == "native_sdk"]
+                assert len(native) == 1
+                assert native[0]["model"] == "publishers/google/models/gemini-3-flash-preview"
+                assert native[0]["model_role"] == "custom"
+                assert native[0]["supports_images"] is True
+        finally:
+            os.unlink(sa_path)
+
+    def test_native_provider_defaults_to_pro_model(self):
+        import os
+        import tempfile
+        from llm_config import get_providers
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"{}")
+            sa_path = f.name
+        env = {
+            "LLM_SA_CREDENTIALS": sa_path,
+            "LLM_SDK_MODULE": "google.genai",
+            "LLM_CLOUD_MODE": "true",
+            "DEEPSEEK_API_KEY": "",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=True):
+                result = get_providers()
+                native = [p for p in result if p.get("api_format") == "native_sdk"]
+                assert len(native) == 1
+                assert native[0]["model"] == "publishers/google/models/gemini-3.1-pro-preview"
+        finally:
+            os.unlink(sa_path)
+
+    def test_blank_legacy_native_model_uses_policy_default(self):
+        import os
+        import tempfile
+        from llm_config import get_providers
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"{}")
+            sa_path = f.name
+        env = {
+            "LLM_SA_CREDENTIALS": sa_path,
+            "LLM_SDK_MODULE": "google.genai",
+            "LLM_NATIVE_MODEL": "",
+            "DEEPSEEK_API_KEY": "",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=False):
+                result = get_providers()
+                native = [p for p in result if p.get("api_format") == "native_sdk"]
+                assert len(native) == 1
+                assert native[0]["model"] == "publishers/google/models/gemini-3.1-pro-preview"
+                assert native[0]["model_role"] == "pro"
+        finally:
+            os.unlink(sa_path)
+
 
 # ── Fallback 测试 ─────────────────────────────────────────────────
 
@@ -104,16 +197,132 @@ class TestFallback:
 
     @pytest.mark.asyncio
     async def test_first_provider_success(self):
-        from llm_client import llm_call
+        from llm_client import get_last_llm_call_metadata, llm_call
         providers = _mock_providers()
         with patch("llm_client._http_post", new_callable=AsyncMock, return_value=_anthropic_ok()):
             with patch("llm_client.get_providers", return_value=providers):
                 result = await llm_call([{"role": "user", "content": "hi"}])
                 assert "hello" in result
+                metadata = get_last_llm_call_metadata()
+                assert metadata["status"] == "ok"
+                assert metadata["provider"] == "provider-0"
+                assert metadata["fallback_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_call_records_model_policy_metadata(self):
+        from llm_client import get_last_llm_call_metadata, llm_call
+        providers = _mock_providers(1)
+        providers[0]["model_role"] = "flash"
+        providers[0]["model_policy"] = "exam-review-gemini3"
+
+        with patch("llm_client._http_post", new_callable=AsyncMock, return_value=_anthropic_ok()):
+            with patch("llm_client.get_providers", return_value=providers) as get_providers:
+                await llm_call(
+                    [{"role": "user", "content": "hi"}],
+                    purpose="question_split",
+                    model="publishers/google/models/gemini-3-flash-preview",
+                )
+                get_providers.assert_called_once_with(
+                    purpose="question_split",
+                    model_override="publishers/google/models/gemini-3-flash-preview",
+                )
+                metadata = get_last_llm_call_metadata()
+                assert metadata["purpose"] == "question_split"
+                assert metadata["model_role"] == "flash"
+                assert metadata["model_policy"] == "exam-review-gemini3"
+
+    @pytest.mark.asyncio
+    async def test_app_builder_alias_uses_model_generation_with_evidence_channel_metadata(self):
+        from llm_client import (
+            get_last_llm_call_metadata,
+            llm_call,
+            reset_llm_review_channel,
+            set_llm_review_channel,
+        )
+
+        token = set_llm_review_channel("app_builder")
+        try:
+            with patch("llm_client._http_post", return_value=_anthropic_ok()):
+                with patch("llm_client.get_providers", return_value=_mock_providers(1)) as get_providers:
+                    result = await llm_call(
+                        [{"role": "user", "content": "只返回 JSON"}],
+                        purpose="question_analysis",
+                    )
+        finally:
+            reset_llm_review_channel(token)
+
+        assert result == "hello from anthropic"
+        get_providers.assert_called_once()
+        metadata = get_last_llm_call_metadata()
+        assert metadata["provider"] == "provider-0"
+        assert metadata["review_channel"] == "evidence"
+        assert metadata.get("operation") is None
+
+    @pytest.mark.asyncio
+    async def test_grounded_generation_channel_uses_discovery_grounded_generation(self):
+        from llm_client import (
+            get_last_llm_call_metadata,
+            llm_call,
+            reset_llm_review_channel,
+            set_llm_review_channel,
+        )
+
+        class FakeGateway:
+            def __init__(self):
+                self.calls = []
+
+            async def generate_grounded_content(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "text": "{\"ok\": true}",
+                    "grounding_score": 0.9,
+                    "metadata": {
+                        "provider": "discovery_engine",
+                        "operation": "generate_grounded_content",
+                    },
+                }
+
+        gateway = FakeGateway()
+        token = set_llm_review_channel("grounded_generation")
+        try:
+            with patch("llm_client._get_app_builder_gateway", return_value=gateway):
+                with patch("llm_client.get_providers") as get_providers:
+                    result = await llm_call(
+                        [{"role": "user", "content": "只返回 JSON"}],
+                        purpose="question_analysis",
+                    )
+        finally:
+            reset_llm_review_channel(token)
+
+        assert result == "{\"ok\": true}"
+        assert get_providers.call_count == 0
+        assert gateway.calls[0]["model_id"] == "gemini-3.1-pro-preview"
+        metadata = get_last_llm_call_metadata()
+        assert metadata["provider"] == "discovery_engine"
+        assert metadata["operation"] == "generate_grounded_content"
+        assert metadata["review_channel"] == "grounded_generation"
+        assert metadata["model_policy"] == "exam-review-app-builder-grounded-generation"
+
+    @pytest.mark.asyncio
+    async def test_grounded_generation_channel_rejects_image_inputs_without_model_fallback(self):
+        from llm_client import llm_call, reset_llm_review_channel, set_llm_review_channel
+
+        token = set_llm_review_channel("grounded_generation")
+        try:
+            with patch("llm_client.get_providers") as get_providers:
+                with pytest.raises(RuntimeError, match="does not support image_url"):
+                    await llm_call([{"role": "user", "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abcd"}},
+                    ]}])
+        finally:
+            reset_llm_review_channel(token)
+
+        assert get_providers.call_count == 0
 
     @pytest.mark.asyncio
     async def test_fallback_to_second(self):
-        from llm_client import llm_call
+        from llm_client import get_last_llm_call_metadata, llm_call
         providers = _mock_providers()
         call_count = 0
 
@@ -128,10 +337,15 @@ class TestFallback:
             with patch("llm_client.get_providers", return_value=providers):
                 result = await llm_call([{"role": "user", "content": "hi"}])
                 assert "hello" in result
+                metadata = get_last_llm_call_metadata()
+                assert metadata["status"] == "ok"
+                assert metadata["provider"] == "provider-1"
+                assert metadata["fallback_count"] == 1
+                assert metadata["provider_errors"][0]["provider"] == "provider-0"
 
     @pytest.mark.asyncio
     async def test_all_fail(self):
-        from llm_client import llm_call, AllProvidersFailed
+        from llm_client import llm_call, AllProvidersFailed, get_last_llm_call_metadata
         providers = _mock_providers()
 
         async def mock_post(url, **kwargs):
@@ -141,19 +355,52 @@ class TestFallback:
             with patch("llm_client.get_providers", return_value=providers):
                 with pytest.raises(AllProvidersFailed):
                     await llm_call([{"role": "user", "content": "hi"}])
+                metadata = get_last_llm_call_metadata()
+                assert metadata["status"] == "provider_failed"
+                assert metadata["fallback_count"] == len(providers)
 
     @pytest.mark.asyncio
-    async def test_no_fallback_on_400(self):
-        from llm_client import llm_call
+    async def test_400_records_body_in_provider_errors(self):
+        from llm_client import AllProvidersFailed, get_last_llm_call_metadata, llm_call
         providers = _mock_providers()
 
         async def mock_post(url, **kwargs):
-            raise httpx.HTTPStatusError("bad", request=MagicMock(), response=_error(400))
+            response = httpx.Response(
+                400,
+                json={"error": {"message": "bad payload"}},
+                request=_FAKE_REQ,
+            )
+            raise httpx.HTTPStatusError("bad", request=MagicMock(), response=response)
 
         with patch("llm_client._http_post", side_effect=mock_post):
             with patch("llm_client.get_providers", return_value=providers):
-                with pytest.raises(httpx.HTTPStatusError):
+                with pytest.raises(AllProvidersFailed):
                     await llm_call([{"role": "user", "content": "hi"}])
+                metadata = get_last_llm_call_metadata()
+                assert metadata["status"] == "provider_failed"
+                assert "bad payload" in metadata["provider_errors"][0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_direct_400_status_error_records_metadata(self):
+        from llm_client import AllProvidersFailed, get_last_llm_call_metadata, llm_call
+        providers = _mock_providers(1)
+        response = httpx.Response(
+            400,
+            json={"error": {"message": "image payload rejected"}},
+            request=_FAKE_REQ,
+        )
+        error = httpx.HTTPStatusError("bad request", request=MagicMock(), response=response)
+
+        with patch("llm_client._call_single_provider", side_effect=error):
+            with patch("llm_client.get_providers", return_value=providers):
+                with pytest.raises(AllProvidersFailed):
+                    await llm_call([{"role": "user", "content": "hi"}])
+
+                metadata = get_last_llm_call_metadata()
+                assert metadata["status"] == "provider_failed"
+                assert metadata["fallback_count"] == 1
+                assert metadata["provider_errors"][0]["provider"] == "provider-0"
+                assert "image payload rejected" in metadata["provider_errors"][0]["message"]
 
     @pytest.mark.asyncio
     async def test_403_model_not_found_does_fallback(self):
@@ -178,6 +425,24 @@ class TestFallback:
 # ── 格式转换测试 ──────────────────────────────────────────────────
 
 class TestFormatConversion:
+    def test_native_zero_temperature_uses_deterministic_generation_controls(self):
+        from llm_client import _native_generation_config_kwargs
+
+        provider = {
+            "max_tokens": 8192,
+            "thinking_overhead": 2,
+            "deterministic_seed": 20260526,
+        }
+
+        config = _native_generation_config_kwargs(provider, max_tokens=1000, temperature=0)
+
+        assert config["max_output_tokens"] == 2000
+        assert config["temperature"] == 0
+        assert config["candidate_count"] == 1
+        assert config["seed"] == 20260526
+        assert config["top_p"] == 1.0
+        assert config["top_k"] == 1
+
     def test_anthropic_text_only(self):
         from llm_client import _build_request_body
         provider = _mock_providers()[0]
@@ -215,6 +480,42 @@ class TestFormatConversion:
         assert body["model"] == "model-2"
         assert body["messages"][0]["content"] == "hello"
 
+    def test_chat_text_array_is_flattened(self):
+        from llm_client import _build_request_body
+        provider = _mock_providers()[2]
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "line 1"},
+            {"type": "text", "text": "line 2"},
+        ]}]
+        body = _build_request_body(provider, messages, 4096, 0)
+        assert body["messages"][0]["content"] == "line 1\nline 2"
+
+    def test_native_data_image_converts_to_inline_data(self):
+        from llm_client import _convert_messages_to_native
+
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "describe"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abcd"}},
+        ]}]
+
+        contents, system_instruction = _convert_messages_to_native(messages)
+
+        assert system_instruction is None
+        assert contents[0]["parts"][0] == {"text": "describe"}
+        assert contents[0]["parts"][1] == {
+            "inline_data": {"mime_type": "image/png", "data": "abcd"}
+        }
+
+    def test_native_remote_image_url_fails_closed(self):
+        from llm_client import _convert_messages_to_native
+
+        messages = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
+        ]}]
+
+        with pytest.raises(RuntimeError, match="image_url must be a data URL"):
+            _convert_messages_to_native(messages)
+
 
 class TestResponseExtraction:
     def test_extract_anthropic(self):
@@ -231,3 +532,25 @@ class TestResponseExtraction:
         from llm_client import _extract_text
         data = {"choices": [{"message": {"content": "result"}}]}
         assert _extract_text("openai_chat", data) == "result"
+
+    def test_extract_chat_rejects_length_finish(self):
+        from llm_client import _extract_text
+        data = {"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}]}
+        with pytest.raises(RuntimeError, match="provider_incomplete_response"):
+            _extract_text("openai_chat", data)
+
+    def test_extract_anthropic_rejects_max_tokens(self):
+        from llm_client import _extract_text
+        data = {"content": [{"text": "partial"}], "stop_reason": "max_tokens"}
+        with pytest.raises(RuntimeError, match="provider_incomplete_response"):
+            _extract_text("anthropic", data)
+
+    def test_extract_responses_rejects_incomplete_status(self):
+        from llm_client import _extract_text
+        data = {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [{"content": [{"type": "output_text", "text": "partial"}]}],
+        }
+        with pytest.raises(RuntimeError, match="provider_incomplete_response"):
+            _extract_text("openai_responses", data)

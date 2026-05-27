@@ -84,7 +84,12 @@ class InsightsResult(BaseModel):
 
 # ── 校验入口 ────────────────────────────────────────────────────
 
-def validate_llm_output(data: dict, schema_class: type, context: str = "") -> tuple:
+def validate_llm_output(
+    data: dict,
+    schema_class: type,
+    context: str = "",
+    allow_construct: bool = False,
+) -> tuple:
     """校验 LLM JSON 输出，返回 (validated_data, confidence, errors)。
 
     - confidence: 1.0 = 完全通过, 0.5 = 有字段修正, 0.0 = 完全失败
@@ -100,11 +105,13 @@ def validate_llm_output(data: dict, schema_class: type, context: str = "") -> tu
         else:
             errors = [str(e)]
         logger.warning(f"[Schema] {context} 校验失败 ({len(errors)} 个错误): {errors[:3]}")
-        try:
-            validated = schema_class.model_construct(**data)
-            return validated.model_dump(), 0.5, errors
-        except Exception:
-            return data, 0.0, errors
+        if allow_construct:
+            try:
+                validated = schema_class.model_construct(**data)
+                return validated.model_dump(), 0.5, errors
+            except Exception:
+                pass
+        return data, 0.0, errors
 
 
 # ── 一致性检查（L2 confidence）──────────────────────────────────
@@ -225,9 +232,7 @@ class FineGrainedResult(BaseModel):
         if self.scoring_units:
             total = sum(s.score_share for s in self.scoring_units)
             if abs(total - 1.0) > 0.02:
-                # 自动归一化修复
-                for s in self.scoring_units:
-                    s.score_share = round(s.score_share / total, 4) if total > 0 else 1.0 / len(self.scoring_units)
+                raise ValueError(f"score_share sum={total:.3f}, expected 1.0")
         return self
 
 

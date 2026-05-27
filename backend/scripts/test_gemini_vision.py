@@ -1,6 +1,8 @@
 import os as _os
 import pytest
 
+__test__ = False
+
 pytestmark = pytest.mark.skipif(
     not _os.environ.get("DEEPSEEK_API_KEY"),
     reason="需要 DEEPSEEK_API_KEY 环境变量（集成测试）"

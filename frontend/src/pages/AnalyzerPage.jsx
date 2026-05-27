@@ -12,8 +12,27 @@ function AnalyzerPage() {
   const [error, setError] = useState(null)
   const [mode, setMode] = useState('deep')
   const [generateReport, setGenerateReport] = useState(false)
+  const [reviewChannel, setReviewChannel] = useState('app_builder')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef(null)
+  const reviewChannelOptions = [
+    {
+      id: 'app_builder',
+      label: '证据增强审题',
+      help: 'Ranking 选证据，Check Grounding 校验结论。',
+    },
+    {
+      id: 'agent_search',
+      label: '智能体证据链路',
+      help: 'Ranking 后调用 Search App answer，并把带引用的答案注入逐题审题。',
+    },
+    {
+      id: 'model',
+      label: '普通模型审题',
+      help: '只走模型生成，不要求 Discovery Engine 证据门禁。',
+    },
+  ]
+  const activeReviewChannel = reviewChannelOptions.find(option => option.id === reviewChannel) || reviewChannelOptions[0]
 
   // 认证状态
   const [token, setToken] = useState(() => localStorage.getItem('bio_token') || '')
@@ -110,6 +129,7 @@ function AnalyzerPage() {
       formData.append('file', file)
       formData.append('mode', mode)
       formData.append('generate_report', generateReport)
+      formData.append('exam_review_channel', reviewChannel)
 
       const response = await axios.post('/api/analyze_auto', formData, {
         headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
@@ -313,6 +333,54 @@ function AnalyzerPage() {
           )}
 
           {/* PDF报告生成选项 */}
+          <div style={{ marginBottom: '28px' }}>
+            <div
+              style={{
+                padding: '18px 20px',
+                border: '2px solid var(--color-border-light)',
+                borderRadius: '16px',
+                background: 'var(--color-bg)',
+              }}
+            >
+              <div className="flex items-center justify-between gap-3" style={{ marginBottom: '12px' }}>
+                <span className="font-semibold flex items-center" style={{ color: 'var(--color-primary)' }}>
+                  <Brain size={16} className="inline mr-1.5" /> 审题渠道
+                </span>
+                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                  当前: {activeReviewChannel.label}
+                </span>
+              </div>
+              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                {reviewChannelOptions.map(option => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setReviewChannel(option.id)}
+                    className="transition-all"
+                    style={{
+                      minHeight: '72px',
+                      padding: '10px 12px',
+                      borderRadius: '12px',
+                      border: reviewChannel === option.id ? '2px solid var(--color-primary-light)' : '1px solid var(--color-border-light)',
+                      background: reviewChannel === option.id ? 'var(--macaron-mint-light)' : '#fff',
+                      color: 'var(--color-primary)',
+                      fontWeight: reviewChannel === option.id ? 700 : 500,
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ display: 'block', marginBottom: '4px' }}>{option.label}</span>
+                    <span className="text-xs" style={{ display: 'block', color: 'var(--color-muted)', lineHeight: 1.35, fontWeight: 500 }}>
+                      {option.help}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs" style={{ marginTop: '10px', color: 'var(--color-muted)', lineHeight: 1.6 }}>
+                {activeReviewChannel.help} 缺少必需证据会直接报错，不生成伪正常报告。
+              </p>
+            </div>
+          </div>
+
           <div style={{ marginBottom: '28px' }}>
             <label
               className="flex items-center cursor-pointer transition-all"

@@ -40,9 +40,9 @@ from report_data import aggregate_report_data
 
 
 class TestAggregateReportData:
-
     def test_failed_exam_statistics_is_not_silently_rendered_as_zero_metrics(self):
         q = _make_question(1, 5.0, 3, 2)
+
         with pytest.raises(ValueError, match="exam statistics failed"):
             aggregate_report_data(
                 [q],
@@ -64,11 +64,19 @@ class TestAggregateReportData:
             "knowledge_textbook_distribution": {},
             "competency_distribution": {},
         }
+
         result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+
         assert result["exam_info"]["total_score"] == 0
         assert result["questions"][0]["total_score"] == 0
         assert result["questions"][0]["score_status"] == "non_positive_score"
-        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["metadata_quality"]["score_issue_questions"]
+        assert {
+            "id": 1,
+            "reason": "non_positive_score",
+            "source": "total_score",
+            "value": 0,
+        } in result["metadata_quality"]["score_issue_questions"]
+
 
     def test_total_score_from_analysis_fallback(self):
         """total_score 在 analysis 子字典中时也能正确取到"""
@@ -225,6 +233,53 @@ class TestAggregateReportData:
         assert quality["missing_envelope_questions"] == [1]
         assert quality["inferred_envelope_questions"] == []
         assert quality["llm_call_counts"] == {}
+
+    def test_accepts_direct_fine_grained_analysis_shape_from_e2e_response(self):
+        q = _make_question(21, 8.8, 5, 14)
+        q["analysis"]["scoring_units"] = [
+            {
+                "seu_id": "seu_21_1",
+                "label": "genotype inference",
+                "score_share": 0.45,
+                "allocation_confidence": 0.91,
+                "difficulty_estimate": 8.2,
+                "knowledge_links": [{"knowledge_point": "genetics", "share": 1.0}],
+                "competency_weights": {"scientific_thinking": 0.7, "scientific_inquiry": 0.3},
+            }
+        ]
+        q["analysis"]["diagnostic_units"] = [
+            {"du_id": "du_21_1", "option_or_trap": "hidden condition", "trap_strength": 4}
+        ]
+        q["analysis"]["stimulus_units"] = [
+            {
+                "su_id": "su_21_1",
+                "stimulus_type": "multi-paragraph",
+                "description": "dense genetic cross material",
+                "is_core": True,
+                "complexity": 4,
+            }
+        ]
+        statistics = {
+            "avg_difficulty": 8.8,
+            "avg_cognitive_level": 7.0,
+            "difficulty_distribution": {},
+            "difficulty_distribution_by_score": {},
+            "bloom_distribution": {},
+            "difficulty_curve": [],
+            "top_knowledge_points": [],
+            "knowledge_textbook_distribution": {},
+            "competency_distribution": {},
+        }
+
+        result = aggregate_report_data([q], {}, statistics, {"name": "t", "total": 1, "mode": "deep"})
+        detail = result["questions"][0]
+
+        assert detail["scoring_units_count"] == 1
+        assert detail["diagnostic_units_count"] == 1
+        assert detail["stimulus_units_count"] == 1
+        assert detail["fine_grained_units"]["scoring_units"][0]["difficulty_estimate"] == 8.2
+        assert result["fine_grained_summary"]["total_seus"] == 1
+        assert result["metadata_quality"]["evidence_gap_questions"] == []
 
     def test_missing_difficulty_is_not_rendered_as_default_middle_score(self):
         q = _make_question(21, 6.0, 4, 14)

@@ -6,7 +6,8 @@ import pytest
 
 sys.modules["weasyprint"] = MagicMock()
 
-from report_generator import _render_html
+from report_product_html import render_report_product_pdf_html
+from report_product_model import build_report_product_model
 from services.analysis_service import AnalysisService
 
 
@@ -32,11 +33,23 @@ def _question(question_id=1, overall=0.55):
     calls = [_call("question_analysis"), _call("feature_extraction"), _call("competency_analysis")]
     return {
         "id": question_id,
-        "content": "题干",
+        "content": "Question stem",
         "total_score": 2,
-        "analysis": {"knowledge_points": ["酶"], "answer": "A"},
+        "analysis": {
+            "knowledge_points": ["knowledge point"],
+            "answer": "A",
+            "scoring_units": [
+                {
+                    "label": "metadata unit",
+                    "score_share": 1.0,
+                    "allocation_confidence": 0.8,
+                    "difficulty_estimate": 5.0,
+                    "bloom_level": 3,
+                }
+            ],
+        },
         "difficulty": {"final_difficulty": 5.0, "features": {"_feature_status": "partial"}},
-        "competency": {"primary_competency": "科学思维"},
+        "competency": {"primary_competency": "scientific thinking"},
         "_metadata_envelope": {
             "question": {"id": question_id},
             "llm_calls": calls,
@@ -55,7 +68,7 @@ def _question(question_id=1, overall=0.55):
 
 class FakeWordSplitter:
     def split(self, file_path):
-        return {"questions": [{"id": 1, "content": "题干"}]}
+        return {"questions": [{"id": 1, "content": "Question stem"}]}
 
 
 class FakeDocProcessor:
@@ -82,7 +95,13 @@ async def test_auto_analysis_returns_metadata_quality_summary():
     service.build_competency_summary = lambda questions: {}
     service.aggregate_statistics = lambda questions, competency_summary: {}
 
-    result = await service.run_auto_analysis("exam.docx", "exam.docx", b"", generate_report=False)
+    result = await service.run_auto_analysis(
+        "exam.docx",
+        "exam.docx",
+        b"",
+        generate_report=False,
+        exam_review_channel="model",
+    )
 
     assert result["metadata_quality"]["low_confidence_questions"] == [1]
     assert result["metadata_quality"]["warning_questions"] == [
@@ -130,6 +149,7 @@ async def test_auto_analysis_returns_html_report_url_when_report_generated(tmp_p
         generate_report=True,
         reports_dir=str(tmp_path),
         exam_id="exam-1",
+        exam_review_channel="model",
     )
 
     assert result["report_url"] == "/api/reports/exam-1.pdf"
@@ -138,29 +158,24 @@ async def test_auto_analysis_returns_html_report_url_when_report_generated(tmp_p
 
 def test_report_html_renders_metadata_quality_summary():
     data = {
-        "exam_info": {"name": "测试卷", "total_questions": 1, "total_score": 2, "mode": "deep"},
-        "metrics": {
+        "exam_info": {"name": "metadata-test", "total_questions": 1, "total_score": 2, "mode": "deep"},
+        "exam_statistics": {
             "avg_difficulty": 5.0,
             "avg_cognitive_level": 4.0,
             "difficulty_distribution": {},
             "bloom_distribution": {},
+            "difficulty_curve": [{"question_id": 1, "difficulty": 5.0, "total_score": 2}],
         },
-        "difficulty_curve": [],
-        "difficulty_gradient": {"front": 5.0, "middle": 5.0, "back": 5.0, "gradient_type": "题目过少"},
-        "knowledge": {"top_points": [], "textbook_distribution": {}},
-        "competency": {"distribution": {}, "primary_distribution": {}},
-        "feature_profile": {"avg_per_dimension": {}, "top_difficulty_factors": []},
-        "fine_grained_summary": {},
         "metadata_quality": {
             "total_questions": 1,
             "low_confidence_questions": [1],
             "warning_questions": [{"id": 1, "warnings": ["feature_status:partial"]}],
             "llm_call_counts": {"question_analysis": 1, "feature_extraction": 1, "competency_analysis": 1},
         },
-        "questions": [],
+        "questions": [_question(1, overall=0.55)],
     }
     insights = {
-        "overall_assessment": "总评",
+        "overall_assessment": "metadata audit",
         "recommendations": [],
         "difficulty_analysis": "",
         "knowledge_analysis": "",
@@ -168,20 +183,10 @@ def test_report_html_renders_metadata_quality_summary():
         "bloom_analysis": "",
     }
 
-    charts = {
-        "curve": "data:image/png;base64,CURVE",
-        "distribution": "data:image/png;base64,DIST",
-        "competency_pie": "data:image/png;base64,PIE",
-        "bloom": "data:image/png;base64,BLOOM",
-        "gradient": "data:image/png;base64,GRAD",
-        "radar": "data:image/png;base64,RADAR",
-        "competency_bar": "data:image/png;base64,BAR",
-        "knowledge_pie": "data:image/png;base64,KPIE",
-    }
+    model = build_report_product_model(data, insights)
+    html = render_report_product_pdf_html(model)
 
-    html = _render_html(data, insights, charts=charts, mode="brief")
-
-    assert "元数据治理" in html
-    assert "低置信度题目" in html
+    assert model["credibility"]["metadata_status"] == "warning"
+    assert model["credibility"]["llm_calls_total"] == 3
+    assert "\u5143\u6570\u636e" in html
     assert "Q1" in html
-    assert "feature_status:partial" in html

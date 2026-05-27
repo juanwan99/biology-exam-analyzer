@@ -158,7 +158,17 @@ def _difficulty_failure_reason(q: Dict) -> str | None:
 def _fine_grained_units(q: Dict) -> Dict:
     analysis = q.get("analysis") if isinstance(q.get("analysis"), dict) else {}
     fine = analysis.get("_fine_grained") if isinstance(analysis, dict) else None
-    return fine if isinstance(fine, dict) else {}
+    if isinstance(fine, dict):
+        return fine
+
+    direct_keys = ("scoring_units", "diagnostic_units", "stimulus_units")
+    if any(key in analysis for key in direct_keys):
+        return {
+            "scoring_units": _list_value(analysis.get("scoring_units")),
+            "diagnostic_units": _list_value(analysis.get("diagnostic_units")),
+            "stimulus_units": _list_value(analysis.get("stimulus_units")),
+        }
+    return {}
 
 
 def _stimulus_units_blank(units: List[Any]) -> bool:
@@ -181,6 +191,8 @@ def _call_has_retry_or_parse_failure(call: Dict) -> bool:
     return (
         "compact_retry" in prompt_id
         or int(_first_number(call.get("retry_count"), metadata.get("retry_count"), default=0)) > 0
+        or int(_first_number(call.get("fallback_count"), metadata.get("fallback_count"), default=0)) > 0
+        or bool(metadata.get("provider_errors"))
         or bool(metadata.get("initial_parse_error"))
         or bool(metadata.get("validation_errors"))
         or bool(metadata.get("normalization_notes"))
@@ -299,7 +311,7 @@ def _extract_question_detail(q: Dict) -> Dict:
         "density_reason": features.get("density_reason", ""),
         "novelty_reason": features.get("novelty_reason", ""),
         "representation_reason": features.get("representation_reason", ""),
-        # AI 分析
+        # Gemini 分析
         "knowledge_points": analysis.get("knowledge_points", []),
         "detailed_analysis": analysis.get("detailed_analysis", ""),
         "common_mistakes": analysis.get("common_mistakes", []),
@@ -343,7 +355,7 @@ def _extract_question_detail(q: Dict) -> Dict:
     }
 
     # === 细粒度数据（Batch 4: SEU/DU 单题提取） ===
-    fine_grained = analysis.get("_fine_grained")
+    fine_grained = _fine_grained_units(q)
     if fine_grained and fine_grained.get("scoring_units"):
         seus = fine_grained["scoring_units"]
         dus = fine_grained.get("diagnostic_units", [])
@@ -423,6 +435,10 @@ def compute_metadata_quality(
             "severity": "blocked",
             "reason": exam_statistics.get("error"),
         })
+    if isinstance(exam_statistics, dict):
+        for event in _list_value(exam_statistics.get("document_failure_events")):
+            if isinstance(event, dict):
+                failure_events.append(event)
 
     for q in questions:
         q_id = q.get("id")
@@ -523,7 +539,7 @@ def _compute_fine_grained_summary(questions: List[Dict]) -> Dict:
 
     for q in questions:
         analysis = _analysis_dict(q)
-        fg = analysis.get("_fine_grained")
+        fg = _fine_grained_units(q)
         if not fg or not fg.get("scoring_units"):
             continue
         has_fine_grained += 1
@@ -599,7 +615,11 @@ def aggregate_report_data(
             "top_points": exam_statistics.get("top_knowledge_points", []),
             "textbook_distribution": exam_statistics.get("knowledge_textbook_distribution", {}),
             "unmapped_count": exam_statistics.get("knowledge_unmapped_count") or 0,
+            "mapped_count": exam_statistics.get("knowledge_mapped_count") or 0,
+            "unmapped_points": exam_statistics.get("knowledge_unmapped_points", []),
             "total_knowledge_points": exam_statistics.get("knowledge_total_count") or 0,
+            "non_textbook_count": exam_statistics.get("knowledge_non_textbook_count") or 0,
+            "non_textbook_points": exam_statistics.get("knowledge_non_textbook_points", []),
         },
         "competency": {
             "distribution": competency_summary,

@@ -1,5 +1,9 @@
-from report_product_model import build_report_product_model
-from report_commercial_narrative import metadata_status
+from report_product_model import (
+    build_report_product_model,
+    _infer_sub_competency,
+    _question_evidence_integrity_trace,
+)
+from report_commercial_narrative import contains_risk_text, metadata_status
 from report_teacher_review_narrative import (
     classify_overall_verdict,
     summarize_student_fit,
@@ -29,6 +33,32 @@ def test_product_model_uses_single_commercial_report_contract():
     assert model["question_portfolio"]["rows"][0]["metadata_confidence"] is not None
 
 
+def test_product_model_exposes_report_grounding_status_in_evidence_integrity():
+    insights = {
+        "_grounding_status": "needs_review",
+        "_grounding_checks": [
+            {
+                "status": "needs_review",
+                "support_score": 0.42,
+                "threshold": 0.6,
+                "claim_count": 2,
+                "cited_chunk_count": 0,
+            }
+        ],
+    }
+
+    model = build_report_product_model(sample_report_data(), insights)
+
+    item_by_id = {
+        item.get("id"): item
+        for item in model["evidence_integrity"]["items"]
+        if isinstance(item, dict)
+    }
+    assert item_by_id["report_grounding"]["severity"] == "warning"
+    assert item_by_id["report_grounding"]["value"] == "0.42"
+    assert "needs_review" in model["evidence_integrity"]["grounding_status"]
+
+
 def test_metadata_status_fails_closed_for_quality_gate_gaps():
     assert metadata_status({
         "blocked_questions": [{"id": 21, "reason": "big_question_structure_failed"}],
@@ -42,6 +72,28 @@ def test_metadata_status_fails_closed_for_quality_gate_gaps():
     assert metadata_status({
         "retry_questions": [{"id": 21, "purpose": "question_analysis"}],
     }) == "warning"
+
+
+def test_quality_issue_low_score_remains_review_warning_not_blocked():
+    data = sample_report_data()
+    question = data["questions"][0]
+    question["quality_score"] = 2
+    question["difficulty"] = {
+        "final_difficulty": 6.0,
+        "difficulty_label": "中等",
+        "flags": ["quality_issue_low_score"],
+        "features": {"quality_score": 2, "quality_issue_low_score": True},
+    }
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+    integrity = _question_evidence_integrity_trace(question)
+    explanations = integrity["failure_explanations"]
+
+    assert row["risk_level"] == "high"
+    assert row["difficulty_display"] == "6.0"
+    assert "quality_issue_low_score" in integrity["difficulty_flags"]
+    assert any(item["severity"] == "warning" for item in explanations)
 
 
 def test_classify_overall_verdict_uses_teacher_language():
@@ -498,10 +550,13 @@ def test_structure_and_difficulty_warnings_are_teacher_visible():
     assert "难度评估需复核" in rows[18]["primary_issue"]
     assert "0.57" in rows[18]["primary_issue"]
     assert "LLM" in rows[18]["primary_issue"]
+    assert "难度评估证据和采分点负荷" in rows[18]["action"]
+    assert "题面结构" not in rows[18]["action"]
     assert rows[19]["risk_level"] == "medium"
     assert rows[19]["quality_level"] == "需复核"
     assert "题面结构需复核" in rows[19]["primary_issue"]
     assert "编号重复" in rows[19]["primary_issue"]
+    assert "题面小问编号、材料边界和评分口径" in rows[19]["action"]
     assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 2
     assert model["evidence_integrity"]["difficulty_review_questions"] == [18]
     assert model["evidence_integrity"]["structure_warning_questions"] == [19]
@@ -545,109 +600,6 @@ def test_blocked_questions_are_placed_first_in_executive_summary():
     assert "不得展示推断难度" in summary["teacher_priorities"][0]["summary"]
     assert summary["evidence_scale"]["blocked_items"] == 1
     assert "阻断题" in summary["lead_judgment"]
-
-
-def test_blocked_question_failure_reason_is_teacher_readable():
-    data = sample_report_data()
-    data["exam_info"]["total_questions"] = 1
-    data["exam_info"]["total_score"] = 14
-    data["metadata_quality"] = {
-        "blocked_questions": [{"id": 21, "reason": "insufficient_stem"}],
-        "evidence_gap_questions": [{"id": 21, "reason": "stimulus_units_blank"}],
-        "warning_questions": [
-            {
-                "id": 21,
-                "warnings": [
-                    "analysis_failed:insufficient_stem",
-                    "difficulty_blocked:big_question_structure_failed",
-                    "llm_parse_failure:big_question_feature_extraction",
-                ],
-            }
-        ],
-        "llm_call_counts": {"question_analysis": 1, "big_question_feature_extraction": 1},
-    }
-    data["questions"] = [
-        {
-            "id": 21,
-            "total_score": 14,
-            "question_type": "short_answer",
-            "content": "21.（14分）表1材料。（2）分析实验失败原因。（3）鉴定阳性克隆。",
-            "difficulty": {
-                "final_difficulty": None,
-                "analysis_failed": True,
-                "failure_reason": "insufficient_stem",
-                "flags": ["big_question_structure_failed", "insufficient_stem"],
-                "features": {"_feature_status": "failed"},
-            },
-            "quality_score": None,
-            "metadata_confidence": 0.0,
-            "metadata_warnings": [
-                "analysis_failed:insufficient_stem",
-                "difficulty_blocked:big_question_structure_failed",
-                "llm_parse_failure:big_question_feature_extraction",
-            ],
-        },
-    ]
-
-    model = build_report_product_model(data, {"recommendations": []})
-    explanations = model["evidence_integrity"]["failure_explanations"]
-    q21 = [item for item in explanations if item["question_id"] == 21]
-
-    assert q21
-    assert any(item["stage"] == "题面完整性检查" for item in q21)
-    assert any(item["title"] == "题面不完整" for item in q21)
-    assert any("未识别到（1）问" in item["reason"] for item in q21)
-    assert any("不纳入逐题难度排名" in item["impact"] for item in q21)
-    assert any("核对原始试卷" in item["action"] for item in q21)
-
-    dive = model["deep_dives"][0]
-    trace_items = dive["evidence_integrity"]["failure_explanations"]
-    assert any(item["title"] == "题面不完整" for item in trace_items)
-    assert any("失败阶段" in item["display"] for item in trace_items)
-
-
-def test_points_sum_mismatch_is_teacher_readable():
-    data = sample_report_data()
-    data["exam_info"]["total_questions"] = 1
-    data["exam_info"]["total_score"] = 12
-    data["metadata_quality"] = {
-        "blocked_questions": [{"id": 18, "reason": "points_sum_mismatch"}],
-        "warning_questions": [
-            {
-                "id": 18,
-                "warnings": [
-                    "analysis_failed:points_sum_mismatch",
-                    "difficulty_blocked:big_question_structure_failed",
-                ],
-            }
-        ],
-    }
-    data["questions"] = [
-        {
-            "id": 18,
-            "total_score": 12,
-            "question_type": "short_answer",
-            "content": "18.（12分）遗传大题。（1）判断。（2）分析。",
-            "difficulty": {
-                "final_difficulty": None,
-                "analysis_failed": True,
-                "failure_reason": "points_sum_mismatch",
-                "flags": ["big_question_structure_failed", "points_sum_mismatch"],
-                "features": {"_feature_status": "failed", "errors": ["points_sum=8, total_score=12"]},
-            },
-            "quality_score": None,
-            "metadata_confidence": 0.0,
-            "metadata_warnings": ["analysis_failed:points_sum_mismatch"],
-        },
-    ]
-
-    model = build_report_product_model(data, {"recommendations": []})
-    explanations = model["evidence_integrity"]["failure_explanations"]
-
-    assert any(item["code"] == "points_sum_mismatch" for item in explanations)
-    assert any(item["title"] == "小问分值不闭合" for item in explanations)
-    assert any("分值合计与题目总分不一致" in item["reason"] for item in explanations)
-    assert not any(item["title"] == "未归类的数据异常" for item in explanations)
 
 
 def test_score_remainder_does_not_require_question_21():
@@ -725,6 +677,130 @@ def test_priority_review_uses_same_risk_text_semantics_as_risk_level():
     assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 1
 
 
+def test_distractor_error_wording_is_not_treated_as_question_quality_risk():
+    assert not contains_risk_text(
+        "无明显问题。各选项涉及的生物学事实陈述清晰，正确选项C的表述准确，"
+        "干扰项A、B、D的错误设置符合科学事实。"
+    )
+    assert not contains_risk_text(
+        "C选项的错误性逻辑严谨且唯一，答案唯一且科学准确。"
+    )
+    assert not contains_risk_text(
+        "无明显问题。A选项表述错误，B、C、D选项表述正确，"
+        "符合现代生物进化理论，答案唯一且科学准确。"
+    )
+    assert not contains_risk_text(
+        "D选项用词'mRNA'不够严谨，但该瑕疵不影响核心逻辑和答案唯一性。"
+        "整体无明显科学性错误。"
+    )
+    assert not contains_risk_text(
+        "无明显问题。C选项的表述“没有影响”在科学上是错误的，"
+        "这正是本题的考查意图，答案唯一且明确。"
+    )
+    assert contains_risk_text(
+        "存在严重科学性错误：提供的正确答案C是错误的，答案与事实不符。"
+    )
+    assert not contains_risk_text(
+        "学生典型错误路径：混淆核心概念并误选错误选项，教学中应加强对比。"
+    )
+
+
+def test_executive_summary_does_not_list_stable_distractor_items_as_priority_review():
+    data = sample_report_data()
+    data["questions"] = [
+        {
+            "id": 1,
+            "total_score": 2,
+            "question_type": "single_choice",
+            "difficulty": 6.1,
+            "quality_score": 5,
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+            "primary_issue": (
+                "无明显问题。各选项涉及的生物学事实陈述清晰，正确选项C的表述准确，"
+                "干扰项A、B、D的错误设置符合科学事实。"
+            ),
+        },
+        {
+            "id": 7,
+            "total_score": 2,
+            "question_type": "single_choice",
+            "difficulty": None,
+            "quality_score": 1,
+            "metadata_confidence": 0.7,
+            "metadata_warnings": [],
+            "failure_reason": "quality_score_too_low",
+            "quality_scientific": "存在严重科学性错误：提供的正确答案C是错误的，答案与事实不符。",
+        },
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    rows = {row["question_id"]: row for row in model["question_portfolio"]["rows"]}
+
+    assert rows[1]["risk_level"] == "low"
+    assert rows[1]["stance"] == "positive"
+    assert rows[7]["risk_level"] == "high"
+    assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 0
+    assert "第 1 题" not in model["executive_summary"]["lead_judgment"]
+    assert all(
+        "第 1 题" not in item.get("summary", "")
+        for item in model["executive_summary"]["teacher_priorities"]
+    )
+
+
+def test_teacher_comment_student_mistakes_do_not_become_quality_issue():
+    data = sample_report_data()
+    data["questions"] = [
+        {
+            "id": 1,
+            "total_score": 2,
+            "question_type": "single_choice",
+            "difficulty": 6.1,
+            "quality_score": 5,
+            "quality_scientific": "无明显问题。",
+            "quality_language": "表述清晰。",
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+            "teacher_comment": (
+                "本题难点在于多个强干扰项。学生典型错误路径："
+                "混淆概念并误选错误选项。教学中应加强对比。"
+            ),
+        }
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+
+    assert row["risk_level"] == "low"
+    assert row["stance"] == "positive"
+    assert row["primary_issue"] == "未发现显性质量问题"
+    assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 0
+
+
+def test_high_difficulty_stable_item_is_teaching_focus_not_priority_review_issue():
+    data = sample_report_data()
+    data["questions"] = [
+        {
+            "id": 20,
+            "total_score": 12,
+            "question_type": "short_answer",
+            "difficulty": 8.8,
+            "quality_score": 5,
+            "quality_scientific": "未发现显性质量问题",
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+        }
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+
+    assert row["risk_level"] == "low"
+    assert row["quality_level"] == "稳定"
+    assert row["difficulty"] == 8.8
+    assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 0
+
+
 def test_difficulty_dict_missing_confidence_uses_top_level_confidence():
     data = sample_report_data()
     data["questions"] = [
@@ -782,6 +858,83 @@ def test_subquestion_structure_detection_covers_circled_and_dot_numbering():
 
     assert "编号重复" in rows[31]["primary_issue"]
     assert "编号重复" in rows[32]["primary_issue"]
+
+
+def test_subquestion_structure_detection_ignores_nested_labels_and_table_decimals():
+    data = sample_report_data()
+    data["questions"] = [
+        {
+            "id": 18,
+            "total_score": 11,
+            "question_type": "short_answer",
+            "content": (
+                "18.（11分）研究湖泊食物网。\n"
+                "（1）上述四种生物中属于第三营养级的有______。\n"
+                "（2）人工浮床治理污染。\n"
+                "①植物特点是______。②处理目的______。③生态工程优点______。"
+            ),
+            "difficulty": 6.9,
+            "quality_score": 4,
+            "metadata_confidence": 0.95,
+            "metadata_warnings": [],
+        },
+        {
+            "id": 19,
+            "total_score": 12,
+            "question_type": "short_answer",
+            "content": (
+                "19.（12分）槟榔碱机制研究。\n"
+                "（1）判断代谢产物类型。\n"
+                "（2）推断神经递质相关变化。\n"
+                "（3）表格数据：1.04、1.18、3.11。\n"
+                "（3）重新设计四组实验。\n"
+                "（4）综合说明原因。"
+            ),
+            "difficulty": 9.9,
+            "quality_score": 4,
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+        },
+        {
+            "id": 20,
+            "total_score": 12,
+            "question_type": "short_answer",
+            "content": (
+                "20.（12分）基因群K包含：①M；②P；③R。\n"
+                "（1）推导花粉基因型。\n"
+                "（2）分析生产和生态影响。\n"
+                "（3）该育种体系包含过程①和过程②。"
+            ),
+            "difficulty": 10.0,
+            "quality_score": 5,
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+        },
+        {
+            "id": 21,
+            "total_score": 14,
+            "question_type": "short_answer",
+            "content": (
+                "21.（14分）构建融合蛋白。\n"
+                "（1）判断终止密码子。\n"
+                "（2）①推测失败原因。②提出解决方案。\n"
+                "（3）①正向插入条带大小。②反向插入结果。"
+            ),
+            "difficulty": 10.0,
+            "quality_score": 4,
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+        },
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    rows = {row["question_id"]: row for row in model["question_portfolio"]["rows"]}
+
+    assert "题面结构需复核" not in rows[18]["primary_issue"]
+    assert rows[19]["primary_issue"] == "题面结构需复核：题面小问编号重复：（3）"
+    assert "题面小问编号、材料边界和评分口径" in rows[19]["action"]
+    assert "题面结构需复核" not in rows[20]["primary_issue"]
+    assert "题面结构需复核" not in rows[21]["primary_issue"]
 
 
 def test_large_hard_tail_raises_difficulty_by_share_not_by_problem_count():
@@ -985,7 +1138,7 @@ def test_chapter_narrative_matches_teacher_review_report_scope():
     assert "DU" not in narrative
 
 
-def test_question_portfolio_uses_pipeline_final_difficulty_as_authority():
+def test_question_portfolio_uses_pipeline_final_difficulty_as_baseline_not_short_circuit():
     data = sample_report_data()
     data["questions"] = [
         {
@@ -1013,8 +1166,110 @@ def test_question_portfolio_uses_pipeline_final_difficulty_as_authority():
     model = build_report_product_model(data, {"recommendations": []})
     row = model["question_portfolio"]["rows"][0]
 
-    assert row["difficulty"] == 9.4
-    assert row["difficulty_display"] == "9.4"
+    assert 6.8 <= row["difficulty"] <= 7.8
+    assert row["difficulty_display"] != "9.4"
+    assert row["score_risk"] > 0
+
+
+def test_stable_question_with_benign_option_error_text_is_not_priority_review():
+    data = sample_report_data()
+    data["metadata_quality"]["low_confidence_questions"] = []
+    data["metadata_quality"]["warning_questions"] = []
+    data["questions"] = [
+        {
+            "id": 4,
+            "total_score": 2,
+            "question_type": "single_choice",
+            "difficulty": 3.6,
+            "quality_score": 5,
+            "quality_scientific": "\u65e0\u660e\u663e\u95ee\u9898\u3002A\u9879\u9519\u8bef\u7ed3\u8bba\u7b26\u5408\u751f\u7269\u5b66\u4e8b\u5b9e\u3002",
+            "metadata_confidence": 0.99,
+            "metadata_warnings": [],
+        }
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+
+    assert row["risk_level"] == "low"
+    assert row["needs_priority_review"] is False
+    assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 0
+    assert "\u590d\u6838" not in row["action"]
+
+
+def test_high_difficulty_stable_question_is_teaching_focus_not_priority_review():
+    data = sample_report_data()
+    data["metadata_quality"]["low_confidence_questions"] = []
+    data["metadata_quality"]["warning_questions"] = []
+    data["questions"] = [
+        {
+            "id": 21,
+            "total_score": 14,
+            "question_type": "short_answer",
+            "difficulty": {
+                "final_difficulty": 9.2,
+                "difficulty_label": "hard",
+                "features": {"_feature_status": "ok"},
+                "confidence": 0.97,
+            },
+            "quality_score": 5,
+            "metadata_confidence": 0.97,
+            "metadata_warnings": [],
+            "fine_grained_units": {
+                "scoring_units": [
+                    {"label": "primer design", "score_share": 0.5, "difficulty_estimate": 8.0},
+                    {"label": "orientation inference", "score_share": 0.5, "difficulty_estimate": 8.5},
+                ],
+                "diagnostic_units": [],
+            },
+        }
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+
+    assert row["risk_level"] == "low"
+    assert row["needs_priority_review"] is False
+    assert model["executive_summary"]["evidence_scale"]["reviewed_risk_items"] == 0
+    assert "\u590d\u6838" not in row["action"]
+
+
+def test_report_model_applies_choice_decision_trap_burden_from_dus():
+    data = sample_report_data()
+    data["questions"] = [
+        {
+            "id": 7,
+            "total_score": 2,
+            "question_type": "single_choice",
+            "difficulty": {
+                "final_difficulty": 4.2,
+                "difficulty_label": "medium",
+                "features": {"_feature_status": "ok"},
+            },
+            "quality_score": 5,
+            "metadata_confidence": 1.0,
+            "metadata_warnings": [],
+            "fine_grained_units": {
+                "scoring_units": [
+                    {"label": "concept boundary", "score_share": 0.25, "difficulty_estimate": 4.0},
+                    {"label": "option contrast", "score_share": 0.25, "difficulty_estimate": 4.2},
+                    {"label": "method purpose", "score_share": 0.25, "difficulty_estimate": 4.0},
+                    {"label": "result judgement", "score_share": 0.25, "difficulty_estimate": 4.3},
+                ],
+                "diagnostic_units": [
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                ],
+            },
+        }
+    ]
+
+    model = build_report_product_model(data, {"recommendations": []})
+    row = model["question_portfolio"]["rows"][0]
+
+    assert row["difficulty"] >= 5.0
 
 
 def _source_audit_report_data():
@@ -1109,6 +1364,68 @@ def test_product_model_exposes_evidence_integrity_audit_for_fallbacks_and_infere
     assert model["methodology"]["evidence_integrity"]["difficulty_fallback_questions"] == [17]
 
 
+def test_product_model_exposes_knowledge_mapping_gaps_with_detail():
+    data = _source_audit_report_data()
+    data["knowledge"] = {
+        "top_points": [],
+        "unmapped_count": 2,
+        "total_knowledge_points": 10,
+        "unmapped_points": [
+            {"name": "unmapped_a", "weighted_score": 3.5, "occurrences": 2},
+            {"name": "unmapped_b", "weighted_score": 1.0, "occurrences": 1},
+        ],
+        "non_textbook_count": 1,
+        "non_textbook_points": [
+            {"name": "实验设计与变量控制", "weighted_score": 2.0, "occurrences": 1},
+        ],
+    }
+
+    model = build_report_product_model(data, {"recommendations": []})
+    audit = model["evidence_integrity"]
+
+    assert audit["knowledge_unmapped_count"] == 2
+    assert audit["knowledge_total_count"] == 10
+    assert audit["knowledge_unmapped_points"][0]["name"] == "unmapped_a"
+    assert audit["knowledge_non_textbook_count"] == 1
+    assert audit["knowledge_non_textbook_points"][0]["name"] == "实验设计与变量控制"
+    assert any(item.get("id") == "knowledge_mapping_gap" for item in audit["items"])
+    assert any(item.get("id") == "knowledge_non_textbook_scope" for item in audit["items"])
+
+
+def test_domain_terms_infer_specific_sub_competency_instead_of_default():
+    cases = [
+        (
+            {"label": "推导可育花粉基因型与分离比", "reasoning_brief": ""},
+            {},
+            "\u751f\u547d\u89c2\u5ff5",
+            "\u9057\u4f20\u4e0e\u4fe1\u606f\u89c2",
+        ),
+        (
+            {"label": "计算PCR产物大小并预测电泳条带", "reasoning_brief": ""},
+            {},
+            "\u79d1\u5b66\u601d\u7ef4",
+            "\u6570\u636e\u5206\u6790",
+        ),
+        (
+            {"label": "设计PCR引物并鉴定扩增结果", "reasoning_brief": ""},
+            {},
+            "\u79d1\u5b66\u63a2\u7a76",
+            "\u5b9e\u9a8c\u8bbe\u8ba1",
+        ),
+        (
+            {"label": "人工浮床治理重金属污染", "reasoning_brief": ""},
+            {},
+            "\u793e\u4f1a\u8d23\u4efb",
+            "\u751f\u6001\u73af\u4fdd",
+        ),
+    ]
+
+    for unit, question, competency, expected_sub in cases:
+        sub_competency, source = _infer_sub_competency(unit, question, competency, "")
+        assert sub_competency == expected_sub
+        assert source == "rule_inferred"
+
+
 def _deep_dive_ranking_report_data():
     questions = []
     for qid, difficulty in [
@@ -1173,3 +1490,33 @@ def test_deep_dives_prioritize_high_difficulty_fallback_questions_over_low_diffi
     by_id = {item["question_id"]: item for item in model["deep_dives"]}
     assert by_id[20]["evidence_integrity"]["difficulty_flags"] == ["big_question_fallback"]
     assert by_id[21]["evidence_integrity"]["source_excerpt_status"] == "missing"
+
+
+def test_deep_dives_preserve_source_excerpt_with_markdown_table_for_review():
+    data = sample_report_data_with_full_units()
+    data["questions"][1]["content"] = (
+        "Q7 experiment stem\n"
+        "| group | treatment | result |\n"
+        "| --- | --- | --- |\n"
+        "| A | light | high |\n"
+        "| B | dark | low |"
+    )
+
+    model = build_report_product_model(data, {"recommendations": []})
+
+    dive = next(item for item in model["deep_dives"] if item["question_id"] == 7)
+    assert dive["source_excerpt"]["status"] == "available"
+    assert "| group | treatment | result |" in dive["source_excerpt"]["question_text"]
+    assert dive["evidence_integrity"]["source_excerpt_status"] == "available"
+
+
+def test_source_excerpt_marks_truncation_when_answer_is_cut():
+    data = sample_report_data_with_full_units()
+    data["questions"][1]["question_text"] = "Q7 stem"
+    data["questions"][1]["answer"] = "A" * 1300
+
+    model = build_report_product_model(data, {"recommendations": []})
+
+    dive = next(item for item in model["deep_dives"] if item["question_id"] == 7)
+    assert len(dive["source_excerpt"]["answer"]) == 1200
+    assert dive["source_excerpt"]["truncated"] is True

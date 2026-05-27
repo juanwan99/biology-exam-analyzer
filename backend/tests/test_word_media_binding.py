@@ -97,6 +97,29 @@ def test_word_splitter_marks_missing_media_for_explicit_image_cue(tmp_path):
     assert "image_media_missing" in question["warnings"]
 
 
+def test_word_splitter_marks_table_render_failure(monkeypatch, tmp_path):
+    def fail_render(self, rows_data):
+        raise RuntimeError("render boom")
+
+    monkeypatch.setattr(WordQuestionSplitter, "_render_table_as_image", fail_render)
+
+    doc = Document()
+    doc.add_paragraph("18. 实验结果如下表所示。")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "A"
+    table.cell(0, 1).text = "B"
+    table.cell(1, 0).text = "1"
+    table.cell(1, 1).text = "2"
+    path = tmp_path / "broken-table-render.docx"
+    doc.save(path)
+
+    question = WordQuestionSplitter().split(str(path))["questions"][0]
+
+    assert question["media_integrity"]["status"] == "failed"
+    assert "table_media_render_failed" in question["warnings"]
+    assert all(item["type"] != "table" for item in question["_media_for_ai"])
+
+
 @pytest.mark.asyncio
 async def test_difficulty_fails_closed_when_media_integrity_failed(monkeypatch):
     async def should_not_call(*args, **kwargs):

@@ -10,17 +10,22 @@ from deps import get_knowledge_mapper
 from logger import get_logger
 
 logger = get_logger()
+_DEFAULT_GET_KNOWLEDGE_MAPPER = get_knowledge_mapper
 
 BLOOM_LABELS = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
 
 
 def _get_knowledge_mapper_for_statistics():
-    """Keep the legacy analysis_router patch point working after extraction."""
+    """Resolve mapper injection without leaking analysis_router global state."""
     import sys
 
+    if get_knowledge_mapper is not _DEFAULT_GET_KNOWLEDGE_MAPPER:
+        return get_knowledge_mapper()
+
     router = sys.modules.get("analysis_router")
-    if router is not None and hasattr(router, "get_knowledge_mapper"):
-        return router.get_knowledge_mapper()
+    router_getter = getattr(router, "get_knowledge_mapper", None) if router is not None else None
+    if router_getter is not None and router_getter is not _DEFAULT_GET_KNOWLEDGE_MAPPER:
+        return router_getter()
     return get_knowledge_mapper()
 
 
@@ -82,10 +87,104 @@ def _usable_difficulty(q: Dict) -> float | None:
     feature_status = features.get("_feature_status") if isinstance(features, dict) else None
     source = difficulty.get("source") or difficulty.get("difficulty_source")
     fine_grained = _analysis_dict(q).get("_fine_grained")
-    if feature_status == "failed" and source not in {"seu_fallback", "structured_big_question"}:
+    if feature_status == "failed" and source != "structured_big_question":
         if not (fine_grained and fine_grained.get("scoring_units")):
             return None
     return float(score)
+
+
+_KP_ABILITY_BLACKLIST_EXACT = {
+    "数据处理",
+    "数据分析",
+    "实验设计",
+    "信息获取",
+    "信息处理",
+    "逻辑推理",
+    "模型建构",
+    "批判性思维",
+    "科学探究能力",
+}
+_KP_NON_TEXTBOOK_PATTERNS = (
+    "实验设计",
+    "变量控制",
+    "实验数据分析",
+    "实验分析",
+    "探究实验",
+    "科学探究",
+    "分析与结论",
+    "严谨性",
+)
+
+
+def _is_non_textbook_skill_point(kp: str) -> bool:
+    if not isinstance(kp, str):
+        return False
+    normalized = kp.strip()
+    return (
+        normalized in _KP_ABILITY_BLACKLIST_EXACT
+        or any(pattern in normalized for pattern in _KP_NON_TEXTBOOK_PATTERNS)
+    )
+
+
+def _add_weighted_point(
+    bucket: Dict[str, Dict[str, Any]],
+    name: str,
+    weight: float,
+    occurrences: int = 1,
+) -> None:
+    item = bucket.setdefault(name, {"weighted_score": 0.0, "occurrences": 0})
+    item["weighted_score"] += weight
+    item["occurrences"] += occurrences
+
+
+def _safe_positive_float(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _normalised_knowledge_links(links: List[Dict[str, Any]]) -> List[tuple[str, float]]:
+    valid = []
+    for link in links or []:
+        kp = link.get("knowledge_point", "")
+        if not isinstance(kp, str) or not kp.strip():
+            continue
+        raw_share = link.get("share", 1.0)
+        valid.append((kp.strip(), _safe_positive_float(raw_share, 1.0)))
+    if not valid:
+        return []
+    share_total = sum(share for _, share in valid)
+    if share_total <= 0:
+        equal_share = 1.0 / len(valid)
+        return [(kp, equal_share) for kp, _ in valid]
+    return [(kp, share / share_total) for kp, share in valid]
+
+
+def _diminished_non_textbook_weight(raw_weight: float, question_score: float,
+                                    occurrences: int) -> float:
+    """Repeated method/ability tags describe one capability burden, not new content."""
+    if occurrences <= 1 or question_score <= 0:
+        return raw_weight
+    per_occurrence = raw_weight / occurrences
+    diminished = per_occurrence * (1.0 + 0.50 * (occurrences - 1))
+    cap = question_score * 0.45
+    return min(raw_weight, diminished, cap)
+
+
+def _weighted_point_list(bucket: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        [
+            {
+                "name": name,
+                "weighted_score": round(data["weighted_score"], 1),
+                "occurrences": data["occurrences"],
+            }
+            for name, data in bucket.items()
+        ],
+        key=lambda item: (-item["weighted_score"], item["name"]),
+    )
 
 
 def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) -> Dict:
@@ -123,6 +222,7 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
         score_issue_questions = []
         valid_score_questions = 0
         missing_bloom_questions = []
+        non_textbook_points_weighted = {}
 
         for q in questions:
             total_score_val, score_issue = _score_record(q)
@@ -213,24 +313,40 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
 
             # 4. 知识点分值加权
             # 优先级：SEU knowledge_links > 旧等分逻辑
-            _KP_ABILITY_BLACKLIST = {"数据处理", "数据分析", "实验设计", "信息获取", "信息处理",
-                                     "逻辑推理", "模型建构", "批判性思维", "科学探究能力"}
             fg = analysis.get("_fine_grained")
             if fg and fg.get("scoring_units"):
                 # === SEU 精确路径 ===
+                question_non_textbook_points = {}
                 for seu in fg["scoring_units"]:
                     seu_score = total_score_val * seu.get("score_share", 0)
-                    for kl in seu.get("knowledge_links", []):
-                        kp = kl.get("knowledge_point", "")
-                        if kp and kp not in _KP_ABILITY_BLACKLIST:
-                            w = seu_score * kl.get("share", 1.0)
-                            knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + w
-                            kp_with_weights.append((kp, w))
+                    for kp, link_share in _normalised_knowledge_links(seu.get("knowledge_links", [])):
+                        w = seu_score * link_share
+                        if _is_non_textbook_skill_point(kp):
+                            _add_weighted_point(question_non_textbook_points, kp, w)
+                            continue
+                        knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + w
+                        kp_with_weights.append((kp, w))
+                for kp, data in question_non_textbook_points.items():
+                    adjusted_weight = _diminished_non_textbook_weight(
+                        data["weighted_score"],
+                        total_score_val,
+                        data["occurrences"],
+                    )
+                    _add_weighted_point(
+                        non_textbook_points_weighted,
+                        kp,
+                        adjusted_weight,
+                        data["occurrences"],
+                    )
             elif "knowledge_points" in analysis:
                 # === fallback: 旧逻辑等分（同样过滤能力词） ===
                 kp_list = analysis["knowledge_points"]
-                kp_list_filtered = [kp for kp in kp_list if kp not in _KP_ABILITY_BLACKLIST]
-                kp_weight = total_score_val / len(kp_list_filtered) if kp_list_filtered else 0
+                kp_list_filtered = [kp for kp in kp_list if not _is_non_textbook_skill_point(kp)]
+                excluded_weight = total_score_val / len(kp_list) if kp_list else 0
+                for kp in kp_list:
+                    if _is_non_textbook_skill_point(kp):
+                        _add_weighted_point(non_textbook_points_weighted, kp, excluded_weight)
+                kp_weight = excluded_weight
                 for kp in kp_list_filtered:
                     knowledge_points_weighted[kp] = knowledge_points_weighted.get(kp, 0) + kp_weight
                     kp_with_weights.append((kp, kp_weight))
@@ -275,11 +391,19 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             for tb in ["必修1", "必修2", "选择性必修1", "选择性必修2", "选择性必修3"]
         }
 
+        mapped_count = 0
+        unmapped_weighted = {}
         for i, mapped in enumerate(mapped_points):
+            weight = kp_weight_list[i] if i < len(kp_weight_list) else 0
+            original = (
+                mapped.get("original")
+                or (all_knowledge_points[i] if i < len(all_knowledge_points) else "")
+                or "未标注知识点"
+            )
             if mapped["mapped"]:
                 textbook = mapped["textbook"]
                 chapter = mapped["chapter"]
-                weight = kp_weight_list[i]
+                mapped_count += 1
                 textbook_distribution[textbook]["weighted_score"] += weight
 
                 if chapter not in textbook_distribution[textbook]["chapters"]:
@@ -288,6 +412,13 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                         "weighted_score": 0.0,
                     }
                 textbook_distribution[textbook]["chapters"][chapter]["weighted_score"] += weight
+            else:
+                detail = unmapped_weighted.setdefault(
+                    original,
+                    {"name": original, "weighted_score": 0.0, "occurrences": 0},
+                )
+                detail["weighted_score"] += weight
+                detail["occurrences"] += 1
 
         # 计算教材占比
         total_mapped_weight = sum(item["weighted_score"] for item in textbook_distribution.values())
@@ -298,6 +429,8 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             )
 
         unmapped_count = sum(1 for m in mapped_points if not m["mapped"])
+        unmapped_points = _weighted_point_list(unmapped_weighted)
+        non_textbook_points = _weighted_point_list(non_textbook_points_weighted)
         logger.info(f"[知识点映射] 完成映射，加权总分 {total_mapped_weight:.1f}，未映射 {unmapped_count}/{len(all_knowledge_points)}")
 
         # 知识点排序（前10，按分值加权）
@@ -321,7 +454,11 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             ],
             "knowledge_textbook_distribution": textbook_distribution,
             "knowledge_unmapped_count": unmapped_count,
+            "knowledge_mapped_count": mapped_count,
+            "knowledge_unmapped_points": unmapped_points[:20],
             "knowledge_total_count": len(all_knowledge_points),
+            "knowledge_non_textbook_count": sum(item["occurrences"] for item in non_textbook_points),
+            "knowledge_non_textbook_points": non_textbook_points[:20],
             "competency_distribution": competency_summary,
             "bloom_distribution": bloom_distribution,
             "allocation_stats": allocation_stats,

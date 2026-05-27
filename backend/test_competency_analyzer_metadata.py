@@ -87,3 +87,61 @@ async def test_analyze_competency_failed_json_keeps_call_metadata(monkeypatch, t
     assert call["confidence"] == 0.0
     assert call["metadata"]["failure_type"] == "json_parse_failed"
     assert call["metadata"]["validation_errors"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_competency_sends_media_and_records_fallback(monkeypatch, tmp_path):
+    library_path = tmp_path / "competency_library.json"
+    library_path.write_text("{}", encoding="utf-8")
+
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+        "competency prompt {question_text} {knowledge_points}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+
+    payload = {
+        "鐢熷懡瑙傚康": {"娑夊強": False, "鍏蜂綋缁村害": [], "鏉冮噸": 0.0, "鍒嗘瀽璇存槑": ""},
+        "绉戝鎬濈淮": {"娑夊強": True, "鍏蜂綋缁村害": ["褰掔撼姒傛嫭"], "鏉冮噸": 0.6, "鍒嗘瀽璇存槑": "鍒嗘瀽鍥捐〃"},
+        "绉戝鎺㈢┒": {"娑夊強": True, "鍏蜂綋缁村害": ["瀹為獙璁捐"], "鏉冮噸": 0.4, "鍒嗘瀽璇存槑": "璇嗗埆瀹為獙缁撴灉"},
+        "绀句細璐ｄ换": {"娑夊強": False, "鍏蜂綋缁村害": [], "鏉冮噸": 0.0, "鍒嗘瀽璇存槑": ""},
+        "primary_competency": "绉戝鎬濈淮",
+        "competency_level": "楂?",
+    }
+    captured = {}
+
+    async def fake_llm_call(messages, **kwargs):
+        captured["messages"] = messages
+        return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(competency_analyzer, "llm_call", fake_llm_call)
+    monkeypatch.setattr(
+        competency_analyzer,
+        "get_last_call_metadata",
+        lambda: {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "fallback_count": 1,
+            "provider_errors": [{"provider": "primary", "message": "timeout"}],
+            "status": "ok",
+        },
+    )
+
+    analyzer = CompetencyAnalyzer(library_path=str(library_path))
+    result = await analyzer.analyze_competency({
+        "id": 18,
+        "content": "experiment chart item",
+        "knowledge_points": ["experiment"],
+        "media_items": [{"type": "image", "base64": "iVBORw0KGgoAAA"}],
+    })
+
+    content = captured["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[1]["type"] == "image_url"
+    call = result["_llm_calls"][0]
+    assert call["fallback_count"] == 1
+    assert call["provider"] == "deepseek"
+    assert call["input_refs"]["media_count"] == 1
+    assert call["metadata"]["provider_errors"]

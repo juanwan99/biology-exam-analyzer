@@ -9,11 +9,11 @@ from unittest.mock import patch, MagicMock
 def mock_knowledge_mapper():
     mock_mapper = MagicMock()
     mock_mapper.map_knowledge_points.return_value = []
-    with patch("analysis_router.get_knowledge_mapper", return_value=mock_mapper):
+    with patch("analysis_statistics.get_knowledge_mapper", return_value=mock_mapper):
         yield mock_mapper
 
 
-from analysis_router import generate_exam_statistics
+from analysis_statistics import generate_exam_statistics
 
 
 def _make_question(qid, difficulty, cognitive, total_score, knowledge_points=None, bloom=None):
@@ -59,23 +59,35 @@ class TestWeightedAvgDifficulty:
         assert result["avg_difficulty"] == 6.5
 
     def test_zero_total_score_is_excluded_and_reported(self):
-        """total_score=0 不再等权补 1；应从加权均值排除并进入质量元数据。"""
+        """total_score=0 不得 fallback 等权=1，必须进入分值质量审计。"""
         questions = [
             _make_question(1, 5.0, 5.0, 0),
         ]
         result = generate_exam_statistics(questions, {})
         assert result["avg_difficulty"] == 0
-        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["score_quality"]["score_issue_questions"]
+        assert {
+            "id": 1,
+            "reason": "non_positive_score",
+            "source": "total_score",
+            "value": 0,
+        } in result["score_quality"]["score_issue_questions"]
 
     def test_invalid_score_does_not_pollute_valid_weighted_average(self):
         questions = [
             _make_question(1, 9.0, 9.0, 0),
             _make_question(2, 1.0, 1.0, 10),
         ]
+
         result = generate_exam_statistics(questions, {})
+
         assert result["avg_difficulty"] == 1.0
         assert result["avg_cognitive_level"] == 1.0
-        assert {"id": 1, "reason": "non_positive_score", "source": "total_score", "value": 0} in result["score_quality"]["score_issue_questions"]
+        assert {
+            "id": 1,
+            "reason": "non_positive_score",
+            "source": "total_score",
+            "value": 0,
+        } in result["score_quality"]["score_issue_questions"]
 
 
 class TestWeightedAvgCognitive:
@@ -104,6 +116,37 @@ class TestWeightedKnowledgePoints:
         kp_map = {item["name"]: item["weighted_score"] for item in result["top_knowledge_points"]}
         assert kp_map["光合作用"] == 7.0  # 6/1 + 2/2 = 7
         assert kp_map["呼吸作用"] == 1.0  # 2/2
+
+    def test_seu_knowledge_links_are_normalised_per_scoring_unit(self):
+        """一个采分点内多个知识标签应拆分该采分点分值，不能各拿满分。"""
+        questions = [{
+            "id": 1,
+            "total_score": 10,
+            "difficulty": {
+                "final_difficulty": 6.0,
+                "cognitive_level": 6.0,
+                "score_distribution_by_difficulty": {},
+                "features": {"bloom": 4},
+            },
+            "analysis": {
+                "_fine_grained": {
+                    "scoring_units": [{
+                        "score_share": 1.0,
+                        "bloom_level": 4,
+                        "knowledge_links": [
+                            {"knowledge_point": "PCR技术"},
+                            {"knowledge_point": "基因表达载体构建"},
+                        ],
+                    }]
+                }
+            },
+        }]
+
+        result = generate_exam_statistics(questions, {})
+
+        kp_map = {item["name"]: item["weighted_score"] for item in result["top_knowledge_points"]}
+        assert kp_map["PCR技术"] == 5.0
+        assert kp_map["基因表达载体构建"] == 5.0
 
 
 class TestTextbookWeightedMapping:
@@ -138,6 +181,87 @@ class TestTextbookWeightedMapping:
         result = generate_exam_statistics(questions, {})
         tb = result["knowledge_textbook_distribution"]
         assert all(v["weighted_score"] == 0 for v in tb.values())
+
+    def test_unmapped_knowledge_points_keep_weighted_detail(self, mock_knowledge_mapper):
+        mock_knowledge_mapper.map_knowledge_points.return_value = [
+            {"mapped": False, "original": "unmapped_a"},
+            {"mapped": False, "original": "unmapped_a"},
+            {
+                "mapped": True,
+                "textbook": "必修1",
+                "chapter": "mapped_chapter",
+                "chapter_name": "mapped chapter",
+                "original": "mapped_b",
+            },
+        ]
+        questions = [
+            _make_question(1, 5.0, 5.0, 6, knowledge_points=["unmapped_a"]),
+            _make_question(2, 5.0, 5.0, 4, knowledge_points=["unmapped_a", "mapped_b"]),
+        ]
+
+        result = generate_exam_statistics(questions, {})
+
+        assert result["knowledge_unmapped_count"] == 2
+        assert result["knowledge_mapped_count"] == 1
+        assert result["knowledge_unmapped_points"] == [
+            {"name": "unmapped_a", "weighted_score": 8.0, "occurrences": 2}
+        ]
+
+    def test_method_skill_points_are_not_sent_to_textbook_mapper(self, mock_knowledge_mapper):
+        mock_knowledge_mapper.map_knowledge_points.return_value = [
+            {
+                "mapped": True,
+                "textbook": "必修2",
+                "chapter": "第1章",
+                "chapter_name": "遗传因子的发现",
+                "original": "遗传的基本规律",
+            },
+        ]
+        questions = [
+            _make_question(
+                1,
+                5.0,
+                5.0,
+                6,
+                knowledge_points=["实验设计与变量控制", "遗传的基本规律"],
+            ),
+        ]
+
+        result = generate_exam_statistics(questions, {})
+
+        mock_knowledge_mapper.map_knowledge_points.assert_called_once_with(["遗传的基本规律"])
+        assert result["knowledge_non_textbook_count"] == 1
+        assert result["knowledge_non_textbook_points"] == [
+            {"name": "实验设计与变量控制", "weighted_score": 3.0, "occurrences": 1}
+        ]
+
+    def test_repeated_method_skill_tags_are_diminished_within_one_question(self):
+        """同一题反复出现的方法能力标签不能按采分点数量刷高为主要知识点。"""
+        scoring_units = [
+            {
+                "score_share": 1 / 6,
+                "bloom_level": 4,
+                "knowledge_links": [{"knowledge_point": "实验设计中的变量控制"}],
+            }
+            for _ in range(6)
+        ]
+        questions = [{
+            "id": 19,
+            "total_score": 12,
+            "difficulty": {
+                "final_difficulty": 7.5,
+                "cognitive_level": 7.0,
+                "score_distribution_by_difficulty": {},
+                "features": {"bloom": 4},
+            },
+            "analysis": {"_fine_grained": {"scoring_units": scoring_units}},
+        }]
+
+        result = generate_exam_statistics(questions, {})
+
+        assert result["knowledge_non_textbook_points"] == [
+            {"name": "实验设计中的变量控制", "weighted_score": 5.4, "occurrences": 6}
+        ]
 
 
 class TestBloomDistribution:
@@ -189,8 +313,8 @@ class TestWeightedCompetency:
         result = analyzer.aggregate_exam_competencies(questions)
         assert result["生命观念"]["占比"] == 0.4
 
-    def test_no_score_is_not_counted_as_equal_weight(self):
-        """无 _total_score 时不再回退等权。"""
+    def test_missing_score_does_not_fallback_to_equal_weight(self):
+        """缺 _total_score 时不得等权兜底，避免把数据不足伪装成有效统计。"""
         from competency_analyzer import CompetencyAnalyzer
         analyzer = CompetencyAnalyzer.__new__(CompetencyAnalyzer)
 

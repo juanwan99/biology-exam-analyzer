@@ -6,6 +6,7 @@
 import os
 import asyncio
 import httpx
+from contextvars import ContextVar
 from logger import get_logger
 from llm_config import get_providers
 
@@ -14,14 +15,66 @@ logger = get_logger()
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _native_client = None
+_last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
+_review_channel: ContextVar[str | None] = ContextVar("llm_review_channel", default=None)
+_app_builder_gateway = None
+
+
+def get_last_llm_call_metadata() -> dict:
+    """Return audit metadata for the last llm_call in the current async context."""
+    return dict(_last_call_metadata.get({}) or {})
+
+
+def set_llm_review_channel(channel: str | None):
+    """Set the review channel for LLM calls in the current async context."""
+    normalized = None
+    if channel is not None:
+        from services.review_channel import normalize_review_channel
+
+        normalized = normalize_review_channel(channel)
+    return _review_channel.set(normalized)
+
+
+def reset_llm_review_channel(token) -> None:
+    _review_channel.reset(token)
+
+
+def _provider_error_message(error: Exception) -> str:
+    message = str(error)
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            status = error.response.status_code
+            body_text = (error.response.text or "")[:500]
+            if body_text:
+                message = f"HTTP {status}: {body_text}"
+            else:
+                message = f"HTTP {status}: {message}"
+        except Exception:
+            pass
+    return message[:500]
+
+
+def _provider_error_summary(errors: list) -> list[dict]:
+    return [
+        {
+            "provider": str(name),
+            "error_type": type(error).__name__,
+            "message": _provider_error_message(error),
+        }
+        for name, error in errors
+    ]
 
 
 async def close_llm_clients():
+    global _app_builder_gateway
     """关闭所有缓存的 HTTP 客户端（FastAPI shutdown 时调用）。"""
     for client in _clients.values():
         if not client.is_closed:
             await client.aclose()
     _clients.clear()
+    if _app_builder_gateway is not None:
+        await _app_builder_gateway.discovery_client.aclose()
+        _app_builder_gateway = None
 
 
 class AllProvidersFailed(Exception):
@@ -120,6 +173,84 @@ def _convert_content_responses(content):
     return result
 
 
+def _convert_content_chat(content):
+    """OpenAI Chat-compatible content. Text-only arrays are flattened."""
+    if isinstance(content, str):
+        return content
+    text_parts = []
+    passthrough = []
+    for item in content:
+        if item.get("type") == "text":
+            text_parts.append(item.get("text", ""))
+        else:
+            passthrough.append(item)
+    if not passthrough:
+        return "\n".join(part for part in text_parts if part)
+    return content
+
+
+def _messages_include_images(messages: list) -> bool:
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if item.get("type") == "image_url":
+                    return True
+    return False
+
+
+def _finish_reason_to_text(finish_reason) -> str:
+    if finish_reason is None:
+        return ""
+    return str(
+        getattr(finish_reason, "value", None)
+        or getattr(finish_reason, "name", None)
+        or finish_reason
+    )
+
+
+def _raise_if_incomplete_finish(provider_name: str, finish_reason):
+    reason = _finish_reason_to_text(finish_reason)
+    if not reason:
+        return
+    normalized = reason.lower()
+    if normalized in {"stop", "end_turn"}:
+        return
+    raise RuntimeError(
+        f"{provider_name} provider_incomplete_response: finish_reason={reason}"
+    )
+
+
+def _native_generation_config_kwargs(provider: dict, max_tokens: int,
+                                     temperature: float) -> dict:
+    thinking_mult = provider.get("thinking_overhead", 1)
+    capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
+    config_kwargs = {
+        "max_output_tokens": capped_tokens,
+        "temperature": temperature,
+    }
+
+    try:
+        is_zero_temperature = float(temperature) <= 0
+    except (TypeError, ValueError):
+        is_zero_temperature = False
+    if is_zero_temperature:
+        seed = provider.get("deterministic_seed")
+        if seed is None:
+            seed = os.environ.get("LLM_DETERMINISTIC_SEED", "20260526")
+        try:
+            seed = int(seed)
+        except (TypeError, ValueError):
+            seed = 20260526
+        config_kwargs.update({
+            "candidate_count": 1,
+            "seed": seed,
+            "top_p": float(provider.get("deterministic_top_p", 1.0)),
+            "top_k": int(provider.get("deterministic_top_k", 1)),
+        })
+    return config_kwargs
+
+
 def _build_request_body(provider: dict, messages: list, max_tokens: int,
                         temperature: float) -> dict:
     """根据 provider 格式构建请求体。messages 使用 OpenAI Chat 格式作为内部标准。"""
@@ -154,9 +285,15 @@ def _build_request_body(provider: dict, messages: list, max_tokens: int,
             "temperature": temperature,
         }
     else:  # openai_chat
+        converted = []
+        for msg in messages:
+            converted.append({
+                "role": msg["role"],
+                "content": _convert_content_chat(msg["content"]),
+            })
         return {
             "model": model,
-            "messages": messages,
+            "messages": converted,
             "max_tokens": capped_tokens,
             "temperature": temperature,
         }
@@ -166,8 +303,15 @@ def _extract_text(api_format: str, data: dict) -> str:
     """从 API 响应中提取文本。空内容视为失败抛出异常。"""
     text = None
     if api_format == "anthropic":
+        _raise_if_incomplete_finish("anthropic", data.get("stop_reason"))
         text = data["content"][0]["text"]
     elif api_format == "openai_responses":
+        status = data.get("status")
+        if status and status not in {"completed", "complete"}:
+            raise RuntimeError(
+                f"openai_responses provider_incomplete_response: status={status}, "
+                f"details={data.get('incomplete_details')}"
+            )
         for item in data.get("output", []):
             if item.get("type") == "message":
                 for block in item.get("content", []):
@@ -179,10 +323,142 @@ def _extract_text(api_format: str, data: dict) -> str:
         if text is None:
             text = data["output"][0]["content"][0]["text"]
     else:  # openai_chat
-        text = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        _raise_if_incomplete_finish("openai_chat", choice.get("finish_reason"))
+        text = choice["message"]["content"]
     if not text or not text.strip():
         raise RuntimeError("LLM 返回空内容，视为失败触发 fallback")
     return text
+
+
+def _channel_requires_app_builder_generation() -> bool:
+    channel = _review_channel.get()
+    if not channel:
+        return False
+    from services.review_channel import channel_requires_grounded_generation
+
+    return channel_requires_grounded_generation(channel)
+
+
+def _app_builder_model_id(model: str | None) -> str:
+    model = str(model or "").strip()
+    if "/models/" in model:
+        return model.rsplit("/models/", 1)[-1]
+    if model.startswith("models/"):
+        return model.split("/", 1)[1]
+    return model
+
+
+def _message_content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content or "")
+    parts = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text":
+            parts.append(str(item.get("text") or ""))
+            continue
+        if item.get("type") == "image_url":
+            raise RuntimeError(
+                "app_builder grounded generation does not support image_url inputs; "
+                "provide extracted/OCR text or switch to the model channel"
+            )
+        raise RuntimeError(
+            f"app_builder grounded generation unsupported content type: {item.get('type')}"
+        )
+    return "\n".join(part for part in parts if part)
+
+
+def _messages_to_grounded_generation(messages: list) -> tuple[str, str | None]:
+    system_parts: list[str] = []
+    conversation_parts: list[str] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        text = _message_content_text(message.get("content")).strip()
+        if not text:
+            continue
+        if role == "system":
+            system_parts.append(text)
+        else:
+            conversation_parts.append(f"{role}: {text}")
+    prompt = "\n\n".join(conversation_parts).strip()
+    if not prompt:
+        raise RuntimeError("app_builder grounded generation prompt is empty")
+    system_instruction = "\n\n".join(system_parts).strip() or None
+    return prompt, system_instruction
+
+
+def _grounding_facts_from_prompt(prompt: str) -> list[dict]:
+    max_chars = int(os.environ.get("DISCOVERY_ENGINE_GENERATION_FACT_CHARS", "3500"))
+    max_facts = int(os.environ.get("DISCOVERY_ENGINE_GENERATION_MAX_FACTS", "12"))
+    text = str(prompt or "").strip()
+    facts = []
+    for idx in range(0, min(len(text), max_chars * max_facts), max_chars):
+        chunk = text[idx:idx + max_chars].strip()
+        if not chunk:
+            continue
+        facts.append({
+            "factText": chunk,
+            "attributes": {
+                "title": f"prompt_context_{len(facts) + 1}",
+                "source": "llm_prompt",
+            },
+        })
+    if not facts:
+        raise RuntimeError("app_builder grounded generation facts are empty")
+    return facts
+
+
+def _get_app_builder_gateway():
+    global _app_builder_gateway
+    if _app_builder_gateway is None:
+        from services.evidence_gateway import EvidenceGateway
+
+        _app_builder_gateway = EvidenceGateway()
+    return _app_builder_gateway
+
+
+async def _call_app_builder_grounded_generation(
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+    purpose: str | None,
+    model: str | None,
+) -> str:
+    from llm_policy import resolve_model_profile
+
+    profile = resolve_model_profile(purpose=purpose, model_override=model)
+    configured_model = os.environ.get("DISCOVERY_ENGINE_GENERATION_MODEL", "").strip()
+    model_id = _app_builder_model_id(configured_model or profile.model)
+    prompt, system_instruction = _messages_to_grounded_generation(messages)
+    facts = _grounding_facts_from_prompt(prompt)
+    gateway = _get_app_builder_gateway()
+    result = await gateway.generate_grounded_content(
+        prompt=prompt,
+        grounding_facts=facts,
+        model_id=model_id,
+        system_instruction=system_instruction,
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+    )
+    _last_call_metadata.set({
+        "status": "ok",
+        "provider": "discovery_engine",
+        "model": model_id,
+        "review_channel": _review_channel.get(),
+        "purpose": purpose or profile.purpose,
+        "model_role": profile.role,
+        "model_policy": "exam-review-app-builder-grounded-generation",
+        "fallback_count": 0,
+        "provider_errors": [],
+        "operation": "generate_grounded_content",
+        "fact_count": len(facts),
+        "grounding_score": result.get("grounding_score"),
+    })
+    return result["text"]
 
 
 # ── Native SDK provider ────────────────────────────────────────────────
@@ -195,11 +471,28 @@ def _get_native_client(provider: dict):
         sdk = importlib.import_module(sdk_module)
         project = os.environ.get(provider.get("project_env", ""), "")
         location = os.environ.get(provider.get("location_env", ""), "us-central1")
-        _native_client = sdk.Client(
-            vertexai=provider.get("cloud_mode", False),
-            project=project,
-            location=location,
-        )
+        client_kwargs = {
+            "vertexai": provider.get("cloud_mode", False),
+            "project": project,
+            "location": location,
+        }
+        sa_path = os.environ.get(provider.get("sa_file_env", ""), "")
+        if sa_path:
+            os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", sa_path)
+            try:
+                from google.oauth2 import service_account
+
+                client_kwargs["credentials"] = (
+                    service_account.Credentials.from_service_account_file(
+                        sa_path,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{provider['name']} provider_credentials_failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        _native_client = sdk.Client(**client_kwargs)
     return _native_client
 
 
@@ -228,6 +521,16 @@ def _convert_messages_to_native(messages: list) -> tuple:
                         header, b64data = url.split(",", 1)
                         mime_type = header.split(";")[0].split(":")[1]
                         parts.append({"inline_data": {"mime_type": mime_type, "data": b64data}})
+                    else:
+                        raise RuntimeError(
+                            "native provider unsupported_media: image_url must be a data URL"
+                        )
+                else:
+                    raise RuntimeError(
+                        f"native provider unsupported_content_type: {item.get('type')}"
+                    )
+        if not parts:
+            raise RuntimeError("native provider empty_message_parts")
         contents.append({"role": native_role, "parts": parts})
     return contents, system_instruction
 
@@ -241,13 +544,7 @@ async def _call_native_provider(provider: dict, messages: list, max_tokens: int,
 
     client = _get_native_client(provider)
     contents, system_instruction = _convert_messages_to_native(messages)
-    thinking_mult = provider.get("thinking_overhead", 1)
-    capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
-
-    config_kwargs = {
-        "max_output_tokens": capped_tokens,
-        "temperature": temperature,
-    }
+    config_kwargs = _native_generation_config_kwargs(provider, max_tokens, temperature)
     if system_instruction:
         config_kwargs["system_instruction"] = system_instruction
 
@@ -267,6 +564,11 @@ async def _call_native_provider(provider: dict, messages: list, max_tokens: int,
                     ),
                     timeout=timeout,
                 )
+                if response.candidates:
+                    _raise_if_incomplete_finish(
+                        provider["name"],
+                        response.candidates[0].finish_reason,
+                    )
                 text = response.text
                 if text is None:
                     raise RuntimeError(f"Provider returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
@@ -303,6 +605,10 @@ async def _http_post(url: str, headers: dict, json: dict,
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                                 temperature: float, timeout: float) -> str:
     """调用单个 provider（含内部重试）。"""
+    if _messages_include_images(messages) and not provider.get("supports_images", False):
+        raise RuntimeError(
+            f"{provider['name']} provider_unsupported_media: image_url is not supported"
+        )
     if provider["api_format"] == "native_sdk":
         return await _call_native_provider(provider, messages, max_tokens, temperature, timeout)
 
@@ -334,7 +640,14 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                 last_err = e
                 status = e.response.status_code
                 if status == 400:
-                    raise
+                    body_text = ""
+                    try:
+                        body_text = e.response.text[:500]
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"{provider['name']} HTTP 400 Bad Request: {body_text}"
+                    ) from e
                 if status in (401, 403):
                     raise
                 if status in retryable and attempt < retries:
@@ -363,10 +676,51 @@ async def llm_call(
     max_tokens: int = 4096,
     temperature: float = 0,
     timeout: float = 120.0,
+    purpose: str | None = None,
+    model: str | None = None,
 ) -> str:
     """统一 LLM 调用入口，内置 fallback 链。"""
-    providers = get_providers()
+    _last_call_metadata.set({})
+    if _channel_requires_app_builder_generation():
+        try:
+            return await _call_app_builder_grounded_generation(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                purpose=purpose,
+                model=model,
+            )
+        except Exception as exc:
+            _last_call_metadata.set({
+                "status": "provider_failed",
+                "provider": "discovery_engine",
+                "model": None,
+                "review_channel": _review_channel.get(),
+                "purpose": purpose,
+                "model_role": None,
+                "model_policy": "exam-review-app-builder-grounded-generation",
+                "fallback_count": 0,
+                "provider_errors": [{
+                    "provider": "discovery_engine",
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                }],
+                "operation": "generate_grounded_content",
+            })
+            raise
+    providers = get_providers(purpose=purpose, model_override=model)
     if not providers:
+        _last_call_metadata.set({
+            "status": "provider_failed",
+            "provider": None,
+            "model": None,
+            "review_channel": _review_channel.get(),
+            "purpose": purpose,
+            "model_role": None,
+            "model_policy": None,
+            "fallback_count": 0,
+            "provider_errors": [{"provider": "none", "error_type": "ConfigError", "message": "no providers"}],
+        })
         raise AllProvidersFailed([("none", RuntimeError("无可用 LLM provider，请检查 API key 配置"))])
 
     errors = []
@@ -378,11 +732,29 @@ async def llm_call(
             if len(errors) > 0:
                 logger.info(f"[LLM] Fallback 成功: {provider['name']} "
                             f"(前 {len(errors)} 个 provider 失败)")
+            _last_call_metadata.set({
+                "status": "ok",
+                "provider": provider.get("name"),
+                "model": provider.get("model"),
+                "review_channel": _review_channel.get(),
+                "purpose": purpose or provider.get("purpose"),
+                "model_role": provider.get("model_role"),
+                "model_policy": provider.get("model_policy"),
+                "fallback_count": len(errors),
+                "provider_errors": _provider_error_summary(errors),
+            })
             return result
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status == 400:
-                raise
+                body_text = ""
+                try:
+                    body_text = e.response.text[:200]
+                except Exception:
+                    pass
+                logger.warning(f"[LLM] {provider['name']} 400: {body_text}")
+                errors.append((provider["name"], e))
+                continue
             if status == 403:
                 body_text = ""
                 try:
@@ -408,6 +780,17 @@ async def llm_call(
             errors.append((provider["name"], e))
             continue
 
+    _last_call_metadata.set({
+        "status": "provider_failed",
+        "provider": None,
+        "model": None,
+        "review_channel": _review_channel.get(),
+        "purpose": purpose,
+        "model_role": None,
+        "model_policy": None,
+        "fallback_count": len(errors),
+        "provider_errors": _provider_error_summary(errors),
+    })
     raise AllProvidersFailed(errors)
 
 
@@ -418,11 +801,14 @@ async def send_message_gpt(
     model: str = None,
     max_tokens: int = 512,
     temperature: float = 0,
+    purpose: str | None = None,
 ) -> str:
     return await llm_call(
         [{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         temperature=temperature,
+        purpose=purpose,
+        model=model,
     )
 
 
@@ -431,9 +817,10 @@ async def send_message(
     model: str = None,
     max_tokens: int = 256,
     temperature: float = 0.7,
+    purpose: str | None = None,
 ) -> str:
     return await send_message_gpt(prompt, model=model, max_tokens=max_tokens,
-                                  temperature=temperature)
+                                  temperature=temperature, purpose=purpose)
 
 
 async def send_message_with_image(
@@ -443,10 +830,17 @@ async def send_message_with_image(
     model: str = None,
     max_tokens: int = 256,
     temperature: float = 0.7,
+    purpose: str | None = None,
 ) -> str:
     messages = [{"role": "user", "content": [
         {"type": "image_url", "image_url": {
             "url": f"data:{media_type};base64,{image_base64}"}},
         {"type": "text", "text": prompt},
     ]}]
-    return await llm_call(messages, max_tokens=max_tokens, temperature=temperature)
+    return await llm_call(
+        messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        purpose=purpose,
+        model=model,
+    )

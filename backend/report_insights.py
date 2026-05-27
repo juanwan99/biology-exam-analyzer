@@ -5,30 +5,48 @@
 GPT 失败直接 raise，不降级。
 """
 import json
+import os
 import re
 from hashlib import sha256
-from llm_client import send_message_gpt
+from llm_client import send_message_gpt, get_last_llm_call_metadata as get_last_call_metadata
 from logger import get_logger
 from metadata_contracts import LLMCallRecord
 
 logger = get_logger()
 
 
+def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
+    metadata = dict(metadata or {})
+    try:
+        trace = get_last_call_metadata() or {}
+    except Exception:
+        trace = {}
+    provider = trace.get("provider") or "llm_client"
+    model = trace.get("model") or "configured_provider_chain"
+    fallback_count = int(trace.get("fallback_count") or 0)
+    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+        if trace.get(key) is not None:
+            metadata[key] = trace.get(key)
+    return provider, model, fallback_count, metadata
+
+
 def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
                  input_refs: dict, parsed_schema: str, confidence: float,
                  validation_errors: list = None, metadata: dict = None) -> dict:
+    provider, model, fallback_count, metadata = _llm_call_trace(metadata)
     call = LLMCallRecord(
         call_id=call_id,
         purpose=purpose,
         prompt_id=prompt_id,
         prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
-        provider="llm_client",
-        model="configured_provider_chain",
+        provider=provider,
+        model=model,
         input_refs=input_refs,
         parsed_schema=parsed_schema,
         confidence=confidence,
         validation_errors=validation_errors or [],
-        metadata=metadata or {},
+        fallback_count=fallback_count,
+        metadata=metadata,
     )
     return call.model_dump()
 
@@ -85,6 +103,12 @@ def _build_overall_prompt(data: dict) -> str:
 - LLM 调用计数: {json.dumps(metadata_quality.get('llm_call_counts', {}), ensure_ascii=False)}
 """
 
+    evidence_cards = _build_grounding_facts(data)
+    evidence_section = "\n".join(
+        f"- {fact.get('factText')}"
+        for fact in evidence_cards
+    )
+
     return f"""你是一名资深高中生物教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
 
 ## 试卷基本信息
@@ -113,6 +137,18 @@ def _build_overall_prompt(data: dict) -> str:
 
 {diag_section}
 {metadata_section}
+## Grounding Evidence Cards
+以下证据卡会用于 Discovery Engine Check Grounding。输出中的事实、数字和判断必须能被这些证据卡直接支撑。
+{evidence_section}
+
+## Grounding requirements
+- 每句只包含一个主要事实；需要同时表达多个事实时，用短句拆开。
+- 只使用上方数据中直接给出的数字、分布、题号和诊断结果。
+- 优先使用 Grounding Evidence Cards 中的原句、数字和术语。
+- 不要写“信度”“区分度”“质量良好”“有效区分”等未被上方数据直接证明的判断。
+- 如果要写建议，必须先指出对应数据依据，例如“简单题0题”“科学探究10.6%”。
+- 避免空泛评价，优先写可被 Check Grounding 逐句校验的事实句。
+
 请输出严格 JSON（不要多余解释）：
 {{
   "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
@@ -202,7 +238,677 @@ def _build_teaching_prompt(data: dict) -> str:
     )
 
 
-async def generate_insights(data: dict, mode: str = "brief") -> dict:
+def _grounding_enabled(value: bool | None) -> bool:
+    if value is not None:
+        return bool(value)
+    return os.environ.get("REPORT_GROUNDING_ENABLED", "").lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _build_grounding_answer(result: dict) -> str:
+    parts = [
+        result.get("overall_assessment", ""),
+        result.get("difficulty_analysis", ""),
+        result.get("knowledge_analysis", ""),
+        result.get("competency_analysis", ""),
+        result.get("bloom_analysis", ""),
+    ]
+    for rec in result.get("recommendations", []) or []:
+        if isinstance(rec, dict):
+            parts.append(str(rec.get("content", "")))
+        else:
+            parts.append(str(rec))
+    return "\n\n".join(part for part in parts if part)
+
+
+def _split_grounding_claims(text: str) -> list[str]:
+    raw_parts = []
+    for line in str(text or "").replace("\r", "\n").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = re.split(r"(?<=[。！？!?])\s*", line)
+        raw_parts.extend(part.strip() for part in parts if part.strip())
+    claims = []
+    antecedent = ""
+    for part in raw_parts:
+        part = _rewrite_rank_claim(part) or part
+        rewritten = _rewrite_antecedent_dependent_claim(part, antecedent)
+        if rewritten:
+            claims.append(rewritten)
+            antecedent = _extract_grounding_antecedent(rewritten) or antecedent
+            continue
+        claims.append(part)
+        antecedent = _extract_grounding_antecedent(part) or antecedent
+    return claims
+
+
+def _rewrite_rank_claim(claim: str) -> str:
+    claim = str(claim or "").strip()
+    if not claim:
+        return ""
+    tail = "。" if claim.endswith("。") else ""
+    match = re.match(r"^权重最高的知识点为(?P<name>[^。！？!?]+)[。！？!?]?$", claim)
+    if match:
+        return f"最高权重知识点为{match.group('name').strip()}{tail or '。'}"
+    match = re.match(r"^其次[为是](?P<name>[^。！？!?]+)[。！？!?]?$", claim)
+    if match:
+        return f"第二高权重知识点为{match.group('name').strip()}{tail or '。'}"
+    return ""
+
+
+def _extract_grounding_antecedent(claim: str) -> str:
+    claim = str(claim or "").strip()
+    patterns = (
+        r"^最高权重知识点为(?P<name>[^。！？!?]+)[。！？!?]?$",
+        r"^第二高权重知识点为(?P<name>[^。！？!?]+)[。！？!?]?$",
+        r"^权重最高的知识点为(?P<name>[^。！？!?]+)[。！？!?]?$",
+        r"^其次为(?P<name>[^。！？!?]+)[。！？!?]?$",
+        r"^其次是(?P<name>[^。！？!?]+)[。！？!?]?$",
+        r"^(?P<name>[^。！？!?]{2,80})加权分值为",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, claim)
+        if match:
+            return match.group("name").strip()
+    return ""
+
+
+def _rewrite_antecedent_dependent_claim(claim: str, antecedent: str) -> str:
+    claim = str(claim or "").strip()
+    antecedent = str(antecedent or "").strip()
+    if not claim or not antecedent:
+        return ""
+    match = re.match(r"^其加权分值为(?P<score>[\d.]+)(?P<tail>[。！？!?]?)$", claim)
+    if match:
+        tail = match.group("tail") or "。"
+        return f"{antecedent}加权分值为{match.group('score')}{tail}"
+    match = re.match(r"^其(?P<body>(?:占比|难度|分值|题数|数量|比例).+)$", claim)
+    if match:
+        body = match.group("body")
+        return f"{antecedent}{body}"
+    return ""
+
+
+_POLICY_MARKERS = (
+    "建议", "应", "应该", "需要", "需", "复核", "控制", "增加", "降低", "补充",
+)
+
+
+def _has_groundable_signal(text: str) -> bool:
+    text = str(text or "")
+    if re.search(r"\d|%|％", text):
+        return True
+    signals = (
+        "占比", "题", "分值", "难度", "层级", "最高", "最低", "低于", "高于",
+        "包含", "缺失", "分布", "均衡度", "贡献最大", "简单", "中等", "困难",
+    )
+    return any(signal in text for signal in signals)
+
+
+def _strip_grounding_category_prefix(text: str) -> str:
+    text = str(text or "").strip()
+    for sep in (":", "："):
+        if sep in text:
+            left, right = text.split(sep, 1)
+            if right.strip() and (
+                not _has_groundable_signal(left)
+                or (len(left.strip()) <= 8 and _has_groundable_signal(right))
+            ):
+                return right.strip()
+    return text
+
+
+def _extract_policy_basis(text: str) -> str:
+    """Return the factual trigger behind a recommendation/policy sentence.
+
+    Discovery Check Grounding is unstable for imperative sentences such as
+    "建议增加简单题"; those are policy conclusions, not factual claims.  The
+    gate should therefore verify the data trigger ("简单题为0题") and keep the
+    recommendation policy explicit in evidence cards instead of asking the
+    grounding API to score a pure directive.
+    """
+    text = _strip_grounding_category_prefix(str(text or "").strip())
+    marker_positions = [
+        text.find(marker)
+        for marker in _POLICY_MARKERS
+        if text.find(marker) > 0
+    ]
+    if not marker_positions:
+        return ""
+    basis = text[:min(marker_positions)].strip(" ，,；;。")
+    basis = _strip_grounding_category_prefix(basis)
+    if not _has_groundable_signal(basis):
+        return ""
+    return basis if basis.endswith(("。", "！", "？", ".", "!", "?")) else basis + "。"
+
+
+def _is_policy_only_claim(text: str) -> bool:
+    text = str(text or "").strip()
+    if not text:
+        return False
+    has_marker = any(marker in text for marker in _POLICY_MARKERS)
+    return has_marker and not _extract_policy_basis(text)
+
+
+def _build_grounding_sections(result: dict) -> list[dict]:
+    sections = []
+    for key in (
+        "overall_assessment",
+        "difficulty_analysis",
+        "knowledge_analysis",
+        "competency_analysis",
+        "bloom_analysis",
+    ):
+        text = str(result.get(key) or "").strip()
+        if text:
+            claims = _split_grounding_claims(text)
+            if len(claims) <= 1:
+                basis = _extract_policy_basis(text)
+                if basis:
+                    sections.append({"section": key, "answer": basis, "kind": "policy_basis"})
+                elif not _is_policy_only_claim(text):
+                    sections.append({"section": key, "answer": text, "kind": "fact"})
+            else:
+                for index, claim in enumerate(claims, 1):
+                    basis = _extract_policy_basis(claim)
+                    if basis:
+                        sections.append({
+                            "section": f"{key}#{index}",
+                            "answer": basis,
+                            "kind": "policy_basis",
+                            "policy_text": claim,
+                        })
+                    elif not _is_policy_only_claim(claim):
+                        sections.append({
+                            "section": f"{key}#{index}",
+                            "answer": claim,
+                            "kind": "fact",
+                        })
+    recommendation_parts = []
+    for rec in result.get("recommendations", []) or []:
+        if isinstance(rec, dict):
+            content = str(rec.get("content", "")).strip()
+            category = str(rec.get("category", "")).strip()
+            if content:
+                recommendation_parts.append(
+                    f"{category}: {content}" if category else content
+                )
+        else:
+            text = str(rec).strip()
+            if text:
+                recommendation_parts.append(text)
+    if recommendation_parts:
+        for index, part in enumerate(recommendation_parts, 1):
+            basis = _extract_policy_basis(part)
+            answer = basis or part
+            sections.append({
+                "section": f"recommendations#{index}" if len(recommendation_parts) > 1 else "recommendations",
+                "answer": answer,
+                "kind": "policy_basis" if basis else "fact",
+                "policy_text": part if basis else "",
+            })
+    return sections
+
+
+def _build_grounding_facts(data: dict) -> list[dict]:
+    facts = []
+
+    def add_fact(source: str, text: str, **attrs) -> None:
+        text = str(text or "").strip()
+        if not text:
+            return
+        if len(text) > 1200:
+            text = text[:1197] + "..."
+        facts.append({
+            "factText": text,
+            "attributes": {"source": source, **attrs},
+        })
+
+    def compact_json(value) -> str:
+        return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+    def pct(value) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if 0 <= number <= 1:
+            number *= 100
+        return f"{number:.1f}%"
+
+    def number_text(value) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+
+    exam_info = data.get("exam_info") or {}
+    if exam_info:
+        add_fact(
+            "report.evidence_card.exam_info",
+            "exam_info: "
+            f"名称={exam_info.get('name')}; "
+            f"题目数={exam_info.get('total_questions')}; "
+            f"总分={exam_info.get('total_score')}; "
+            f"模式={exam_info.get('mode')}",
+        )
+
+    metrics = data.get("metrics", {}) or {}
+    gradient = data.get("difficulty_gradient") or {}
+    diagnostics = data.get("diagnostics") or {}
+    gradient_diag = diagnostics.get("gradient") or {}
+    spread_diag = diagnostics.get("difficulty_spread") or {}
+    competency_diag = diagnostics.get("competency_balance") or {}
+    if metrics or diagnostics:
+        add_fact(
+            "report.evidence_card.overall",
+            "overall_evidence: "
+            f"题目数={exam_info.get('total_questions')}；"
+            f"总分={exam_info.get('total_score')}；"
+            f"综合评价={diagnostics.get('overall_rating')}；"
+            f"平均难度={metrics.get('avg_difficulty')}；"
+            f"平均认知层级={metrics.get('avg_cognitive_level')}；"
+            f"难度离散度={spread_diag.get('spread_level')}；"
+            f"素养均衡度={competency_diag.get('balance')}。",
+        )
+    curve = data.get("difficulty_curve") or []
+    top_difficulty = []
+    if isinstance(curve, list):
+        top_difficulty = [
+            {
+                "id": item.get("id") or item.get("question_id"),
+                "difficulty": item.get("difficulty"),
+                "score": item.get("total_score"),
+            }
+            for item in sorted(
+                [row for row in curve if isinstance(row, dict)],
+                key=lambda row: float(row.get("difficulty") or 0),
+                reverse=True,
+            )[:10]
+        ]
+    diff_distribution = metrics.get("difficulty_distribution") or {}
+    diff_by_score = metrics.get("difficulty_distribution_by_score") or {}
+    by_score_text = "、".join(
+        f"{name}{pct((item or {}).get('percentage'))}"
+        for name, item in diff_by_score.items()
+        if isinstance(item, dict)
+    )
+    top_difficulty_text = "、".join(
+        f"Q{item.get('id')} 难度{item.get('difficulty')} 分值{item.get('score')}"
+        for item in top_difficulty
+        if item.get("id")
+    )
+    add_fact(
+        "report.evidence_card.difficulty",
+        "difficulty_evidence: "
+        f"avg_difficulty={metrics.get('avg_difficulty')}，"
+        f"难度分布为简单{diff_distribution.get('简单', 0)}题、"
+        f"中等{diff_distribution.get('中等', 0)}题、"
+        f"困难{diff_distribution.get('困难', 0)}题；"
+        f"按分值占比为{by_score_text}；"
+        f"difficulty_gradient=前段{gradient.get('front')}、"
+        f"中段{gradient.get('middle')}、后段{gradient.get('back')}，"
+        f"类型={gradient.get('gradient_type')}；"
+        f"难度梯度评级={gradient_diag.get('rating')}，"
+        f"偏差值={gradient_diag.get('deviation')}，"
+        f"理想分布={compact_json(gradient_diag.get('ideal') or {})}；"
+        f"难度离散度={spread_diag.get('spread_level')}，"
+        f"标准差={spread_diag.get('difficulty_stdev')}，"
+        f"极差={spread_diag.get('difficulty_range')}；"
+        f"高难题={top_difficulty_text}。",
+    )
+    bloom_distribution = metrics.get("bloom_distribution") or {}
+    high_order = sum(
+        float(bloom_distribution.get(key) or 0)
+        for key in ("分析", "评价", "创造")
+    )
+    bloom_rank = sorted(
+        bloom_distribution.items(),
+        key=lambda item: float(item[1] or 0),
+        reverse=True,
+    )
+    bloom_highest = bloom_rank[0][0] if bloom_rank else ""
+    bloom_lowest = bloom_rank[-1][0] if bloom_rank else ""
+    add_fact(
+        "report.evidence_card.bloom",
+        "bloom_evidence: "
+        f"avg_cognitive_level={metrics.get('avg_cognitive_level')}；"
+        f"识记层级占比为{number_text(bloom_distribution.get('识记', 0))}（{pct(bloom_distribution.get('识记', 0))}）；"
+        f"理解层级占比为{number_text(bloom_distribution.get('理解', 0))}（{pct(bloom_distribution.get('理解', 0))}）；"
+        f"应用层级占比为{number_text(bloom_distribution.get('应用', 0))}（{pct(bloom_distribution.get('应用', 0))}）；"
+        f"分析层级占比为{number_text(bloom_distribution.get('分析', 0))}（{pct(bloom_distribution.get('分析', 0))}）；"
+        f"评价层级占比为{number_text(bloom_distribution.get('评价', 0))}（{pct(bloom_distribution.get('评价', 0))}）；"
+        f"创造层级占比为{number_text(bloom_distribution.get('创造', 0))}（{pct(bloom_distribution.get('创造', 0))}）；"
+        f"bloom_distribution_raw={compact_json(bloom_distribution)}；"
+        f"高阶思维占比={pct(high_order)}；"
+        f"{bloom_highest}层级占比最高；{bloom_lowest}层级占比最低。",
+    )
+
+    knowledge = data.get("knowledge") or {}
+    top_points = []
+    for point in (knowledge.get("top_points") or [])[:12]:
+        if isinstance(point, dict):
+            top_points.append({
+                "name": point.get("name"),
+                "weighted_score": point.get("weighted_score"),
+                "question_count": point.get("question_count") or point.get("count"),
+            })
+    textbook_distribution = knowledge.get("textbook_distribution") or {}
+    top_points_text = "、".join(
+        f"{item.get('name')} 加权{item.get('weighted_score')}"
+        for item in top_points
+        if item.get("name")
+    )
+    knowledge_rank_labels = (
+        "最高权重知识点",
+        "第二高权重知识点",
+        "第三高权重知识点",
+        "第四高权重知识点",
+        "第五高权重知识点",
+        "第六高权重知识点",
+    )
+    knowledge_detail_parts = []
+    for index, item in enumerate(top_points[:6]):
+        name = item.get("name")
+        if not name:
+            continue
+        rank_label = knowledge_rank_labels[index] if index < len(knowledge_rank_labels) else f"第{index + 1}高权重知识点"
+        score = item.get("weighted_score")
+        count = item.get("question_count")
+        knowledge_detail_parts.append(f"{rank_label}为{name}")
+        if score is not None:
+            knowledge_detail_parts.append(f"{name}加权分值为{score}")
+        if count is not None:
+            knowledge_detail_parts.append(f"{name}涉及题数为{count}")
+    textbook_text = "、".join(
+        f"{name} {pct((value or {}).get('percentage'))}"
+        for name, value in textbook_distribution.items()
+        if isinstance(value, dict)
+    )
+    add_fact(
+        "report.evidence_card.knowledge",
+        "knowledge_evidence: "
+        f"top_points={top_points_text}；"
+        f"textbook_distribution={textbook_text}。",
+    )
+    if knowledge_detail_parts:
+        add_fact(
+            "report.evidence_card.knowledge_detail",
+            "knowledge_detail_evidence: " + "；".join(knowledge_detail_parts) + "。",
+        )
+
+    competency = data.get("competency") or {}
+    comp_distribution = competency.get("distribution") or {}
+    comp_text_parts = []
+    subtype_parts = []
+    primary_distribution = competency.get("primary_distribution") or {}
+    comp_rank = []
+    for name, value in comp_distribution.items():
+        if not isinstance(value, dict):
+            continue
+        if "占比" not in value and "ratio" not in value:
+            continue
+        ratio = value.get("占比") or value.get("ratio")
+        try:
+            comp_rank.append((name, float(ratio or 0)))
+        except (TypeError, ValueError):
+            pass
+        comp_text_parts.append(
+            f"{name}占比为{number_text(ratio)}（{pct(ratio)}）"
+        )
+        subtypes = value.get("细分") or {}
+        if isinstance(subtypes, dict) and subtypes:
+            subtype_parts.extend(
+                f"{name}中{sub}包含{count}题"
+                for sub, count in subtypes.items()
+            )
+    missing_competency = competency_diag.get("missing") or []
+    missing_text = "空" if not missing_competency else "、".join(map(str, missing_competency))
+    primary_parts = [
+        f"主要素养分布中{name}为{count}题"
+        for name, count in primary_distribution.items()
+    ]
+    comp_rank.sort(key=lambda item: item[1], reverse=True)
+    comp_extreme_text = ""
+    if comp_rank:
+        highest_name, highest_ratio = comp_rank[0]
+        lowest_name, lowest_ratio = comp_rank[-1]
+        comp_extreme_text = (
+            f"{highest_name}占比最高，为{pct(highest_ratio)}；"
+            f"{lowest_name}占比最低，为{pct(lowest_ratio)}；"
+        )
+    add_fact(
+        "report.evidence_card.competency",
+        "competency_evidence: "
+        f"素养均衡度={competency_diag.get('balance')}；"
+        f"方差={competency_diag.get('variance')}；"
+        f"缺失素养={missing_text}；"
+        f"{comp_extreme_text}"
+        f"{'；'.join(comp_text_parts)}；"
+        f"{'；'.join(primary_parts)}；"
+        f"{'；'.join(subtype_parts)}。",
+    )
+
+    feature_profile = data.get("feature_profile") or {}
+    avg_dims = feature_profile.get("avg_per_dimension") or {}
+    avg_dims_text = ", ".join(
+        f"{name}={value}" for name, value in avg_dims.items()
+    )
+    factor_aliases = {
+        "bloom": "\u8ba4\u77e5\u5c42\u7ea7",
+        "reasoning_steps": "\u63a8\u7406\u6b65\u9aa4",
+        "knowledge_breadth": "\u77e5\u8bc6\u5e7f\u5ea6",
+        "working_memory": "\u5de5\u4f5c\u8bb0\u5fc6",
+        "info_density": "\u4fe1\u606f\u5bc6\u5ea6",
+        "representation_complexity": "\u8868\u5f81\u590d\u6742\u5ea6",
+        "trap_density": "\u9677\u9631\u5bc6\u5ea6",
+        "novelty": "\u60c5\u5883\u65b0\u9896\u5ea6",
+        "chain_coupling": "\u94fe\u5f0f\u8026\u5408",
+    }
+    top_factors = feature_profile.get("top_difficulty_factors") or []
+    top_factor_alias_text = ", ".join(
+        f"{factor_aliases.get(str(factor), str(factor))}({factor})"
+        for factor in top_factors
+    )
+    top_factor_names_text = "、".join(
+        factor_aliases.get(str(factor), str(factor))
+        for factor in top_factors
+    )
+    add_fact(
+        "report.evidence_card.feature_profile",
+        "feature_profile_evidence: "
+        f"avg_per_dimension={avg_dims_text}；"
+        f"对难度贡献最大的维度包含{top_factor_names_text}；"
+        f"top_difficulty_factors={compact_json(top_factors)}; "
+        f"top_difficulty_factor_aliases={top_factor_alias_text}",
+    )
+
+    add_fact(
+        "report.evidence_card.summary",
+        "summary_evidence: "
+        f"exam_name={exam_info.get('name')}; "
+        f"question_count={exam_info.get('total_questions')}; "
+        f"total_score={exam_info.get('total_score')}; "
+        f"avg_difficulty={metrics.get('avg_difficulty')}; "
+        f"avg_cognitive_level={metrics.get('avg_cognitive_level')}; "
+        f"high_order_share={pct(high_order)}; "
+        f"top_difficulty_factors={compact_json(feature_profile.get('top_difficulty_factors') or [])}; "
+        f"difficulty_gradient_back={gradient.get('back')}; "
+        f"difficulty_gradient_type={gradient.get('gradient_type')}",
+    )
+
+    add_fact(
+        "report.evidence_card.recommendation_basis",
+        "recommendation_basis: "
+        f"difficulty_distribution={compact_json(diff_distribution)}; "
+        f"difficulty_distribution_by_score={by_score_text}; "
+        f"hard_questions={top_difficulty_text}; "
+        f"primary_distribution={compact_json(primary_distribution)}; "
+        f"competency_distribution={' | '.join(comp_text_parts)}; "
+        f"bloom_lowest={bloom_lowest}; "
+        f"bloom_distribution={compact_json(bloom_distribution)}; "
+        f"textbook_distribution={textbook_text}",
+    )
+
+    def _distribution_value_by_label(mapping: dict, labels: tuple[str, ...], field: str | None = None):
+        if not isinstance(mapping, dict):
+            return None
+        lowered_labels = tuple(label.lower() for label in labels)
+        for name, value in mapping.items():
+            name_text = str(name).lower()
+            if not any(label in name_text for label in lowered_labels):
+                continue
+            if field and isinstance(value, dict):
+                return value.get(field)
+            return value
+        return None
+
+    def _float_or(value, default: float | None = None) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    hard_score_share = _distribution_value_by_label(
+        diff_by_score,
+        ("\u56f0\u96be", "hard"),
+        "percentage",
+    )
+    easy_score_share = _distribution_value_by_label(
+        diff_by_score,
+        ("\u7b80\u5355", "easy"),
+        "percentage",
+    )
+    hard_count = _distribution_value_by_label(
+        diff_distribution,
+        ("\u56f0\u96be", "hard"),
+    )
+    easy_count = _distribution_value_by_label(
+        diff_distribution,
+        ("\u7b80\u5355", "easy"),
+    )
+    zero_primary = [
+        str(name)
+        for name, count in primary_distribution.items()
+        if _float_or(count, None) == 0
+    ]
+    low_textbook = [
+        str(name)
+        for name, value in textbook_distribution.items()
+        if isinstance(value, dict)
+        and _float_or(value.get("percentage"), 1.0) < 0.15
+    ]
+    add_fact(
+        "report.evidence_card.recommendation_policy",
+        "recommendation_policy: "
+        f"hard_score_share={pct(hard_score_share)}; "
+        f"hard_count={hard_count}; "
+        f"easy_score_share={pct(easy_score_share)}; "
+        f"easy_count={easy_count}; "
+        f"zero_primary_competencies={compact_json(zero_primary)}; "
+        f"bloom_lowest={bloom_lowest}; "
+        f"low_textbook_modules={compact_json(low_textbook)}; "
+        "\u82e5\u56f0\u96be\u9898\u5206\u503c\u5360\u6bd4\u9ad8\u4e8e55%\uff0c"
+        "\u5efa\u8bae\u964d\u4f4e\u56f0\u96be\u9898\u6bd4\u4f8b\u6216\u589e\u52a0\u4f4e\u95e8\u69db\u9898; "
+        "\u82e5\u7b80\u5355\u9898\u4e0d\u8db32\u9898\u6216\u7b80\u5355\u9898\u5206\u503c\u5360\u6bd4\u4f4e\u4e8e10%\uff0c"
+        "\u5efa\u8bae\u589e\u52a0\u7b80\u5355\u9898\u6216\u57fa\u7840\u9898; "
+        "\u82e5\u67d0\u4e00\u4e3b\u8981\u7d20\u517b\u4e3a0\u9898\uff0c"
+        "\u5efa\u8bae\u589e\u52a0\u4ee5\u8be5\u7d20\u517b\u4e3a\u4e3b\u7684\u9898\u76ee; "
+        "\u82e5\u67d0\u8ba4\u77e5\u5c42\u7ea7\u5360\u6bd4\u6700\u4f4e\uff0c"
+        "\u5efa\u8bae\u590d\u6838\u662f\u5426\u9700\u8981\u8865\u5145\u8be5\u5c42\u7ea7; "
+        "\u82e5\u67d0\u6559\u6750\u6a21\u5757\u5360\u6bd4\u4f4e\u4e8e15%\uff0c"
+        "\u5efa\u8bae\u6839\u636e\u8bfe\u7a0b\u8981\u6c42\u590d\u6838\u8986\u76d6\u662f\u5426\u8db3\u591f\u3002",
+    )
+
+    if diagnostics:
+        add_fact(
+            "report.evidence_card.diagnostics",
+            "diagnostics_evidence: "
+            f"overall_rating={diagnostics.get('overall_rating')}；"
+            f"gradient_rating={gradient_diag.get('rating')}，"
+            f"deviation={gradient_diag.get('deviation')}；"
+            f"competency_balance={competency_diag.get('balance')}；"
+            f"difficulty_spread={spread_diag.get('spread_level')}，"
+            f"stdev={spread_diag.get('difficulty_stdev')}。",
+        )
+
+    metadata_quality = data.get("metadata_quality") or {}
+    if metadata_quality:
+        add_fact(
+            "report.evidence_card.metadata_quality",
+            "metadata_quality_evidence: "
+            f"blocked_questions={compact_json(metadata_quality.get('blocked_questions') or [])}; "
+            f"warning_questions={compact_json(metadata_quality.get('warning_questions') or [])}; "
+            f"evidence_gap_questions={compact_json(metadata_quality.get('evidence_gap_questions') or [])}; "
+            f"score_issue_questions={compact_json(metadata_quality.get('score_issue_questions') or [])}; "
+            f"failure_events={compact_json(metadata_quality.get('failure_events') or [])}",
+        )
+
+    return facts
+
+
+async def _run_grounding_check(
+    *,
+    result: dict,
+    data: dict,
+    evidence_gateway,
+) -> dict:
+    sections = _build_grounding_sections(result)
+    facts = _build_grounding_facts(data)
+    checks = []
+    threshold = float(os.environ.get("REPORT_GROUNDING_MIN_SUPPORT", "0.6"))
+    citation_threshold = float(os.environ.get("REPORT_GROUNDING_CITATION_THRESHOLD", "0.6"))
+    for section in sections:
+        check = await evidence_gateway.check_grounding(
+            answer=section["answer"],
+            facts=facts,
+            min_support=threshold,
+            citation_threshold=citation_threshold,
+        )
+        check["section"] = section["section"]
+        metadata = check.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["section"] = section["section"]
+            metadata["section_kind"] = section.get("kind", "fact")
+            if section.get("policy_text"):
+                metadata["policy_text"] = section["policy_text"]
+        checks.append(check)
+
+    if not checks:
+        raise RuntimeError("grounding sections are empty")
+    scores = [
+        float(check.get("support_score") or 0.0)
+        for check in checks
+    ]
+    aggregate = {
+        "status": "ok" if all(check.get("status") == "ok" for check in checks) else "needs_review",
+        "support_score": min(scores),
+        "threshold": threshold,
+        "section_count": len(checks),
+        "checks": checks,
+        "metadata": {
+            "provider": "discovery_engine",
+            "operation": "check_grounding",
+            "fact_count": len(facts),
+            "citation_threshold": citation_threshold,
+            "section_count": len(checks),
+        },
+    }
+    result["_grounding_checks"] = checks
+    result["_grounding_status"] = aggregate["status"]
+    return aggregate
+
+
+async def generate_insights(
+    data: dict,
+    mode: str = "brief",
+    *,
+    evidence_gateway=None,
+    grounding_enabled: bool | None = None,
+) -> dict:
     """生成 LLM 综合分析。
 
     Args:
@@ -231,7 +937,8 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
         overall_text = await send_message_gpt(
             prompt=overall_prompt,
             max_tokens=2000,
-            temperature=0.3,
+            temperature=0.0,
+            purpose="report_insights",
         )
         result = _parse_json_response(overall_text)
         from llm_schemas import validate_llm_output, InsightsResult
@@ -250,6 +957,37 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
             metadata={"response_length": len(overall_text)},
         ))
         logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议 (confidence={ext_conf})")
+
+        if _grounding_enabled(grounding_enabled):
+            if evidence_gateway is None:
+                from services.evidence_gateway import EvidenceGateway
+                evidence_gateway = EvidenceGateway()
+            try:
+                grounding_check = await _run_grounding_check(
+                    result=result,
+                    data=data,
+                    evidence_gateway=evidence_gateway,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"整卷证据校验失败（Discovery Engine Check Grounding）: {exc}"
+                ) from exc
+            llm_calls.append(_call_record(
+                call_id="report-overall-grounding",
+                purpose="report_grounding_check",
+                prompt_id="biology.report_insights.grounding",
+                prompt=_build_grounding_answer(result),
+                input_refs={
+                    **input_refs,
+                    "fact_count": len(_build_grounding_facts(data)),
+                },
+                parsed_schema="GroundingCheck",
+                confidence=float(grounding_check.get("support_score", 0.0) or 0.0),
+                validation_errors=[] if grounding_check.get("status") == "ok" else [
+                    f"grounding_status={grounding_check.get('status')}"
+                ],
+                metadata=grounding_check.get("metadata", {}),
+            ))
 
         # 逐题点评和质量审查已移入 feature_extractor（v3 合并优化）
         # 从 report_data 的 questions 中提取 teacher_comment
@@ -270,34 +1008,25 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
             teaching_text = await send_message_gpt(
                 prompt=teaching_prompt,
                 max_tokens=2048,
-                temperature=0.3,
+                temperature=0.0,
+                purpose="report_teaching_suggestions",
             )
             teaching = _parse_json_response(teaching_text)
-            llm_calls.append(_call_record(
-                call_id="report-teaching-suggestions",
-                purpose="report_teaching_suggestions",
-                prompt_id="biology.report_teaching_suggestions",
-                prompt=teaching_prompt,
-                input_refs=input_refs,
-                parsed_schema="TeachingSuggestions",
-                confidence=1.0,
-                metadata={"response_length": len(teaching_text)},
-            ))
-            logger.info(f"[LLM分析] 教学建议生成完成")
         except Exception as e:
-            logger.warning(f"[LLM分析] 教学建议生成失败: {e}")
-            teaching = {"error_categories": [], "lecture_outline": [], "remedial_exercises": []}
-            llm_calls.append(_call_record(
-                call_id="report-teaching-suggestions",
-                purpose="report_teaching_suggestions",
-                prompt_id="biology.report_teaching_suggestions",
-                prompt=teaching_prompt,
-                input_refs=input_refs,
-                parsed_schema="TeachingSuggestions",
-                confidence=0.0,
-                validation_errors=[str(e)],
-                metadata={"fallback": "empty_teaching_suggestions"},
-            ))
+            raise RuntimeError(
+                f"教学建议生成失败（report_teaching_suggestions）: {e}"
+            ) from e
+        llm_calls.append(_call_record(
+            call_id="report-teaching-suggestions",
+            purpose="report_teaching_suggestions",
+            prompt_id="biology.report_teaching_suggestions",
+            prompt=teaching_prompt,
+            input_refs=input_refs,
+            parsed_schema="TeachingSuggestions",
+            confidence=1.0,
+            metadata={"response_length": len(teaching_text)},
+        ))
+        logger.info(f"[LLM分析] 教学建议生成完成")
 
         result["teaching_suggestions"] = teaching
         result["_llm_calls"] = llm_calls
@@ -306,10 +1035,11 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
 
     except Exception as e:
         logger.error(f"[LLM分析] 失败，不使用静默降级: {e}", exc_info=True)
-        raise RuntimeError("LLM 分析生成失败") from e
+        raise RuntimeError(f"LLM 分析生成失败: {e}") from e
 
 
 def _build_fallback_insights(data: dict) -> dict:
+    raise RuntimeError("legacy report-insights fallback is disabled; use LLM output or fail closed")
     """数据驱动的降级建议（不依赖 LLM）"""
     recs = []
     metrics = data.get("metrics", {})

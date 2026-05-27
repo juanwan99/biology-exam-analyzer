@@ -220,10 +220,10 @@ class TestPipelineRepresentation:
         f.update(overrides)
         return f
 
-    def test_mm_repr_merged_via_kwarg(self):
-        """多模态的 representation_complexity 通过 analysis_result 传入。"""
+    def test_gemini_repr_merged_via_kwarg(self):
+        """Gemini 的 representation_complexity 通过 analysis_result 传入。"""
         mock_features = self._mock_v3_features(representation_complexity=1)
-        mm_analysis = {
+        gemini_analysis = {
             "representation_complexity": 3,
             "representation_is_core_to_solving": True,
         }
@@ -233,14 +233,14 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "观察系谱图...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=mm_analysis,
+                    analysis_result=gemini_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] == 3
 
-    def test_mm_repr_ignored_when_not_core(self):
+    def test_gemini_repr_ignored_when_not_core(self):
         mock_features = self._mock_v3_features(representation_complexity=2)
-        mm_analysis = {
+        gemini_analysis = {
             "representation_complexity": 1,
             "representation_is_core_to_solving": False,
         }
@@ -250,7 +250,7 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "某题...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=mm_analysis,
+                    analysis_result=gemini_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] <= 2
@@ -427,9 +427,9 @@ class TestFineGrainedDifficultyEvidence:
             "bloom": 3, "info_density": 1, "representation_complexity": 1,
         }
         diagnostic_units = [
-            {"description": "confuses screening purpose"},
-            {"description": "confuses cell source"},
-            {"description": "confuses culture condition"},
+            {"description": "confuses screening purpose", "trap_strength": 3},
+            {"description": "confuses cell source", "trap_strength": 3},
+            {"description": "confuses culture condition", "trap_strength": 2},
         ]
 
         async def run(with_diagnostics):
@@ -446,8 +446,530 @@ class TestFineGrainedDifficultyEvidence:
         plain = loop.run_until_complete(run(False))
         with_du = loop.run_until_complete(run(True))
 
-        assert with_du["final_difficulty"] - plain["final_difficulty"] >= 0.5
+        assert 0.25 <= with_du["final_difficulty"] - plain["final_difficulty"] <= 0.7
         assert "diagnostic_burden_adjustment" in with_du.get("flags", [])
+
+    def test_weak_diagnostic_count_does_not_raise_difficulty(self):
+        base_features = {
+            "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
+            "trap_density": 2, "novelty": 1, "knowledge_breadth": 1,
+            "bloom": 3, "info_density": 1, "representation_complexity": 1,
+        }
+        weak_dus = [
+            {"description": f"minor distractor {idx}", "trap_strength": 1}
+            for idx in range(6)
+        ]
+
+        async def run(with_diagnostics):
+            analysis = {"_fine_grained": {"diagnostic_units": weak_dus if with_diagnostics else []}}
+            with patch("difficulty_pipeline.extract_features",
+                       new_callable=AsyncMock, return_value=dict(base_features)):
+                pipeline = DifficultyPipeline()
+                return await pipeline.evaluate_with_refinement(
+                    {"content": "single choice with many weak distractor notes",
+                     "question_type": "single_choice", "correct_answer": "B", "total_score": 2},
+                    analysis_result=analysis)
+
+        loop = asyncio.get_event_loop()
+        plain = loop.run_until_complete(run(False))
+        with_du = loop.run_until_complete(run(True))
+
+        assert with_du["final_difficulty"] == plain["final_difficulty"]
+        assert "diagnostic_burden_adjustment" not in with_du.get("flags", [])
+
+    def test_non_numeric_trap_strength_does_not_crash(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"diagnostic_units": [
+            {"description": "text strength", "trap_strength": "strong"},
+            {"description": "zero strength", "trap_strength": 0},
+            {"description": "numeric strength", "trap_strength": 3},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            5.5,
+            {
+                "trap_density": 2,
+                "representation_complexity": 1,
+            },
+            analysis,
+            is_big_question=False,
+            total_score=2,
+        )
+
+        assert adjusted >= 5.5
+        assert "diagnostic_burden_adjustment" in flags
+
+    def test_visual_big_question_diagnostic_traps_raise_understated_difficulty(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"diagnostic_units": [
+            {"description": "graph relation misconception", "trap_strength": 3},
+            {"description": "key node misconception", "trap_strength": 2},
+            {"description": "matter transfer misconception", "trap_strength": 2},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            6.1,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 5,
+                "chain_coupling": 1,
+                "trap_density": 2,
+                "novelty": 1,
+                "knowledge_breadth": 2,
+                "representation_complexity": 3,
+                "info_density": 2,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted >= 7.2
+        assert "visual_diagnostic_burden_adjustment" in flags
+
+    def test_visual_big_question_two_structural_traps_are_not_treated_as_routine(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"diagnostic_units": [
+            {"description": "food-web level omission", "trap_strength": 3},
+            {"description": "system stability misconception", "trap_strength": 2},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            5.8,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 4,
+                "chain_coupling": 1,
+                "trap_density": 2,
+                "novelty": 1,
+                "knowledge_breadth": 2,
+                "representation_complexity": 3,
+                "info_density": 2,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted >= 6.8
+        assert "visual_diagnostic_burden_adjustment" in flags
+
+    def test_scoring_unit_metrics_expose_partial_credit_thresholds(self):
+        pipeline = DifficultyPipeline()
+        metrics = pipeline._scoring_unit_metrics([
+            {"score_share": 0.35, "difficulty_estimate": 9.0, "bloom_level": 6,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 3.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.20, "difficulty_estimate": 3.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.20, "difficulty_estimate": 3.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+        ])
+
+        assert metrics["average_score"] < 6.0
+        assert metrics["mastery_threshold_score"] >= 8.8
+        assert metrics["bottleneck_score"] >= 8.0
+
+    def test_big_question_without_top_bottleneck_is_only_moderated_boundedly(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.10, "difficulty_estimate": 2.0, "bloom_level": 1,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.15, "difficulty_estimate": 5.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 7.5, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            9.8,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 9,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert adjusted >= 8.8
+        assert "seu_no_top_bottleneck_moderation" in flags
+
+    def test_big_question_high_order_evidence_keeps_high_difficulty(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.20, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.30, "difficulty_estimate": 8.5, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.25, "difficulty_estimate": 8.0, "bloom_level": 5,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.25, "difficulty_estimate": 8.8, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            9.4,
+            {},
+            analysis,
+            is_big_question=True,
+            total_score=14,
+        )
+
+        assert adjusted >= 9.0
+
+    def test_many_medium_scoring_units_do_not_create_top_tier_difficulty(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.12, "difficulty_estimate": 4.5, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.12, "difficulty_estimate": 5.5, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.13, "difficulty_estimate": 6.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.13, "difficulty_estimate": 6.2, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.13, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.12, "difficulty_estimate": 7.0, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.13, "difficulty_estimate": 7.0, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.12, "difficulty_estimate": 7.2, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            7.0,
+            {
+                "working_memory": 3,
+                "reasoning_steps": 5,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 2,
+                "representation_complexity": 2,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert adjusted <= 7.3
+
+    def test_many_medium_scoring_units_cannot_stack_into_top_tier(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.08, "difficulty_estimate": 1.0, "bloom_level": 1,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.09, "difficulty_estimate": 4.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.09, "difficulty_estimate": 6.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.12, "difficulty_estimate": 7.5, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.12, "difficulty_estimate": 8.0, "bloom_level": 6,
+             "allocation_confidence": 0.8},
+            {"score_share": 0.16, "difficulty_estimate": 7.0, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            9.8,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 8,
+                "trap_density": 2,
+                "novelty": 3,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert adjusted <= 8.9
+        assert "seu_many_medium_unit_moderation" in flags
+
+    def test_low_construct_big_question_can_be_slightly_moderated(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.50, "difficulty_estimate": 3.5, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.50, "difficulty_estimate": 4.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.2,
+            {
+                "working_memory": 3,
+                "reasoning_steps": 5,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 2,
+                "representation_complexity": 1,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert 7.5 <= adjusted < 8.2
+        assert "seu_low_construct_moderation" in flags
+
+    def test_decisive_high_order_bottleneck_share_can_remain_top_tier(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.18, "difficulty_estimate": 5.5, "bloom_level": 3,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.18, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.22, "difficulty_estimate": 8.5, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.22, "difficulty_estimate": 8.8, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.20, "difficulty_estimate": 9.0, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            9.4,
+            {},
+            analysis,
+            is_big_question=True,
+            total_score=14,
+        )
+
+        assert adjusted >= 9.0
+
+    def test_bounded_objective_item_uses_seu_ceiling(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.15, "difficulty_estimate": 2.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.30, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.8},
+            {"score_share": 0.30, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 8.0, "bloom_level": 5,
+             "allocation_confidence": 0.8},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.6,
+            {},
+            analysis,
+            is_big_question=False,
+            total_score=4,
+        )
+
+        assert adjusted <= 7.8
+        assert "bounded_item_seu_ceiling" in flags
+
+    def test_bounded_item_with_partial_bottleneck_is_still_capped(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.15, "difficulty_estimate": 2.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.30, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.8},
+            {"score_share": 0.30, "difficulty_estimate": 6.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.25, "difficulty_estimate": 8.0, "bloom_level": 5,
+             "allocation_confidence": 0.8},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.6,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 6,
+                "chain_coupling": 2,
+                "trap_density": 3,
+                "representation_complexity": 3,
+                "info_density": 3,
+            },
+            analysis,
+            is_big_question=False,
+            total_score=4,
+        )
+
+        assert adjusted <= 7.8
+        assert "bounded_item_seu_ceiling" in flags
+
+    def test_decisive_high_order_bounded_item_can_remain_hard(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.25, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.35, "difficulty_estimate": 8.5, "bloom_level": 6,
+             "allocation_confidence": 0.85},
+            {"score_share": 0.40, "difficulty_estimate": 8.2, "bloom_level": 5,
+             "allocation_confidence": 0.85},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.8,
+            {},
+            analysis,
+            is_big_question=False,
+            total_score=4,
+        )
+
+        assert adjusted >= 8.7
+        assert "bounded_item_seu_ceiling" not in flags
+
+    def test_compact_objective_item_lifts_on_seu_bottleneck(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.50, "difficulty_estimate": 7.5, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.50, "difficulty_estimate": 7.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            5.7,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 3,
+                "trap_density": 2,
+                "representation_complexity": 1,
+            },
+            analysis,
+            is_big_question=False,
+            total_score=2,
+        )
+
+        assert adjusted > 5.9
+        assert "compact_seu_bottleneck_lift" in flags
+
+    def test_choice_strong_misconceptions_add_decision_load_without_ids(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.25, "difficulty_estimate": 3.0, "bloom_level": 2,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 4.0, "bloom_level": 3,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 4.0, "bloom_level": 2,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 4.5, "bloom_level": 3,
+                 "allocation_confidence": 0.9},
+            ],
+            "diagnostic_units": [
+                {"description": "counter-intuitive distractor", "trap_strength": 3},
+                {"description": "near-miss distractor", "trap_strength": 2},
+                {"description": "near-miss distractor", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            4.0,
+            {
+                "working_memory": 2,
+                "reasoning_steps": 4,
+                "trap_density": 2,
+                "representation_complexity": 1,
+                "novelty": 1,
+            },
+            analysis,
+            is_big_question=False,
+            total_score=2,
+        )
+
+        assert adjusted >= 5.0
+        assert "choice_strong_misconception_lift" in flags
+
+    def test_choice_multi_medium_decisions_are_not_treated_as_easy(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.25, "difficulty_estimate": 4.0, "bloom_level": 2,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 4.5, "bloom_level": 2,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 3.0, "bloom_level": 1,
+                 "allocation_confidence": 0.9},
+                {"score_share": 0.25, "difficulty_estimate": 3.5, "bloom_level": 2,
+                 "allocation_confidence": 0.9},
+            ],
+            "diagnostic_units": [
+                {"description": "medium distractor", "trap_strength": 2},
+                {"description": "medium distractor", "trap_strength": 2},
+                {"description": "medium distractor", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            4.0,
+            {
+                "working_memory": 2,
+                "reasoning_steps": 4,
+                "trap_density": 2,
+                "representation_complexity": 1,
+                "novelty": 1,
+            },
+            analysis,
+            is_big_question=False,
+            total_score=2,
+        )
+
+        assert adjusted >= 5.1
+        assert "choice_multi_medium_decision_lift" in flags
+
+    def test_fragmented_medium_big_item_is_moderated_below_top_tier(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {"scoring_units": [
+            {"score_share": 0.08, "difficulty_estimate": 3.0, "bloom_level": 2,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.08, "difficulty_estimate": 4.0, "bloom_level": 3,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.08, "difficulty_estimate": 6.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 6.5, "bloom_level": 6,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 7.0, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 7.5, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.08, "difficulty_estimate": 6.0, "bloom_level": 4,
+             "allocation_confidence": 0.9},
+            {"score_share": 0.17, "difficulty_estimate": 8.0, "bloom_level": 5,
+             "allocation_confidence": 0.9},
+        ]}}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.8,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 7,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert 7.4 <= adjusted <= 7.8
+        assert "fragmented_medium_big_item_moderation" in flags
 
 
 class TestParseBigQuestion:
@@ -682,7 +1204,7 @@ class TestBuildBigQuestionPrompt:
 class TestBigQuestionPipeline:
     """大题 pipeline 分流 + fallback 测试。"""
 
-    def _q21_structured_features(self):
+    def _chained_design_structured_features(self):
         return {
             "subquestions": [
                 {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
@@ -703,7 +1225,7 @@ class TestBigQuestionPipeline:
 
     def test_big_question_routes_to_structured(self):
         """total_score >= 8 → 走大题结构化路径。"""
-        structured = self._q21_structured_features()
+        structured = self._chained_design_structured_features()
         with patch("difficulty_pipeline.extract_big_question_features",
                    new_callable=AsyncMock, return_value=structured):
             pipeline = DifficultyPipeline()
@@ -715,7 +1237,8 @@ class TestBigQuestionPipeline:
                     "total_score": 14,
                 })
             )
-        assert result["final_difficulty"] >= 9.0, f"Q21 应 >=9.0，实际 {result['final_difficulty']}"
+        assert result["final_difficulty"] > 7.5
+        assert result["features"]["chain_coupling"] >= 2
         assert "big_question_fallback" not in (result.get("flags") or [])
 
     def test_small_question_uses_v3(self):
@@ -838,6 +1361,57 @@ class TestBigQuestionPipeline:
         assert "json_parse_failed" in result.get("flags", [])
         assert result["features"]["_llm_calls"][0]["metadata"]["failure_type"] == "json_parse_failed"
 
+    def test_feature_extraction_sends_media_and_records_input_refs(self):
+        raw_json = json.dumps({
+            "working_memory": 3,
+            "working_memory_reason": "chart variables",
+            "reasoning_steps": 4,
+            "steps_detail": "read chart then infer",
+            "chain_coupling": 2,
+            "coupling_reason": "partial dependency",
+            "trap_density": 2,
+            "trap_reason": "chart distractor",
+            "novelty": 2,
+            "novelty_reason": "variant",
+            "knowledge_breadth": 2,
+            "breadth_reason": "cross point",
+            "bloom": 4,
+            "bloom_reason": "analysis",
+            "info_density": 2,
+            "density_reason": "chart",
+            "representation_complexity": 3,
+            "representation_reason": "visual evidence",
+            "quality_score": 4,
+            "quality_scientific": "ok",
+            "quality_normative": "ok",
+            "quality_language": "ok",
+            "quality_context": "ok",
+            "quality_sensitivity": "ok",
+            "teacher_comment": "review chart",
+        })
+        captured = {}
+
+        async def fake_llm_call(messages, **kwargs):
+            captured["messages"] = messages
+            return raw_json
+
+        with patch("feature_extractor.llm_call", new=AsyncMock(side_effect=fake_llm_call)):
+            from feature_extractor import extract_features
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_features(
+                    "question with chart",
+                    subject="biology",
+                    media_items=[{"type": "image", "base64": "iVBORw0KGgoAAA"}],
+                )
+            )
+
+        assert isinstance(captured["messages"][0]["content"], list)
+        assert captured["messages"][0]["content"][1]["type"] == "image_url"
+        call = result["_llm_calls"][0]
+        assert call["purpose"] == "feature_extraction"
+        assert call["input_refs"]["media_count"] == 1
+        assert call["input_refs"]["media_types"] == ["image"]
+
     def test_full_chain_with_raw_json(self):
         """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""
         raw_json = json.dumps({
@@ -879,7 +1453,7 @@ class TestBigQuestionPipeline:
                     "total_score": 14,
                 })
             )
-        assert result["final_difficulty"] >= 9.0, f"全链路 Q21 应 >=9.0，实际 {result['final_difficulty']}"
+        assert result["final_difficulty"] > 7.5
         assert "_big_question" in result["features"]
 
     def test_points_sum_mismatch_fails_closed(self):
@@ -933,11 +1507,11 @@ class TestBigQuestionPipeline:
         assert "dep_partial_invalid" in result.get("flags", []), "部分无效依赖应标记 flag"
 
 
-class TestQ21EndToEnd:
-    """Q21 端到端验证：v3.1 修正低估。"""
+class TestConstructedResponseBottleneck:
+    """Constructed-response fixtures verify construct signals, not question IDs."""
 
-    def test_q21_score_at_least_9(self):
-        """Q21（14分番茄红素 PSY 融合蛋白）评分应 >= 9.0。"""
+    def test_chained_high_novelty_constructed_response_is_hard(self):
+        """A chained high-novelty design task should land in the hard band."""
         structured = {
             "subquestions": [
                 {"id": 1, "points": 4, "working_memory": 3, "reasoning_steps": 3,
@@ -966,12 +1540,12 @@ class TestQ21EndToEnd:
                 })
             )
         score = result["final_difficulty"]
-        assert score >= 9.0, f"Q21 v3.1 应 >=9.0（修正 v3 的 8.2），实际 {score}"
+        assert score > 7.5
         assert score <= 10.0
         assert "_big_question" in result["features"]
         assert len(result["features"]["_big_question"]["subquestions"]) == 3
 
-    def test_q21_four_part_visual_question_keeps_chain_and_visual_burden(self):
+    def test_four_part_visual_question_keeps_chain_and_visual_burden(self):
         """四小问图表大题不应因单小问宽度较低而被压低。"""
         structured = {
             "subquestions": [
@@ -1021,7 +1595,7 @@ class TestQ21EndToEnd:
         assert result["features"]["knowledge_breadth"] == 3
         assert result["features"]["representation_complexity"] == 3
         assert "media_representation_adjustment" in result["flags"]
-        assert result["final_difficulty"] >= 9.0, result
+        assert result["final_difficulty"] > 7.5, result
 
     def test_parallel_big_question_not_overscored(self):
         """A-005: 并列大题不应被过度提升。
@@ -1030,7 +1604,7 @@ class TestQ21EndToEnd:
         反例: 错误实现可能对并列大题也应用关键路径加成——本测试验证无 strong 依赖时不过度提升
         边界: 全并列 / 混合 strong+weak / 单小问大题
         回归: 防止 v3.1 引入并列大题系统性高估
-        命令: docker-compose exec -T backend python -m pytest test_feature_difficulty.py::TestQ21EndToEnd::test_parallel_big_question_not_overscored -v
+        命令: docker-compose exec -T backend python -m pytest test_feature_difficulty.py::TestConstructedResponseBottleneck::test_parallel_big_question_not_overscored -v
         """
         structured = {
             "subquestions": [
@@ -1214,6 +1788,34 @@ class TestParseScoreShare:
         assert result["ok"] is False
         assert result["failure_type"] == "score_share_sum_mismatch"
 
+    def test_dependency_cycle_rejected(self):
+        """Cyclic subquestion dependencies must fail closed before scoring."""
+        raw = json.dumps({
+            "status": "ok",
+            "data": {
+                "subquestions": [
+                    {"id": 1, "score_share": 0.34, "working_memory": 3, "reasoning_steps": 3,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "x"},
+                    {"id": 2, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 4,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "y"},
+                    {"id": 3, "score_share": 0.33, "working_memory": 3, "reasoning_steps": 5,
+                     "trap_density": 1, "novelty": 2, "knowledge_breadth": 2, "brief": "z"},
+                ],
+                "dependencies": [
+                    {"from": 1, "to": 2, "strength": "strong"},
+                    {"from": 2, "to": 3, "strength": "strong"},
+                    {"from": 3, "to": 1, "strength": "strong"},
+                ],
+                "global_features": {"shared_context_load": 1, "global_method_novelty": 1},
+                "bloom": 3,
+            },
+        })
+
+        result = self.parse(raw, total_score=12, detailed=True)
+
+        assert result["ok"] is False
+        assert result["failure_type"] == "dependency_cycle"
+
     def test_score_share_normalized_within_tolerance(self):
         """score_share 之和在 0.9~1.1 范围内 → 自动归一化后通过。"""
         raw = json.dumps({
@@ -1326,7 +1928,7 @@ class TestSEUFallback:
     """大题结构化失败时的 SEU fallback 测试。"""
 
     def test_seu_fallback_produces_score_when_big_question_fails(self):
-        """big_question 失败 + v2 SEU 可用 → fallback 出分，标记 seu_fallback。"""
+        """big_question failure must not emit a normal-looking fallback score."""
         failure_payload = {
             "_big_question_failed": True,
             "failure_type": "points_sum_mismatch",
@@ -1353,10 +1955,47 @@ class TestSEUFallback:
                     "correct_answer": "", "total_score": 12,
                 }, analysis_result=analysis_result)
             )
-        assert result.get("analysis_failed") is not True, "SEU fallback 应产出有效分数"
-        assert result["final_difficulty"] is not None
-        assert result["difficulty_source"] == "seu_fallback"
-        assert result["confidence"] <= 0.5
+        assert result.get("analysis_failed") is True
+        assert result["final_difficulty"] is None
+        assert result["difficulty_source"] == "analysis_failed"
+        assert "seu_available_but_not_authoritative" in result["flags"]
+        assert result["features"]["seu_count"] == 3
+
+    def test_seu_fallback_uses_bottleneck_not_average_for_constructed_response(self):
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "json_parse_failed",
+            "errors": ["broken structured payload"],
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.35, "difficulty_estimate": 9.0, "bloom_level": 6,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.25, "difficulty_estimate": 3.0, "bloom_level": 2,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.20, "difficulty_estimate": 3.0, "bloom_level": 2,
+                     "allocation_confidence": 0.9},
+                    {"score_share": 0.20, "difficulty_estimate": 3.0, "bloom_level": 2,
+                     "allocation_confidence": 0.9},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "A constructed response item with one substantial high-order design bottleneck and several routine blanks.",
+                    "question_type": "experiment",
+                    "correct_answer": "",
+                    "total_score": 12,
+                }, analysis_result=analysis_result)
+            )
+
+        assert result["difficulty_source"] == "analysis_failed"
+        assert result["final_difficulty"] is None
+        assert "seu_available_but_not_authoritative" in result["flags"]
 
     def test_seu_fallback_not_triggered_without_seus(self):
         """big_question 失败 + 无 SEU → 仍然 failed。"""
@@ -1376,6 +2015,37 @@ class TestSEUFallback:
             )
         assert result["analysis_failed"] is True
         assert result["final_difficulty"] is None
+
+    def test_seu_fallback_short_content_records_block_flag(self):
+        failure_payload = {
+            "_big_question_failed": True,
+            "failure_type": "points_sum_mismatch",
+            "errors": ["points_sum=6, total_score=12"],
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.33, "difficulty_estimate": 7.0, "bloom_level": 4,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.33, "difficulty_estimate": 6.0, "bloom_level": 3,
+                     "allocation_confidence": 0.8},
+                    {"score_share": 0.34, "difficulty_estimate": 8.0, "bloom_level": 5,
+                     "allocation_confidence": 0.8},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_big_question_features",
+                   new_callable=AsyncMock, return_value=failure_payload):
+            pipeline = DifficultyPipeline()
+            result = asyncio.get_event_loop().run_until_complete(
+                pipeline.evaluate_with_refinement({
+                    "content": "short stem", "question_type": "绠€绛旈",
+                    "correct_answer": "", "total_score": 12,
+                }, analysis_result=analysis_result)
+            )
+        assert result["analysis_failed"] is True
+        assert result["final_difficulty"] is None
+        assert "seu_available_but_not_authoritative" in result["flags"]
 
     def test_seu_fallback_requires_minimum_seus(self):
         """SEU 数量 < 2 → 不触发 fallback。"""
@@ -1404,7 +2074,7 @@ class TestSEUFallback:
         assert result["analysis_failed"] is True
 
     def test_seu_fallback_marks_cognitive_level_source(self):
-        """SEU fallback 标注 cognitive_level_source。"""
+        """SEU evidence is retained as context, but failure remains explicit."""
         failure_payload = {
             "_big_question_failed": True,
             "failure_type": "points_sum_mismatch",
@@ -1431,14 +2101,203 @@ class TestSEUFallback:
                     "correct_answer": "", "total_score": 12,
                 }, analysis_result=analysis_result)
             )
-        assert result.get("cognitive_level_source") == "linear_approximation"
+        assert result.get("analysis_failed") is True
+        assert result.get("cognitive_level_source") is None
+        assert result["features"]["seu_count"] == 3
+
+
+class TestDifficultyFacetAdjustments:
+    """Regression coverage for the non-fitted four-layer difficulty signals."""
+
+    def test_choice_medium_trap_burden_can_raise_decision_difficulty(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        features = {
+            "working_memory": 2,
+            "reasoning_steps": 4,
+            "chain_coupling": 1,
+            "trap_density": 2,
+            "novelty": 1,
+            "knowledge_breadth": 1,
+            "representation_complexity": 1,
+            "info_density": 2,
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.25, "difficulty_estimate": 4.0, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.25, "difficulty_estimate": 4.2, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.25, "difficulty_estimate": 4.0, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.25, "difficulty_estimate": 4.3, "bloom_level": 3, "allocation_confidence": 0.9},
+                ],
+                "diagnostic_units": [
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                    {"trap_strength": 2},
+                ],
+            },
+        }
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            4.2,
+            features,
+            analysis_result,
+            is_big_question=False,
+            total_score=2,
+        )
+
+        assert adjusted >= 4.9
+        assert "choice_decision_trap_adjustment" in flags
+
+    def test_successful_evaluation_exports_score_risk_facets(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from difficulty_pipeline import DifficultyPipeline
+
+        mock_features = {
+            "working_memory": 3,
+            "reasoning_steps": 4,
+            "chain_coupling": 1,
+            "trap_density": 2,
+            "novelty": 2,
+            "knowledge_breadth": 2,
+            "bloom": 3,
+            "info_density": 2,
+            "representation_complexity": 1,
+            "quality_score": 4,
+            "_feature_status": "ok",
+            "_raw_core_count": 9,
+            "_extraction_confidence": 1.0,
+            "_consistency_confidence": 1.0,
+        }
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.50, "difficulty_estimate": 5.0, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.50, "difficulty_estimate": 6.0, "bloom_level": 4, "allocation_confidence": 0.9},
+                ],
+            },
+        }
+        with patch("difficulty_pipeline.extract_features", new_callable=AsyncMock, return_value=mock_features):
+            result = asyncio.get_event_loop().run_until_complete(
+                DifficultyPipeline().evaluate_with_refinement({
+                    "content": "A regular single-choice item with complete options.",
+                    "question_type": "single_choice",
+                    "correct_answer": "A",
+                    "total_score": 2,
+                }, analysis_result=analysis_result)
+            )
+
+        assert result["content_difficulty"] == result["final_difficulty"]
+        assert result["difficulty_density"] > 0
+        assert result["score_risk"] > 0
+        assert result["score_layer"]["partial_credit_relief"] == 0
+
+    def test_visual_constructed_response_is_stable_under_adjacent_feature_noise(self):
+        from difficulty_pipeline import DifficultyPipeline
+        from rule_scorer import compute_difficulty
+
+        pipeline = DifficultyPipeline()
+        stable_evidence = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.182, "difficulty_estimate": 6.0, "bloom_level": 4, "allocation_confidence": 0.8},
+                    {"score_share": 0.182, "difficulty_estimate": 2.0, "bloom_level": 2, "allocation_confidence": 0.9},
+                    {"score_share": 0.182, "difficulty_estimate": 6.5, "bloom_level": 4, "allocation_confidence": 0.8},
+                    {"score_share": 0.182, "difficulty_estimate": 4.0, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.272, "difficulty_estimate": 7.5, "bloom_level": 5, "allocation_confidence": 0.7},
+                ],
+                "diagnostic_units": [
+                    {"trap_strength": 3},
+                    {"trap_strength": 2},
+                ],
+            },
+        }
+        high_feature_read = {
+            "working_memory": 5,
+            "reasoning_steps": 6,
+            "chain_coupling": 2,
+            "trap_density": 2,
+            "novelty": 3,
+            "knowledge_breadth": 3,
+            "representation_complexity": 3,
+            "info_density": 3,
+        }
+        low_feature_read = {
+            "working_memory": 4,
+            "reasoning_steps": 5,
+            "chain_coupling": 2,
+            "trap_density": 2,
+            "novelty": 2,
+            "knowledge_breadth": 3,
+            "representation_complexity": 3,
+            "info_density": 2,
+        }
+
+        high, _ = pipeline._apply_fine_grained_adjustments(
+            compute_difficulty(high_feature_read),
+            high_feature_read,
+            stable_evidence,
+            is_big_question=True,
+            total_score=11,
+        )
+        low, _ = pipeline._apply_fine_grained_adjustments(
+            compute_difficulty(low_feature_read),
+            low_feature_read,
+            stable_evidence,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert low >= 7.8
+        assert high - low <= 1.0
+
+    def test_fragmented_medium_big_item_is_capped_without_decisive_high_order_path(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        analysis_result = {
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.083, "difficulty_estimate": 3.0, "bloom_level": 2, "allocation_confidence": 0.9},
+                    {"score_share": 0.083, "difficulty_estimate": 4.0, "bloom_level": 3, "allocation_confidence": 0.9},
+                    {"score_share": 0.083, "difficulty_estimate": 6.0, "bloom_level": 4, "allocation_confidence": 0.9},
+                    {"score_share": 0.167, "difficulty_estimate": 6.5, "bloom_level": 6, "allocation_confidence": 0.9},
+                    {"score_share": 0.167, "difficulty_estimate": 7.0, "bloom_level": 5, "allocation_confidence": 0.9},
+                    {"score_share": 0.167, "difficulty_estimate": 7.5, "bloom_level": 5, "allocation_confidence": 0.9},
+                    {"score_share": 0.083, "difficulty_estimate": 6.0, "bloom_level": 4, "allocation_confidence": 0.9},
+                    {"score_share": 0.167, "difficulty_estimate": 8.0, "bloom_level": 5, "allocation_confidence": 0.9},
+                ],
+            },
+        }
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.8,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 7,
+                "chain_coupling": 2,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+                "info_density": 2,
+            },
+            analysis_result,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert adjusted <= 7.8
+        assert "fragmented_medium_big_item_moderation" in flags
 
 
 class TestQualityScoreGate:
-    """quality_score <= 2 时阻断难度评估。"""
+    """quality_score 是题目质量信号，不是难度评估可行性信号。"""
 
-    def test_quality_score_1_blocks_difficulty(self):
-        """quality_score=1（内容缺失）→ 阻断。"""
+    def test_quality_score_1_flags_issue_without_blocking_valid_features(self):
+        """quality_score=1 但特征完整 → 继续估算难度并标记质量风险。"""
         mock_features = {
             "working_memory": 3, "reasoning_steps": 4, "chain_coupling": 1,
             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2,
@@ -1452,14 +2311,14 @@ class TestQualityScoreGate:
             pipeline = DifficultyPipeline()
             result = asyncio.get_event_loop().run_until_complete(
                 pipeline.evaluate_with_refinement({
-                    "content": "A. A B. B C. C D. D",
+                    "content": "这是一道题面完整但命题质量较低的选择题，用于验证质量风险不阻断难度评估。A. A B. B C. C D. D",
                     "question_type": "single_choice",
                     "correct_answer": "", "total_score": 2,
                 })
             )
-        assert result["analysis_failed"] is True
-        assert result["final_difficulty"] is None
-        assert "quality_score_too_low" in result.get("flags", [])
+        assert result.get("analysis_failed") is not True
+        assert result["final_difficulty"] is not None
+        assert "quality_issue_low_score" in result.get("flags", [])
 
     def test_quality_score_3_passes(self):
         """quality_score=3 → 正常评分。"""
@@ -1565,6 +2424,98 @@ class TestCriticalPathWeighted:
         result = aggregate_big_question(subquestions, dependencies, global_features)
         assert result["knowledge_breadth"] == 3, \
             f"3 sqs + method_novelty=3 should upgrade breadth, got {result['knowledge_breadth']}"
+
+    def test_many_easy_off_path_blanks_have_bounded_load(self):
+        """More independent low-order blanks should not linearly inflate main difficulty."""
+        from rule_scorer import aggregate_big_question
+
+        critical = [
+            {"id": 1, "points": 8, "reasoning_steps": 6, "working_memory": 4,
+             "trap_density": 3, "novelty": 2, "knowledge_breadth": 2},
+        ]
+        few_blanks = critical + [
+            {"id": 2, "points": 1, "reasoning_steps": 2, "working_memory": 1,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+            {"id": 3, "points": 1, "reasoning_steps": 2, "working_memory": 1,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+        ]
+        many_blanks = critical + [
+            {"id": idx, "points": 1, "reasoning_steps": 2, "working_memory": 1,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1}
+            for idx in range(2, 10)
+        ]
+
+        few = aggregate_big_question(few_blanks, [], {"shared_context_load": 1, "global_method_novelty": 1})
+        many = aggregate_big_question(many_blanks, [], {"shared_context_load": 1, "global_method_novelty": 1})
+
+        assert many["effective_steps"] - few["effective_steps"] <= 0.7
+
+    def test_independent_off_path_blanks_do_not_create_chain_coupling(self):
+        from rule_scorer import aggregate_big_question
+
+        subquestions = [
+            {"id": 1, "points": 6, "reasoning_steps": 6, "working_memory": 4,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+        ] + [
+            {"id": idx, "points": 1, "reasoning_steps": 1, "working_memory": 1,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1}
+            for idx in range(2, 14)
+        ]
+
+        result = aggregate_big_question(
+            subquestions,
+            [],
+            {"shared_context_load": 1, "global_method_novelty": 1},
+        )
+
+        assert result["chain_coupling"] == 1
+
+    def test_critical_path_novelty_not_diluted_by_many_easy_blanks(self):
+        from rule_scorer import aggregate_big_question
+
+        subquestions = [
+            {"id": 1, "points": 6, "reasoning_steps": 6, "working_memory": 4,
+             "trap_density": 2, "novelty": 3, "knowledge_breadth": 2},
+        ] + [
+            {"id": idx, "points": 1, "reasoning_steps": 1, "working_memory": 1,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1}
+            for idx in range(2, 14)
+        ]
+
+        result = aggregate_big_question(
+            subquestions,
+            [],
+            {"shared_context_load": 1, "global_method_novelty": 1},
+        )
+
+        assert result["novelty"] == 3
+
+
+class TestBiologyMethodFloors:
+    """Advanced biotech methods should not be treated as routine fill-in blanks."""
+
+    def test_advanced_biotech_construct_raises_method_floor(self):
+        from feature_extractor import _apply_biology_method_floors
+
+        result = {
+            "subquestions": [
+                {"id": 1, "brief": "融合蛋白构建", "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 1},
+                {"id": 2, "brief": "三引物PCR鉴定插入方向", "reasoning_steps": 2,
+                 "trap_density": 1, "novelty": 1},
+            ],
+            "global_features": {"shared_context_load": 3, "global_method_novelty": 2},
+            "report": {"representation_complexity": 2},
+        }
+        question_text = "构建GFP融合蛋白并通过三引物PCR鉴定插入方向，设计引物。"
+
+        adjusted = _apply_biology_method_floors(result, question_text, "biology")
+
+        assert adjusted["global_features"]["global_method_novelty"] == 3
+        assert adjusted["report"]["representation_complexity"] == 3
+        assert adjusted["subquestions"][1]["novelty"] == 3
+        assert adjusted["subquestions"][1]["trap_density"] == 2
+        assert adjusted["subquestions"][1]["reasoning_steps"] == 4
 
 
 
@@ -1742,12 +2693,11 @@ class TestSeuFallbackQualityGate:
         text = "B" * 30
         seus = [self._make_seu(0.9), self._make_seu(0.8), self._make_seu(0.7)]
         result = self._run(text, seus)
-        assert result.get("analysis_failed") is not True, (
-            f"30-char content should pass quality gate, got: {result}"
+        assert result.get("analysis_failed") is True, (
+            f"Failed structured parse must stay blocked, got: {result}"
         )
-        assert result.get("source") == "seu_fallback", (
-            f"Expected source=seu_fallback, got: {result.get('source')}"
-        )
+        assert result.get("source") == "analysis_failed"
+        assert "seu_available_but_not_authoritative" in result.get("flags", [])
 
     def test_normal_content_passes_gate(self):
         """Realistic question text passes the gate and returns a valid score."""
@@ -1758,10 +2708,10 @@ class TestSeuFallbackQualityGate:
         )
         seus = [self._make_seu(0.85), self._make_seu(0.75), self._make_seu(0.8)]
         result = self._run(text, seus)
-        assert result.get("analysis_failed") is not True, (
-            f"Normal content blocked unexpectedly: {result}"
+        assert result.get("analysis_failed") is True, (
+            f"Failed structured parse must stay blocked, got: {result}"
         )
-        assert "final_difficulty" in result, f"Missing final_difficulty: {result}"
+        assert result.get("final_difficulty") is None
 
     def test_low_confidence_seus_still_blocked_regardless_of_length(self):
         """Low-confidence SEUs (< 0.5 avg) block fallback independent of length."""

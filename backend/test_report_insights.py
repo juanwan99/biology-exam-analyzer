@@ -59,7 +59,7 @@ class TestGenerateInsights:
         """精简档只调用 1 次 GPT"""
         mock_gpt.return_value = MOCK_OVERALL_RESPONSE
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief")
+        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
         assert mock_gpt.call_count == 2  # overall + teaching
         assert "overall_assessment" in result
         assert len(result["recommendations"]) >= 1
@@ -73,7 +73,7 @@ class TestGenerateInsights:
         sample_report_data["questions"][0]["teacher_comment"] = "本题考查光合作用基本概念。"
         sample_report_data["questions"][1]["teacher_comment"] = "需要综合分析系谱图。"
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="full")
+        result = await generate_insights(sample_report_data, mode="full", grounding_enabled=False)
         assert mock_gpt.call_count == 2  # overall + teaching
         assert "question_comments" in result
         assert "1" in result["question_comments"]
@@ -97,7 +97,7 @@ class TestGenerateInsights:
         })
         mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, mock_teaching]
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief")
+        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
         ts = result["teaching_suggestions"]
         assert len(ts["error_categories"]) == 1
         assert ts["error_categories"][0]["category"] == "概念混淆"
@@ -105,20 +105,320 @@ class TestGenerateInsights:
         assert len(ts["remedial_exercises"]) == 1
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
-    async def test_teaching_fallback_on_failure(self, mock_gpt, sample_report_data):
-        """教学建议 GPT 失败时降级为空结构，不影响整体"""
+    async def test_teaching_suggestions_failure_raises(self, mock_gpt, sample_report_data):
+        """教学建议失败必须阻断，不能用空结构伪装成功。"""
         mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, RuntimeError("API timeout")]
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief")
-        assert "overall_assessment" in result
-        ts = result["teaching_suggestions"]
-        assert ts["error_categories"] == []
-        assert ts["lecture_outline"] == []
-        assert ts["remedial_exercises"] == []
+        with pytest.raises(RuntimeError, match="LLM .*生成失败"):
+            await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_gpt_failure_raises(self, mock_gpt, sample_report_data):
         """GPT 失败直接抛异常，不降级"""
         mock_gpt.side_effect = RuntimeError("API 超时")
         from report_insights import generate_insights
         with pytest.raises(RuntimeError, match="LLM 分析生成失败"):
-            await generate_insights(sample_report_data, mode="brief")
+            await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_grounding_enabled_attaches_check_result(self, mock_gpt, sample_report_data):
+        """开启 grounding 后，整卷综合分析需要留下证据校验结果。"""
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        class FakeGateway:
+            def __init__(self):
+                self.calls = []
+
+            async def check_grounding(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "status": "ok",
+                    "support_score": 0.84,
+                    "threshold": 0.6,
+                    "claim_count": 3,
+                    "cited_chunk_count": 2,
+                    "metadata": {"provider": "discovery_engine"},
+                }
+
+        gateway = FakeGateway()
+        from report_insights import generate_insights
+
+        result = await generate_insights(
+            sample_report_data,
+            mode="brief",
+            evidence_gateway=gateway,
+            grounding_enabled=True,
+        )
+
+        assert len(gateway.calls) >= 5
+        assert "本卷难度适中" in gateway.calls[0]["answer"]
+        assert gateway.calls[0]["facts"]
+        grounded_sections = [check["section"] for check in result["_grounding_checks"]]
+        assert "overall_assessment" in grounded_sections
+        assert "difficulty_analysis" in grounded_sections
+        assert "knowledge_analysis" in grounded_sections
+        assert "competency_analysis" in grounded_sections
+        assert "bloom_analysis" in grounded_sections
+        assert len(result["_grounding_checks"]) == len(gateway.calls)
+        assert result["_grounding_checks"][0]["status"] == "ok"
+        assert result["_grounding_checks"][0]["support_score"] == 0.84
+        assert result["_llm_calls"][1]["purpose"] == "report_grounding_check"
+        assert result["_llm_calls"][1]["metadata"]["section_count"] == len(gateway.calls)
+
+    async def test_grounding_facts_are_section_cards_and_traceable(self, sample_report_data):
+        from report_insights import _build_grounding_facts
+
+        facts = _build_grounding_facts(sample_report_data)
+        sources = {
+            (fact.get("attributes") or {}).get("source")
+            for fact in facts
+        }
+
+        assert 5 <= len(facts) <= 20
+        assert "report.evidence_card.overall" in sources
+        assert "report.evidence_card.difficulty" in sources
+        assert "report.evidence_card.bloom" in sources
+        assert "report.evidence_card.knowledge" in sources
+        assert "report.evidence_card.competency" in sources
+        assert "report.evidence_card.feature_profile" in sources
+        assert "report.evidence_card.summary" in sources
+        assert "report.evidence_card.recommendation_basis" in sources
+        assert "report.evidence_card.recommendation_policy" in sources
+        assert all(len(str(fact.get("factText") or "")) <= 1200 for fact in facts)
+        assert "report.metrics" not in sources
+        difficulty_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.difficulty"
+        )
+        assert "avg_difficulty" in difficulty_card["factText"]
+        assert "difficulty_gradient" in difficulty_card["factText"]
+        summary_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.summary"
+        )
+        assert "top_difficulty_factors" in summary_card["factText"]
+        recommendation_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.recommendation_basis"
+        )
+        assert "recommendation_basis" in recommendation_card["factText"]
+        policy_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.recommendation_policy"
+        )
+        assert "recommendation_policy" in policy_card["factText"]
+        assert "hard_score_share" in policy_card["factText"]
+        feature_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.feature_profile"
+        )
+        assert "top_difficulty_factor_aliases" in feature_card["factText"]
+        assert "对难度贡献最大的维度包含" in feature_card["factText"]
+
+    async def test_grounding_facts_expand_all_primary_competency_counts(self, sample_report_data):
+        from report_insights import _build_grounding_facts
+
+        sample_report_data["competency"]["primary_distribution"] = {
+            "生命观念": 11,
+            "科学思维": 10,
+            "科学探究": 0,
+            "社会责任": 0,
+        }
+
+        facts = _build_grounding_facts(sample_report_data)
+        competency_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.competency"
+        )
+
+        assert "主要素养分布中科学思维为10题" in competency_card["factText"]
+        assert "主要素养分布中生命观念为11题" in competency_card["factText"]
+
+    async def test_grounding_sections_split_long_analysis_into_short_claims(self):
+        from report_insights import _build_grounding_sections
+
+        sections = _build_grounding_sections({
+            "bloom_analysis": "平均认知层级为6.47。高阶思维占比为58.8%。对难度贡献最大的维度包含认知层级。",
+        })
+
+        names = [section["section"] for section in sections]
+        answers = [section["answer"] for section in sections]
+        assert names == ["bloom_analysis#1", "bloom_analysis#2", "bloom_analysis#3"]
+        assert answers[0] == "平均认知层级为6.47。"
+
+    async def test_grounding_sections_check_recommendation_basis_not_directive(self):
+        from report_insights import _build_grounding_sections
+
+        sections = _build_grounding_sections({
+            "difficulty_analysis": "简单题为0题。建议增加简单题。",
+            "recommendations": [
+                {
+                    "category": "难度调整",
+                    "content": "困难题分值占比为61.2%。建议降低困难题比例或增加低门槛题。",
+                },
+            ],
+        })
+
+        answers = [section["answer"] for section in sections]
+        recommendation_section = next(
+            section for section in sections
+            if section["section"] == "recommendations"
+        )
+
+        assert "建议增加简单题。" not in answers
+        assert recommendation_section["answer"] == "困难题分值占比为61.2%。"
+        assert recommendation_section["kind"] == "policy_basis"
+        assert "建议降低困难题比例" in recommendation_section["policy_text"]
+
+    async def test_grounding_sections_rewrite_pronoun_score_claims(self):
+        from report_insights import _build_grounding_sections
+
+        text = (
+            "\u6743\u91cd\u6700\u9ad8\u7684\u77e5\u8bc6\u70b9\u4e3a\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u3002"
+            "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.5\u3002"
+            "\u5176\u6b21\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u3002"
+            "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002"
+        )
+
+        sections = _build_grounding_sections({"knowledge_analysis": text})
+        answers = [section["answer"] for section in sections]
+
+        assert "\u6700\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u3002" in answers
+        assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u3002" in answers
+        assert "\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u52a0\u6743\u5206\u503c\u4e3a4.5\u3002" in answers
+        assert "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002" in answers
+        assert "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002" not in answers
+
+    async def test_grounding_facts_include_ranked_knowledge_detail(self, sample_report_data):
+        from report_insights import _build_grounding_facts
+
+        sample_report_data["knowledge"]["top_points"] = [
+            {"name": "\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b", "weighted_score": 4.5, "question_count": 3},
+            {"name": "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406", "weighted_score": 4.1, "question_count": 2},
+        ]
+
+        facts = _build_grounding_facts(sample_report_data)
+        detail = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.knowledge_detail"
+        )
+
+        assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406" in detail["factText"]
+        assert "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u52a0\u6743\u5206\u503c\u4e3a4.1" in detail["factText"]
+
+    async def test_overall_prompt_requires_grounded_short_claims(self, sample_report_data):
+        from report_insights import _build_overall_prompt
+
+        prompt = _build_overall_prompt(sample_report_data)
+
+        assert "Grounding requirements" in prompt
+        assert "Grounding Evidence Cards" in prompt
+        assert "每句只包含一个主要事实" in prompt
+        assert "优先使用 Grounding Evidence Cards" in prompt
+        assert "不要写“信度”" in prompt
+
+    async def test_grounding_answer_separates_sections_with_blank_lines(self):
+        from report_insights import _build_grounding_answer
+
+        answer = _build_grounding_answer({
+            "overall_assessment": "总评。",
+            "difficulty_analysis": "难度。",
+            "knowledge_analysis": "知识。",
+            "competency_analysis": "素养。",
+            "bloom_analysis": "认知。",
+            "recommendations": [
+                {"content": "建议一。"},
+            ],
+        })
+
+        assert "知识。\n\n素养。" in answer
+        assert "认知。\n\n建议一。" in answer
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_grounding_low_support_marks_report_needs_review(self, mock_gpt, sample_report_data):
+        """低 supportScore 不伪装成功，应标记报告需复核。"""
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        class FakeGateway:
+            async def check_grounding(self, **kwargs):
+                return {
+                    "status": "needs_review",
+                    "support_score": 0.42,
+                    "threshold": 0.6,
+                    "claim_count": 2,
+                    "cited_chunk_count": 0,
+                    "metadata": {"provider": "discovery_engine"},
+                }
+
+        from report_insights import generate_insights
+
+        result = await generate_insights(
+            sample_report_data,
+            mode="brief",
+            evidence_gateway=FakeGateway(),
+            grounding_enabled=True,
+        )
+
+        assert result["_grounding_status"] == "needs_review"
+        assert result["_grounding_checks"][0]["support_score"] == 0.42
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_grounding_failure_raises_report_generation_error(self, mock_gpt, sample_report_data):
+        """grounding 开启后失败必须中断报告生成，不能静默吞掉。"""
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        class FailingGateway:
+            async def check_grounding(self, **kwargs):
+                raise RuntimeError("grounding permission denied")
+
+        from report_insights import generate_insights
+
+        with pytest.raises(RuntimeError, match="grounding permission denied"):
+            await generate_insights(
+                sample_report_data,
+                mode="brief",
+                evidence_gateway=FailingGateway(),
+                grounding_enabled=True,
+            )
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_llm_calls_record_actual_provider_model(self, mock_gpt, sample_report_data, monkeypatch):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+        import report_insights
+
+        monkeypatch.setattr(
+            report_insights,
+            "get_last_call_metadata",
+            lambda: {
+                "provider": "google_genai",
+                "model": "gemini-3-pro",
+                "fallback_count": 0,
+                "provider_errors": [],
+            },
+            raising=False,
+        )
+
+        result = await report_insights.generate_insights(
+            sample_report_data,
+            mode="brief",
+            grounding_enabled=False,
+        )
+
+        calls = result["_llm_calls"]
+        assert calls[0]["purpose"] == "report_insights"
+        assert calls[0]["provider"] == "google_genai"
+        assert calls[0]["model"] == "gemini-3-pro"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_llm_uses_deterministic_temperature(self, mock_gpt, sample_report_data):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        from report_insights import generate_insights
+
+        await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+        temperatures = [
+            call.kwargs.get("temperature")
+            for call in mock_gpt.call_args_list
+        ]
+        assert temperatures
+        assert all(value == 0.0 for value in temperatures)

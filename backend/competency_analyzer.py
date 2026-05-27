@@ -8,10 +8,26 @@ from hashlib import sha256
 from typing import Dict, List, Any
 from logger import get_logger
 from config import RULES_DIR, PROMPT_DIR
-from llm_client import llm_call
+from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
+from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 
 logger = get_logger()
+
+
+def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
+    metadata = dict(metadata or {})
+    try:
+        trace = get_last_call_metadata() or {}
+    except Exception:
+        trace = {}
+    provider = trace.get("provider") or "llm_client"
+    model = trace.get("model") or "configured_provider_chain"
+    fallback_count = int(trace.get("fallback_count") or 0)
+    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+        if trace.get(key) is not None:
+            metadata[key] = trace.get(key)
+    return provider, model, fallback_count, metadata
 
 
 def _extract_json(text: str) -> dict:
@@ -60,7 +76,6 @@ class CompetencyAnalyzer:
 
         Args:
             library_path: 素养库JSON文件路径（默认使用config中的路径）
-            analyzer: 保留兼容性，实际不使用（LLM 调用已迁移到 llm_client）
         """
         self.library_path = library_path or str(RULES_DIR / "competency_library.json")
         self.library = self._load_library()
@@ -122,13 +137,21 @@ class CompetencyAnalyzer:
                 question_text=question.get("content", ""),
                 knowledge_points=", ".join(question.get("knowledge_points", []))
             )
+            media_items = question.get("media_items") or question.get("_media_for_ai") or []
+            input_refs = {
+                "question_id": question.get("id"),
+                "question_text_length": len(question.get("content", "") or ""),
+                "knowledge_point_count": len(question.get("knowledge_points", [])),
+                **media_input_refs(media_items),
+            }
 
             # 通过统一 LLM 客户端调用（自动 fallback）
             logger.debug(f"[素养分析] 调用LLM分析题目 {question.get('id')}")
             response_text = await llm_call(
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages_with_media(prompt, media_items),
                 max_tokens=2048,
                 temperature=0.1,
+                purpose="competency_analysis",
             )
             logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
 
@@ -152,28 +175,28 @@ class CompetencyAnalyzer:
 
             if abs(total_weight - 1.0) > 0.01:
                 logger.warning(f"[素养分析] 题目 {question.get('id')} 权重总和异常: {total_weight}")
+                val_errors = (val_errors or []) + [f"competency_weight_sum_mismatch:{total_weight:.4f}"]
 
+            call_metadata = {
+                "response_length": len(response_text),
+                "total_weight": round(total_weight, 4),
+                "primary_competency": result.get("primary_competency"),
+            }
+            provider, model, fallback_count, call_metadata = _llm_call_trace(call_metadata)
             call = LLMCallRecord(
                 call_id=f"question-{question.get('id')}-competency",
                 question_id=question.get("id"),
                 purpose="competency_analysis",
                 prompt_id="biology.competency_analysis",
                 prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
-                provider="llm_client",
-                model="configured_provider_chain",
-                input_refs={
-                    "question_id": question.get("id"),
-                    "question_text_length": len(question.get("content", "") or ""),
-                    "knowledge_point_count": len(question.get("knowledge_points", [])),
-                },
+                provider=provider,
+                model=model,
+                input_refs=input_refs,
                 parsed_schema="CompetencyResult",
                 confidence=ext_conf,
                 validation_errors=val_errors,
-                metadata={
-                    "response_length": len(response_text),
-                    "total_weight": round(total_weight, 4),
-                    "primary_competency": result.get("primary_competency"),
-                },
+                fallback_count=fallback_count,
+                metadata=call_metadata,
             )
             result["_llm_calls"] = [call.model_dump()]
 
@@ -183,27 +206,33 @@ class CompetencyAnalyzer:
         except Exception as e:
             logger.error(f"[素养分析] 题目 {question.get('id')} 分析失败: {str(e)}", exc_info=True)
             failure_type = "json_parse_failed" if response_text else "llm_call_failed"
+            media_items = question.get("media_items") or question.get("_media_for_ai") or []
+            input_refs = {
+                "question_id": question.get("id"),
+                "question_text_length": len(question.get("content", "") or ""),
+                "knowledge_point_count": len(question.get("knowledge_points", [])),
+                **media_input_refs(media_items),
+            }
+            call_metadata = {
+                "response_length": len(response_text or ""),
+                "failure_type": failure_type,
+                "validation_errors": [str(e)],
+            }
+            provider, model, fallback_count, call_metadata = _llm_call_trace(call_metadata)
             call = LLMCallRecord(
                 call_id=f"question-{question.get('id')}-competency",
                 question_id=question.get("id"),
                 purpose="competency_analysis",
                 prompt_id="biology.competency_analysis",
                 prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
-                provider="llm_client",
-                model="configured_provider_chain",
-                input_refs={
-                    "question_id": question.get("id"),
-                    "question_text_length": len(question.get("content", "") or ""),
-                    "knowledge_point_count": len(question.get("knowledge_points", [])),
-                },
+                provider=provider,
+                model=model,
+                input_refs=input_refs,
                 parsed_schema="CompetencyResult",
                 confidence=0.0,
                 validation_errors=[str(e)],
-                metadata={
-                    "response_length": len(response_text or ""),
-                    "failure_type": failure_type,
-                    "validation_errors": [str(e)],
-                },
+                fallback_count=fallback_count,
+                metadata=call_metadata,
             )
             return {
                 "error": f"素养分析失败: {str(e)}",

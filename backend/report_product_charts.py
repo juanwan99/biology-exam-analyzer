@@ -6,6 +6,7 @@ introducing a separate front-end runtime.
 """
 from __future__ import annotations
 
+import math
 from html import escape
 from math import cos, pi, sin
 from typing import Any, Dict, Iterable, List
@@ -100,6 +101,9 @@ def _svg(chart_id: str, width: int, height: int, body: str) -> str:
     safe_id = "".join(ch if ch.isalnum() else "_" for ch in chart_id)
     label = CHART_LABELS.get(chart_id, chart_id.replace("-", " "))
     desc = f"{label}，用于展示试卷质量报告中的结构化指标。"
+    extra_attrs = ""
+    if chart_id == "competency-distribution":
+        extra_attrs = ' data-mode="coverage" data-active="life-concept"'
     canvas = (
         "<defs>"
         f'<style>text {{ font-family: {FONT_STACK}; }}</style>'
@@ -118,7 +122,7 @@ def _svg(chart_id: str, width: int, height: int, body: str) -> str:
     return (
         f'<svg class="report-chart chart-{_e(chart_id)}" id="chart-{_e(chart_id)}" data-style="bain-exhibit" '
         f'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
-        f'role="img" aria-labelledby="{safe_id}_title {safe_id}_desc">'
+        f'role="img" aria-labelledby="{safe_id}_title {safe_id}_desc"{extra_attrs}>'
         f'<title id="{safe_id}_title">{_e(label)}</title>'
         f'<desc id="{safe_id}_desc">{_e(desc)}</desc>'
         f'{canvas}{body}</svg>'
@@ -799,6 +803,7 @@ def render_fine_grained_heatmap(rows: Any) -> str:
         return _empty_chart("fine-grained-heatmap", "题目 × 难度因子热力图")
     factors = [
         ("pressure_index", "压力指数", 100),
+        ("score_risk", "分值压力", 10),
         ("metadata_gap", "元数据缺口", 1),
         ("evidence_density", "证据密度", max(_num(row.get("evidence_density")) for row in items) or 1),
         ("difficulty", "难度", 10),
@@ -807,7 +812,7 @@ def render_fine_grained_heatmap(rows: Any) -> str:
         ("du_count", "误区点", max(_num(row.get("du_count")) for row in items) or 1),
         ("max_trap_strength", "陷阱", 3),
     ]
-    width, height = 940, 168 + len(items) * 34
+    width, height = 1040, 168 + len(items) * 34
     left, top = 112, 122
     cell_w, cell_h = 98, 27
     body = [_title("Top 压力题 × 难度因子热力图", width)]
@@ -1008,22 +1013,74 @@ def render_portfolio_bubble(rows: Iterable[Dict[str, Any]]) -> str:
         _num(row.get("pressure_index"), _num(row.get("score")) / max_score * 100) * _num(row.get("score"), 1)
         for row in points
     ) / total_score
+
+    def _scaled_range(values: List[float], low: float, high: float, min_span: float, step: float) -> tuple[float, float]:
+        """Keep absolute tick values while zooming away from empty canvas."""
+        clean = [max(low, min(high, value)) for value in values if isinstance(value, (int, float))]
+        if not clean:
+            return low, high
+        raw_min, raw_max = min(clean), max(clean)
+        lo = max(low, math.floor((raw_min - step) / step) * step)
+        hi = min(high, math.ceil((raw_max + step) / step) * step)
+        span = hi - lo
+        if span < min_span:
+            center = (lo + hi) / 2
+            lo = center - min_span / 2
+            hi = center + min_span / 2
+            if lo < low:
+                hi += low - lo
+                lo = low
+            if hi > high:
+                lo -= hi - high
+                hi = high
+        return max(low, lo), min(high, hi)
+
+    difficulty_values = [_num(row.get("difficulty")) for row in points] + [avg_difficulty, 6.5, 7.5]
+    pressure_values = [
+        _num(row.get("pressure_index"), _num(row.get("score")) / max_score * 100)
+        for row in points
+    ] + [avg_pressure]
+    x_min, x_max = _scaled_range(difficulty_values, 0, 10, 4.5, 0.5)
+    y_min, y_max = _scaled_range(pressure_values, 0, 100, 35, 10)
+    x_span = max(0.1, x_max - x_min)
+    y_span = max(0.1, y_max - y_min)
+
+    def _x_pos(value: float) -> float:
+        return left + plot_w * (max(x_min, min(x_max, value)) - x_min) / x_span
+
+    def _y_pos(value: float) -> float:
+        return top + plot_h - plot_h * (max(y_min, min(y_max, value)) - y_min) / y_span
+
+    def _fmt_tick(value: float) -> str:
+        return str(int(value)) if abs(value - round(value)) < 1e-6 else f"{value:.1f}"
+
+    def _ticks(lo: float, hi: float, count: int = 5) -> List[float]:
+        if count <= 1:
+            return [lo]
+        return [lo + (hi - lo) * i / (count - 1) for i in range(count)]
+
     color_map = {"high": PALETTE["accent"], "medium": PALETTE["watch"], "low": PALETTE["platinum"], "data_gap": PALETTE["risk"]}
     body = [_title("题目组合气泡图：难度 × 压力指数 × 分值", width)]
-    body.append(_highlight_rect(left + plot_w * .65, top, plot_w * .35, plot_h * .45, 0.06))
+    high_x = _x_pos(max(avg_difficulty, 7.5))
+    high_y = _y_pos(avg_pressure)
+    if high_x < width - right - 8 and high_y > top + 8:
+        body.append(_highlight_rect(high_x, top, width - right - high_x, high_y - top, 0.06))
     body.append(_axis_label("高难高压复核区", left + plot_w - 10, top + 46, "end"))
-    body.append(f'<rect x="{left}" y="{top + plot_h * .62:.1f}" width="{plot_w * .38:.1f}" height="{plot_h * .38:.1f}" fill="{PALETTE["platinum"]}" fill-opacity="0.24"/>')
-    body.append(_axis_label("基础稳定区", left + 10, top + plot_h - 12, "start"))
-    for i in range(6):
-        y = top + plot_h * i / 5
+    stable_x = _x_pos(min(avg_difficulty - 1.0, 5.5))
+    stable_y = _y_pos(max(y_min, avg_pressure - 8))
+    if stable_x > left + 8 and stable_y < height - bottom - 8:
+        body.append(f'<rect x="{left}" y="{stable_y:.1f}" width="{stable_x - left:.1f}" height="{height - bottom - stable_y:.1f}" fill="{PALETTE["platinum"]}" fill-opacity="0.24"/>')
+    body.append(_axis_label("基础稳定区", left + 10, height - bottom - 12, "start"))
+    for value in reversed(_ticks(y_min, y_max, 6)):
+        y = _y_pos(value)
         body.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="{PALETTE["line"]}" />')
-        body.append(_axis_label(str(100 - i * 20), left - 16, y + 5, "end"))
-    for i in range(0, 11, 2):
-        x = left + plot_w * i / 10
+        body.append(_axis_label(_fmt_tick(value), left - 16, y + 5, "end"))
+    for value in _ticks(x_min, x_max, 6):
+        x = _x_pos(value)
         body.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{height - bottom}" stroke="{PALETTE["line"]}" />')
-        body.append(_axis_label(str(i), x, height - 58))
-    difficulty_x = left + plot_w * avg_difficulty / 10
-    pressure_y = top + plot_h - plot_h * avg_pressure / 100
+        body.append(_axis_label(_fmt_tick(value), x, height - 58))
+    difficulty_x = _x_pos(avg_difficulty)
+    pressure_y = _y_pos(avg_pressure)
     body.append(_baseline(left, height - bottom, width - right, height - bottom))
     body.append(_baseline(left, top, left, height - bottom))
     body.append(_benchmark_line(difficulty_x, top, difficulty_x, height - bottom, f"平均难度 {avg_difficulty:.1f}", difficulty_x + 10, top + 22, "start"))
@@ -1046,8 +1103,8 @@ def render_portfolio_bubble(rows: Iterable[Dict[str, Any]]) -> str:
         difficulty = max(0, min(10, _num(row.get("difficulty"))))
         score = _num(row.get("score"))
         pressure = max(0, min(100, _num(row.get("pressure_index"), score / max_score * 100)))
-        x = left + plot_w * difficulty / 10
-        y = top + plot_h - plot_h * pressure / 100
+        x = _x_pos(difficulty)
+        y = _y_pos(pressure)
         r = 7 + 9 * score / max_score
         color = color_map.get(row.get("risk_level"), PALETTE["watch"])
         role = "highlight" if row.get("risk_level") == "high" else "context"
@@ -1101,7 +1158,7 @@ def render_portfolio_bubble(rows: Iterable[Dict[str, Any]]) -> str:
     body.append(_axis_label("数据阻断", legend_x + 280, height - 27, "start"))
     high_count = sum(1 for row in points if row.get("risk_level") == "high")
     data_gap_count = len(blocked_ids)
-    body.append(_callout(f"高风险 {high_count} 题 · 数据阻断 {data_gap_count} 题", width - 64, 68, "end"))
+    body.append(_callout(f"坐标高风险 {high_count} 题 · 数据阻断 {data_gap_count} 题", width - 64, 68, "end"))
     body.append(_note("口径：气泡=分值；主导压力见明细；数据阻断不进坐标/均值。", left, height - 18, "start"))
     return _svg("question-portfolio", width, height, "".join(body))
 

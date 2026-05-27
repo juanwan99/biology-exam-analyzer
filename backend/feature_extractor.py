@@ -6,12 +6,28 @@ v3 核心变化：bloom 降为报告标签，新增 working_memory/chain_couplin
 import json
 import re
 from hashlib import sha256
-from llm_client import send_message_gpt
+from llm_client import llm_call, send_message_gpt, get_last_llm_call_metadata as get_last_call_metadata
+from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from prompt_loader import PromptLoader
 from logger import get_logger
 
 logger = get_logger()
+
+
+def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
+    metadata = dict(metadata or {})
+    try:
+        trace = get_last_call_metadata() or {}
+    except Exception:
+        trace = {}
+    provider = trace.get("provider") or "llm_client"
+    model = trace.get("model") or "configured_provider_chain"
+    fallback_count = int(trace.get("fallback_count") or 0)
+    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+        if trace.get(key) is not None:
+            metadata[key] = trace.get(key)
+    return provider, model, fallback_count, metadata
 
 # === 评分维度（参与难度计算）===
 SCORING_RANGES = {
@@ -64,33 +80,54 @@ _BLOOM_LABELS = {"识记", "理解", "应用", "分析", "评价", "创造"}
 
 
 def _input_refs(question_text: str, options: str, correct_answer: str,
-                question_type: str, subject: str) -> dict:
-    return {
+                question_type: str, subject: str, media_items: list | None = None) -> dict:
+    refs = {
         "subject": subject,
         "question_type": question_type,
         "question_text_length": len(question_text or ""),
         "options_length": len(options or ""),
         "has_correct_answer": bool(correct_answer),
     }
+    refs.update(media_input_refs(media_items))
+    return refs
+
+
+async def _send_prompt(prompt: str, *, max_tokens: int, temperature: float,
+                       purpose: str, media_items: list | None = None) -> str:
+    if media_input_refs(media_items):
+        return await llm_call(
+            messages_with_media(prompt, media_items),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            purpose=purpose,
+        )
+    return await send_message_gpt(
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        purpose=purpose,
+    )
 
 
 def _attach_llm_call(payload: dict, *, call_id: str, purpose: str, prompt_id: str,
                      prompt: str, input_refs: dict, parsed_schema: str,
                      confidence: float, validation_errors: list = None,
                      retry_count: int = 0, metadata: dict = None) -> dict:
+    provider, model, fallback_count, metadata = _llm_call_trace(metadata)
     call = LLMCallRecord(
         call_id=call_id,
         purpose=purpose,
         prompt_id=prompt_id,
         prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
-        provider="llm_client",
-        model="configured_provider_chain",
+        provider=provider,
+        model=model,
         input_refs=input_refs,
         parsed_schema=parsed_schema,
         confidence=confidence,
         validation_errors=validation_errors or [],
+        fallback_count=fallback_count,
         retry_count=retry_count,
-        metadata=metadata or {},
+        metadata=metadata,
     )
     payload["_llm_calls"] = [call.model_dump()]
     return payload
@@ -286,7 +323,8 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
 async def extract_features(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
-                           subject: str = "biology") -> dict:
+                           subject: str = "biology",
+                           media_items: list | None = None) -> dict:
     """调用 LLM 提取题目特征（v3: 难度预测维度 + 报告维度 + 质量审查）。"""
     # 尝试从 PromptLoader 加载学科专用 prompt
     loader = PromptLoader(subject)
@@ -303,10 +341,12 @@ async def extract_features(question_text: str, options: str = "",
     else:
         prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
     try:
-        raw = await send_message_gpt(
+        raw = await _send_prompt(
             prompt,
             max_tokens=2500,
             temperature=0,
+            purpose="feature_extraction",
+            media_items=media_items,
         )
         selected_raw = raw
         retry_count = 0
@@ -318,7 +358,13 @@ async def extract_features(question_text: str, options: str = "",
             logger.warning(f"[特征提取] raw_core=0 但 JSON 成功，重试一次（raw前100: {raw[:100]}）")
             try:
                 retry_count = 1
-                raw2 = await send_message_gpt(prompt, max_tokens=3000, temperature=0)
+                raw2 = await _send_prompt(
+                    prompt,
+                    max_tokens=3000,
+                    temperature=0,
+                    purpose="feature_extraction",
+                    media_items=media_items,
+                )
                 result2 = parse_features(raw2, include_status=True)
                 if result2.get("_raw_core_count", 0) > raw_core:
                     result = result2
@@ -371,7 +417,7 @@ async def extract_features(question_text: str, options: str = "",
             purpose="feature_extraction",
             prompt_id=f"{subject}.feature_extraction",
             prompt=prompt,
-            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject),
+            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="FeatureResult",
             confidence=ext_conf,
             validation_errors=val_errors,
@@ -396,7 +442,7 @@ async def extract_features(question_text: str, options: str = "",
             purpose="feature_extraction",
             prompt_id=f"{subject}.feature_extraction",
             prompt=prompt,
-            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject),
+            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="FeatureResult",
             confidence=0.0,
             validation_errors=result["_validation_errors"],
@@ -488,6 +534,12 @@ def build_big_question_prompt(question_text: str, options: str = "",
 - 1：所有方法在高中教材中有明确介绍
 - 2：部分方法需要迁移应用
 - 3：核心方法在教材中完全没有（如 In-Fusion 克隆、CRISPR）
+
+**难度构念补充：**
+- reasoning_steps 只计最少认知操作数，不按填空数量累计。
+- trap_density 只计真实可混淆路径，不按采分点数量累计。
+- 三引物PCR鉴定插入方向、GFP/融合蛋白定位、复杂载体构建、CRISPR、In-Fusion 等属于高级分子工具；若它们是核心解法，global_method_novelty 应为 3。
+- 引物方向/序列位置/融合蛋白/插入方向判断通常 representation_complexity 不低于 3；多个候选引物或方向判断 trap_density 通常不低于 2。
 """
 
 
@@ -499,57 +551,119 @@ _SQ_RANGES = {
     "knowledge_breadth": (1, 3),
 }
 
+_ADVANCED_BIO_METHOD_TERMS = (
+    "三引物pcr",
+    "插入方向",
+    "gfp",
+    "融合蛋白",
+    "融合基因",
+    "亚细胞定位",
+    "定位失败",
+    "引物设计",
+    "酶切位点",
+    "crispr",
+    "in-fusion",
+    "载体构建",
+    "基因编辑",
+)
 
-def _derive_points_from_score_share(subquestions: list, total_score: float) -> list:
-    """Derive integer points from score_share, ensuring sum == total_score exactly.
 
-    Uses largest-remainder method for fair rounding, then enforces minimum 1 point
-    per subquestion while preserving the sum==total_score invariant by reducing
-    points from the largest subquestions.
-    """
-    raw_points = [sq["score_share"] * total_score for sq in subquestions]
-    floored = [int(p) for p in raw_points]
-    remainders = [(raw_points[i] - floored[i], i) for i in range(len(subquestions))]
-    deficit = round(total_score) - sum(floored)
-    # Sort by remainder descending, distribute extra points
-    remainders.sort(key=lambda x: -x[0])
-    for j in range(int(deficit)):
-        if j < len(remainders):
-            floored[remainders[j][1]] += 1
-    # Ensure minimum 1 point per subquestion.
-    # Any point added here creates excess that must be removed from the largest
-    # subquestions so that sum(points) == round(total_score) is preserved.
-    for i in range(len(floored)):
-        if floored[i] < 1:
-            floored[i] = 1
-    target = round(total_score)
-    excess = sum(floored) - target
-    if excess > 0:
-        # Reduce from subquestions with the most points, never below 1
-        for _ in range(excess):
-            # Find index of largest subquestion that still has > 1 point
-            best_idx = -1
-            best_val = 0
-            for i, v in enumerate(floored):
-                if v > 1 and v > best_val:
-                    best_val = v
-                    best_idx = i
-            if best_idx == -1:
-                # Cannot reduce further (all at 1); sum invariant cannot be satisfied
-                # with min-1 and the given total_score — leave as-is
-                break
-            floored[best_idx] -= 1
-    return floored
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = (text or "").lower()
+    return any(term in lowered for term in terms)
+
+
+def _apply_biology_method_floors(result: dict, question_text: str,
+                                 subject: str) -> dict:
+    """Protect advanced biotech constructs from being scored as routine blanks."""
+    if subject != "biology" or not isinstance(result, dict):
+        return result
+    lowered = (question_text or "").lower()
+    matches = [term for term in _ADVANCED_BIO_METHOD_TERMS if term in lowered]
+    if len(matches) < 2:
+        return result
+
+    global_features = result.setdefault("global_features", {})
+    if int(global_features.get("global_method_novelty", 1) or 1) < 3:
+        global_features["global_method_novelty"] = 3
+        global_features["method_novelty_reason"] = "复杂分子工具"
+
+    report = result.setdefault("report", {})
+    if _contains_any(lowered, ("三引物pcr", "引物设计", "插入方向", "酶切位点")):
+        report["representation_complexity"] = max(
+            int(report.get("representation_complexity", 1) or 1),
+            3,
+        )
+
+    for sq in result.get("subquestions", []):
+        brief = str(sq.get("brief", "")).lower()
+        if _contains_any(brief, ("三引物", "pcr", "插入方向")):
+            sq["novelty"] = max(int(sq.get("novelty", 1) or 1), 3)
+            sq["trap_density"] = max(int(sq.get("trap_density", 1) or 1), 2)
+            sq["reasoning_steps"] = max(int(sq.get("reasoning_steps", 1) or 1), 4)
+        elif _contains_any(brief, ("融合", "载体", "定位失败", "引物设计")):
+            sq["novelty"] = max(int(sq.get("novelty", 1) or 1), 2)
+            sq["reasoning_steps"] = max(int(sq.get("reasoning_steps", 1) or 1), 3)
+    return result
+
+
+def _derive_points_from_score_shares(shares: list[float],
+                                     total_score: float | None) -> tuple[list[int] | None, list[float] | None, str | None]:
+    try:
+        expected_total = int(round(float(total_score or 0)))
+    except (ValueError, TypeError):
+        expected_total = 0
+    if expected_total <= 0:
+        return None, None, "score_share_requires_total_score"
+    if len(shares) > expected_total:
+        return None, None, "score_share_points_impossible"
+
+    share_sum = sum(shares)
+    if share_sum <= 0:
+        return None, None, "score_share_sum_mismatch"
+    if abs(share_sum - 1.0) > 0.1:
+        return None, None, "score_share_sum_mismatch"
+
+    normalized = [share / share_sum for share in shares]
+    extra_total = expected_total - len(shares)
+    raw_extra = [share * extra_total for share in normalized]
+    extra = [int(value) for value in raw_extra]
+    remainder = extra_total - sum(extra)
+    order = sorted(
+        range(len(shares)),
+        key=lambda idx: raw_extra[idx] - extra[idx],
+        reverse=True,
+    )
+    for idx in order[:remainder]:
+        extra[idx] += 1
+    return [1 + value for value in extra], normalized, None
+
+
+def _dependency_graph_has_cycle(valid_ids: set, dependencies: list[dict]) -> bool:
+    adj = {item_id: [] for item_id in valid_ids}
+    in_degree = {item_id: 0 for item_id in valid_ids}
+    for dep in dependencies:
+        fr = dep.get("from")
+        to = dep.get("to")
+        if fr in adj and to in adj:
+            adj[fr].append(to)
+            in_degree[to] += 1
+
+    queue = [item_id for item_id in valid_ids if in_degree[item_id] == 0]
+    visited = 0
+    while queue:
+        node = queue.pop()
+        visited += 1
+        for nxt in adj[node]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+    return visited < len(valid_ids)
 
 
 def parse_big_question_features(raw: str, total_score: float | None = None,
                                 detailed: bool = False) -> dict | None:
     """解析大题结构化 JSON。
-
-    支持两种格式：
-    - score_share 模式（v3.2+）: 小问用 score_share (0-1.0) 表示分值比例，
-      points 由 total_score * score_share 派生
-    - points 模式（向后兼容）: 小问用 absolute points 表示分值
 
     默认返回兼容旧接口的 payload/None；detailed=True 时返回带 failure_type
     的结构化结果，供上游显式失败而不是生成看似正常的回退数据。
@@ -654,15 +768,13 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
         logger.warning("[大题解析] subquestions 缺失或为空")
         return fail("missing_subquestions", ["subquestions is missing or empty"])
 
-    # Detect mode: score_share vs points
-    has_score_share = any(
-        isinstance(sq, dict) and "score_share" in sq for sq in sqs_raw
-    )
-    use_score_share = has_score_share
-    allocation_source = "inferred" if use_score_share else "explicit"
-
     subquestions = []
     invalid_schema_errors = []
+    score_share_mode = any(
+        isinstance(sq, dict) and "score_share" in sq
+        for sq in sqs_raw
+    )
+    score_shares = []
     for sq in sqs_raw:
         if not isinstance(sq, dict):
             invalid_schema_errors.append("subquestion item is not an object")
@@ -679,23 +791,23 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
                 invalid_schema_errors.extend(item_errors)
                 continue
             sq_id = len(subquestions) + 1
-
-        # score_share mode: parse score_share, defer points derivation
-        if use_score_share:
+        score_share = None
+        points = None
+        if score_share_mode:
             if "score_share" not in sq and detailed:
                 item_errors.append(f"missing score_share for subquestion {raw_id}")
-            raw_share = sq.get("score_share", 1.0 / max(len(sqs_raw), 1))
+            raw_share = sq.get("score_share", 0)
             try:
                 score_share = float(raw_share)
-                score_share = max(0.0, min(1.0, score_share))
+                if score_share < 0:
+                    raise ValueError("negative score_share")
             except (ValueError, TypeError):
                 item_errors.append(f"invalid score_share for subquestion {raw_id}: {raw_share}")
                 if detailed:
                     invalid_schema_errors.extend(item_errors)
                     continue
-                score_share = 1.0 / max(len(sqs_raw), 1)
+                score_share = 0.0
         else:
-            # points mode (backward compat)
             if "points" not in sq and detailed:
                 item_errors.append(f"missing points for subquestion {raw_id}")
             raw_points = sq.get("points", 2)
@@ -707,7 +819,6 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
                     invalid_schema_errors.extend(item_errors)
                     continue
                 points = 2
-
         cleaned_values = {}
         for key, (lo, hi) in _SQ_RANGES.items():
             if key not in sq and detailed:
@@ -728,8 +839,9 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
             "id": sq_id,
             "brief": str(sq.get("brief", ""))[:20],
         }
-        if use_score_share:
+        if score_share_mode:
             cleaned["score_share"] = score_share
+            score_shares.append(score_share)
         else:
             cleaned["points"] = points
         cleaned.update(cleaned_values)
@@ -740,46 +852,37 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
     if detailed and invalid_schema_errors:
         return fail("invalid_subquestion_schema", invalid_schema_errors)
 
+    allocation_source = "inferred" if score_share_mode else "explicit"
+    if score_share_mode:
+        derived_points, normalized_shares, share_failure = _derive_points_from_score_shares(
+            score_shares,
+            total_score,
+        )
+        if share_failure:
+            return fail(
+                share_failure,
+                [f"score_share_sum={sum(score_shares):.3f}, total_score={total_score}"],
+            )
+        for sq, points, share in zip(subquestions, derived_points, normalized_shares):
+            sq["points"] = points
+            sq["score_share"] = round(share, 6)
+
     ids = [sq["id"] for sq in subquestions]
     if len(set(ids)) != len(ids):
         return fail("duplicate_subquestion_ids", ["subquestion ids must be unique"])
 
-    # score_share mode: validate sum, normalize, derive points
-    if use_score_share:
-        share_sum = sum(sq["score_share"] for sq in subquestions)
-        if abs(share_sum - 1.0) > 0.1:
-            return fail(
-                "score_share_sum_mismatch",
-                [f"score_share_sum={share_sum:.3f}, expected=1.0"],
-            )
-        # Normalize to exactly 1.0 if within tolerance
-        if share_sum != 1.0:
-            for sq in subquestions:
-                sq["score_share"] = sq["score_share"] / share_sum
-
-        # Derive points from score_share * total_score
-        if total_score is not None and total_score > 0:
-            derived = _derive_points_from_score_share(subquestions, float(total_score))
-            for i, sq in enumerate(subquestions):
-                sq["points"] = derived[i]
-        else:
-            # No total_score: assign equal default points
-            for sq in subquestions:
-                sq["points"] = 2
-    else:
-        # points mode: existing validation
-        if total_score is not None:
-            try:
-                expected_total = float(total_score)
-            except (ValueError, TypeError):
-                expected_total = 0
-            if expected_total > 0:
-                points_sum = sum(float(sq["points"]) for sq in subquestions)
-                if abs(points_sum - expected_total) / expected_total > 0.2:
-                    return fail(
-                        "points_sum_mismatch",
-                        [f"points_sum={points_sum:g}, total_score={expected_total:g}"],
-                    )
+    if total_score is not None and not score_share_mode:
+        try:
+            expected_total = float(total_score)
+        except (ValueError, TypeError):
+            expected_total = 0
+        if expected_total > 0:
+            points_sum = sum(float(sq["points"]) for sq in subquestions)
+            if abs(points_sum - expected_total) / expected_total > 0.2:
+                return fail(
+                    "points_sum_mismatch",
+                    [f"points_sum={points_sum:g}, total_score={expected_total:g}"],
+                )
 
     # dependencies
     deps_raw = data.get("dependencies", [])
@@ -804,6 +907,9 @@ def parse_big_question_features(raw: str, total_score: float | None = None,
         if dropped_deps >= len(deps_raw) and len(deps_raw) > 0:
             logger.warning("[大题解析] 所有依赖均无效，视为依赖图矛盾，返回结构化失败")
             return fail("invalid_dependency_ids", ["all dependency ids are invalid"])
+    if dependencies and _dependency_graph_has_cycle(valid_ids, dependencies):
+        logger.warning("[大题解析] 依赖图存在环，返回结构化失败")
+        return fail("dependency_cycle", ["dependency graph contains a cycle"])
 
     # global_features
     gf_raw = data.get("global_features", {})
@@ -871,7 +977,8 @@ def _big_question_failure_payload(*, failure_type: str, errors: list[str],
                                   prompt: str, question_text: str, options: str,
                                   correct_answer: str, question_type: str,
                                   subject: str, status: str,
-                                  response_length: int = 0) -> dict:
+                                  response_length: int = 0,
+                                  media_items: list | None = None) -> dict:
     payload = {
         "_big_question_failed": True,
         "failure_type": failure_type,
@@ -883,7 +990,7 @@ def _big_question_failure_payload(*, failure_type: str, errors: list[str],
         purpose="big_question_feature_extraction",
         prompt_id=f"{subject}.big_question_feature_extraction",
         prompt=prompt,
-        input_refs=_input_refs(question_text, options, correct_answer, question_type, subject),
+        input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
         parsed_schema="BigQuestionFeatureResult",
         confidence=0.0,
         validation_errors=errors,
@@ -900,7 +1007,8 @@ async def extract_big_question_features(question_text: str, options: str = "",
                                         question_type: str = "",
                                         subject: str = "biology",
                                         total_score: float | None = None,
-                                        return_failure: bool = False) -> dict | None:
+                                        return_failure: bool = False,
+                                        media_items: list | None = None) -> dict | None:
     """调用 LLM 提取大题结构化特征。
 
     return_failure=True 时返回结构化失败 payload，避免上游把解析失败
@@ -920,42 +1028,50 @@ async def extract_big_question_features(question_text: str, options: str = "",
     else:
         prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
     try:
-        raw = await send_message_gpt(prompt, max_tokens=5000, temperature=0)
+        raw = await _send_prompt(
+            prompt,
+            max_tokens=5000,
+            temperature=0,
+            purpose="difficulty_review",
+            media_items=media_items,
+        )
         parsed = parse_big_question_features(raw, total_score=total_score, detailed=True)
+        retry_count = 0
         if not parsed["ok"]:
             failure_type = parsed["failure_type"] or "big_question_structure_failed"
-            errors = parsed.get("errors") or [failure_type]
-            status = "parse_failed" if failure_type == "json_parse_failed" else "validation_failed"
-            if failure_type in {
-                "cannot_identify_subquestions", "points_unknown",
-                "insufficient_stem", "non_big_question", "schema_uncertain",
-                "model_reported_failure",
-            }:
-                status = "model_failed"
-            logger.warning(
-                f"[大题提取] 结构化解析失败: {failure_type}, 原始长度={len(raw)}")
-
-            # Retry once for transient / fixable failures
-            _retryable = {
-                "points_sum_mismatch", "score_share_sum_mismatch",
-                "invalid_subquestion_schema", "json_truncated",
-            }
-            if failure_type in _retryable:
-                logger.info(f"[大题提取] 触发 retry (failure_type={failure_type})")
-                raw2 = await send_message_gpt(prompt, max_tokens=5000, temperature=0.1)
-                parsed2 = parse_big_question_features(raw2, total_score=total_score, detailed=True)
-                if parsed2["ok"]:
-                    parsed = parsed2
-                    raw = raw2
+            if failure_type in {"points_sum_mismatch", "score_share_sum_mismatch"}:
+                logger.warning(f"[大题提取] {failure_type}，按同一结构化合同重试一次")
+                retry_count = 1
+                raw_retry = await _send_prompt(
+                    prompt,
+                    max_tokens=5000,
+                    temperature=0,
+                    purpose="difficulty_review",
+                    media_items=media_items,
+                )
+                parsed_retry = parse_big_question_features(
+                    raw_retry,
+                    total_score=total_score,
+                    detailed=True,
+                )
+                if parsed_retry["ok"]:
+                    raw = raw_retry
+                    parsed = parsed_retry
                 else:
-                    # Both attempts failed — use second attempt's failure info
-                    failure_type = parsed2["failure_type"] or failure_type
-                    errors = parsed2.get("errors") or [failure_type]
-                    status = "parse_failed" if failure_type == "json_parse_failed" else "validation_failed"
-                    logger.warning(
-                        f"[大题提取] retry 仍失败: {failure_type}, 原始长度={len(raw2)}")
-
+                    raw = raw_retry
+                    parsed = parsed_retry
+                    failure_type = parsed["failure_type"] or failure_type
+            errors = parsed.get("errors") or [failure_type]
             if not parsed["ok"]:
+                status = "parse_failed" if failure_type == "json_parse_failed" else "validation_failed"
+                if failure_type in {
+                    "cannot_identify_subquestions", "points_unknown",
+                    "insufficient_stem", "non_big_question", "schema_uncertain",
+                    "model_reported_failure",
+                }:
+                    status = "model_failed"
+                logger.warning(
+                    f"[大题提取] 结构化解析失败: {failure_type}, 原始长度={len(raw)}")
                 if return_failure:
                     return _big_question_failure_payload(
                         failure_type=failure_type,
@@ -968,19 +1084,22 @@ async def extract_big_question_features(question_text: str, options: str = "",
                         subject=subject,
                         status=status,
                         response_length=len(raw),
+                        media_items=media_items,
                     )
                 return None
 
         result = parsed["data"]
+        result = _apply_biology_method_floors(result, question_text, subject)
         result = _attach_llm_call(
             result,
             call_id=f"{subject}-big-question-feature-extraction",
             purpose="big_question_feature_extraction",
             prompt_id=f"{subject}.big_question_feature_extraction",
             prompt=prompt,
-            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject),
+            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="BigQuestionFeatureResult",
             confidence=1.0,
+            retry_count=retry_count,
             metadata={
                 "status": "ok",
                 "response_length": len(raw),
@@ -1004,5 +1123,6 @@ async def extract_big_question_features(question_text: str, options: str = "",
                 question_type=question_type,
                 subject=subject,
                 status="provider_failed",
+                media_items=media_items,
             )
         return None
