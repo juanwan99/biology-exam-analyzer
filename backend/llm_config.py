@@ -7,10 +7,22 @@ import os
 from llm_policy import resolve_model_profile
 
 LEGACY_NATIVE_MODEL_OVERRIDE_ENV = "LLM_ALLOW_NATIVE_MODEL_OVERRIDE"
+NATIVE_TEXT_FALLBACK_ENV = "LLM_ENABLE_NATIVE_TEXT_FALLBACK"
 VISION_PROVIDER_ENV = "LLM_VISION_PROVIDER"
+QWEN_TEXT_FALLBACK_ENV = "LLM_ENABLE_QWEN_TEXT_FALLBACK"
 
 QWEN_VISION_PROVIDER_NAMES = {"qwen", "qwen_vision", "dashscope"}
 NATIVE_VISION_PROVIDER_NAMES = {"native", "gemini", "google", "primary"}
+TEXT_REVIEW_PURPOSES = {
+    "big_question_feature_extraction",
+    "competency_analysis",
+    "feature_extraction",
+    "missing_evidence_repair",
+    "question_analysis",
+    "question_analysis_retry",
+    "report_insights",
+    "report_teaching_suggestions",
+}
 
 PROVIDERS = [
     {
@@ -33,6 +45,38 @@ PROVIDERS = [
         "no_proxy": True,
     },
     {
+        "name": "deepseek",
+        "model_env": "DEEPSEEK_MODEL",
+        "model": "deepseek-v4-pro",
+        "api_format": "openai_chat",
+        "base_url_env": "DEEPSEEK_API_BASE",
+        "base_url_default": "https://api.deepseek.com/v1/chat/completions",
+        "key_env": "DEEPSEEK_API_KEY",
+        "model_role": "analysis_text",
+        "model_policy": "exam-review-deepseek-primary",
+        "response_format": "json_object",
+        "max_tokens": 16384,
+        "semaphore_limit": 10,
+        "retry_count": 2,
+        "no_proxy": True,
+    },
+    {
+        "name": "qwen_text",
+        "model_env": "QWEN_TEXT_MODEL",
+        "model_default": "qwen-plus",
+        "api_format": "openai_chat",
+        "base_url_env": "QWEN_API_BASE",
+        "base_url_default": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_path": "/chat/completions",
+        "key_envs": ["QWEN_API_KEY", "DASHSCOPE_API_KEY"],
+        "model_role": "analysis_text",
+        "model_policy": "exam-review-qwen-text",
+        "max_tokens": 8192,
+        "semaphore_limit": 6,
+        "retry_count": 1,
+        "no_proxy": True,
+    },
+    {
         "name": "primary",
         "model_env": "LLM_NATIVE_MODEL",
         "model_default": "",
@@ -47,18 +91,6 @@ PROVIDERS = [
         "thinking_overhead": 3,
         "semaphore_limit": 10,
         "retry_count": 2,
-    },
-    {
-        "name": "deepseek",
-        "model": "deepseek-v4-pro",
-        "api_format": "openai_chat",
-        "base_url_env": "DEEPSEEK_API_BASE",
-        "base_url_default": "https://api.deepseek.com/v1/chat/completions",
-        "key_env": "DEEPSEEK_API_KEY",
-        "max_tokens": 8192,
-        "semaphore_limit": 10,
-        "retry_count": 2,
-        "no_proxy": True,
     },
 ]
 
@@ -113,6 +145,18 @@ def _qwen_key_configured() -> bool:
     return False
 
 
+def _env_truthy(env_name: str) -> bool:
+    return os.environ.get(env_name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _native_text_fallback_enabled() -> bool:
+    return _env_truthy(NATIVE_TEXT_FALLBACK_ENV)
+
+
+def _qwen_text_fallback_enabled() -> bool:
+    return _env_truthy(QWEN_TEXT_FALLBACK_ENV)
+
+
 def _skip_by_vision_preference(provider: dict, requires_images: bool) -> bool:
     if not requires_images:
         return False
@@ -125,6 +169,29 @@ def _skip_by_vision_preference(provider: dict, requires_images: bool) -> bool:
     if _qwen_key_configured():
         return provider.get("name") != "qwen_vision"
     return False
+
+
+def _apply_purpose_preference(
+    providers: list[dict],
+    purpose: str | None,
+    requires_images: bool,
+) -> list[dict]:
+    if requires_images:
+        return providers
+
+    normalized = (purpose or "").strip()
+    if not _qwen_text_fallback_enabled():
+        providers = [
+            provider for provider in providers
+            if provider.get("name") != "qwen_text"
+        ]
+    if normalized in TEXT_REVIEW_PURPOSES:
+        priority = {"deepseek": 0, "qwen_text": 1, "primary": 2}
+        return sorted(
+            providers,
+            key=lambda provider: priority.get(provider.get("name"), 50),
+        )
+    return providers
 
 
 def get_providers(
@@ -145,6 +212,12 @@ def get_providers(
     for template in PROVIDERS:
         p = dict(template)
         if p.get("vision_only") and not requires_images:
+            continue
+        if (
+            p.get("api_format") == "native_sdk"
+            and not requires_images
+            and not _native_text_fallback_enabled()
+        ):
             continue
         if requires_images and not p.get("supports_images", False):
             continue
@@ -185,4 +258,5 @@ def get_providers(
                 and p.get("model")
             ):
                 result.append(p)
-    return _filter_vision_providers(result, requires_images)
+    result = _filter_vision_providers(result, requires_images)
+    return _apply_purpose_preference(result, purpose, requires_images)

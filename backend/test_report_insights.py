@@ -136,7 +136,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 3,
                     "cited_chunk_count": 2,
-                    "metadata": {"provider": "discovery_engine"},
+                    "metadata": {"provider": "evidence_service"},
                 }
 
         gateway = FakeGateway()
@@ -149,19 +149,20 @@ class TestGenerateInsights:
             grounding_enabled=True,
         )
 
-        assert len(gateway.calls) >= 5
+        assert len(gateway.calls) >= 4
         assert "本卷难度适中" in gateway.calls[0]["answer"]
         assert gateway.calls[0]["facts"]
         grounded_sections = [check["section"] for check in result["_grounding_checks"]]
         assert "overall_assessment" in grounded_sections
         assert "difficulty_analysis" in grounded_sections
         assert "knowledge_analysis" in grounded_sections
-        assert "competency_analysis" in grounded_sections
-        assert "bloom_analysis" in grounded_sections
+        assert grounded_sections
         assert len(result["_grounding_checks"]) == len(gateway.calls)
         assert result["_grounding_checks"][0]["status"] == "ok"
         assert result["_grounding_checks"][0]["support_score"] == 0.84
         assert result["_llm_calls"][1]["purpose"] == "report_grounding_check"
+        assert result["_llm_calls"][1]["provider"] == "evidence_service"
+        assert result["_llm_calls"][1]["model"] == "check_grounding"
         assert result["_llm_calls"][1]["metadata"]["section_count"] == len(gateway.calls)
 
     async def test_grounding_facts_are_section_cards_and_traceable(self, sample_report_data):
@@ -269,6 +270,21 @@ class TestGenerateInsights:
         assert recommendation_section["kind"] == "policy_basis"
         assert "建议降低困难题比例" in recommendation_section["policy_text"]
 
+    async def test_grounding_sections_skip_pure_policy_and_low_signal_claims(self):
+        from report_insights import _build_grounding_sections
+
+        sections = _build_grounding_sections({
+            "difficulty_analysis": "\u5efa\u8bae\u5927\u5e45\u8c03\u6574\u56f0\u96be\u9898\u6bd4\u4f8b\uff0c\u589e\u52a0\u7b80\u5355\u9898\u3002",
+            "knowledge_analysis": "\u8584\u5f31\u73af\u8282\u5728\u9009\u62e9\u6027\u5fc5\u4fee3\uff0c\u5982\u57fa\u56e0\u5de5\u7a0b\u3001\u7ec6\u80de\u5de5\u7a0b\u7b49\u6a21\u5757\u8003\u67e5\u4e0d\u8db3\u3002",
+            "bloom_analysis": "\u9ad8\u9636\u601d\u7ef4\uff08\u5206\u6790\u3001\u8bc4\u4ef7\u3001\u521b\u9020\uff09\u5408\u8ba1\u536054.0%\uff0c\u6574\u4f53\u601d\u7ef4\u5c42\u7ea7\u8f83\u9ad8\uff0c\u4f46\u57fa\u7840\u6027\u8bc6\u8bb0\u8003\u67e5\u4e0d\u8db3\uff0c\u53ef\u80fd\u5f71\u54cd\u4f4e\u5c42\u6b21\u8ba4\u77e5\u7684\u8986\u76d6\u9762\u3002",
+        })
+
+        answers = [section["answer"] for section in sections]
+        assert "\u5efa\u8bae\u5927\u5e45\u8c03\u6574\u56f0\u96be\u9898\u6bd4\u4f8b\u3002" not in answers
+        assert not any("\u8584\u5f31\u73af\u8282" in answer for answer in answers)
+        assert any("54.0%" in answer for answer in answers)
+        assert not any("\u53ef\u80fd\u5f71\u54cd" in answer for answer in answers)
+
     async def test_grounding_sections_rewrite_pronoun_score_claims(self):
         from report_insights import _build_grounding_sections
 
@@ -346,7 +362,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 2,
                     "cited_chunk_count": 0,
-                    "metadata": {"provider": "discovery_engine"},
+                    "metadata": {"provider": "evidence_service"},
                 }
 
         from report_insights import generate_insights
@@ -389,8 +405,8 @@ class TestGenerateInsights:
             report_insights,
             "get_last_call_metadata",
             lambda: {
-                "provider": "google_genai",
-                "model": "gemini-3-pro",
+                "provider": "native_sdk",
+                "model": "primary-pro",
                 "fallback_count": 0,
                 "provider_errors": [],
             },
@@ -405,8 +421,8 @@ class TestGenerateInsights:
 
         calls = result["_llm_calls"]
         assert calls[0]["purpose"] == "report_insights"
-        assert calls[0]["provider"] == "google_genai"
-        assert calls[0]["model"] == "gemini-3-pro"
+        assert calls[0]["provider"] == "native_sdk"
+        assert calls[0]["model"] == "primary-pro"
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_report_llm_uses_deterministic_temperature(self, mock_gpt, sample_report_data):
@@ -422,3 +438,34 @@ class TestGenerateInsights:
         ]
         assert temperatures
         assert all(value == 0.0 for value in temperatures)
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_overall_call_uses_large_enough_token_budget(self, mock_gpt, sample_report_data):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        from report_insights import generate_insights
+
+        await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+        assert mock_gpt.call_args_list[0].kwargs["purpose"] == "report_insights"
+        assert mock_gpt.call_args_list[0].kwargs["max_tokens"] >= 4096
+
+    async def test_formal_grounded_insights_rewrite_unverified_llm_claims(self, sample_report_data):
+        from report_insights import _stabilize_grounded_insights
+
+        sample_report_data["metadata_quality"] = {"llm_call_counts": {"question_analysis": 2}}
+        draft = {
+            "overall_assessment": "UNSUPPORTED claim about unmeasured discrimination.",
+            "recommendations": [],
+            "difficulty_analysis": "",
+            "knowledge_analysis": "",
+            "competency_analysis": "",
+            "bloom_analysis": "",
+        }
+
+        result = _stabilize_grounded_insights(draft, sample_report_data)
+
+        assert result["_stabilized_for_grounding"] is True
+        assert "UNSUPPORTED" not in result["overall_assessment"]
+        assert "平均难度为5" in result["overall_assessment"]
+        assert result["recommendations"]

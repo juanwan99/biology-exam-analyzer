@@ -452,7 +452,7 @@ class DocumentProcessor:
 
             logger.info(f"PDF内容提取: {len(extracted_text)} 字符, {len(extracted_images)} 张图片, {len(elements)} 个元素")
 
-            # 2. 转换PDF为图片（用于布局参考和Gemini视觉识别）
+            # 2. 转换PDF为图片（用于布局参考和视觉识别）
             layout_images = convert_from_path(
                 file_path,
                 dpi=dpi,
@@ -577,7 +577,7 @@ class DocumentProcessor:
     @staticmethod
     def images_to_bytes(images: List[Image.Image]) -> List[bytes]:
         """
-        将PIL Image转换为字节流（用于Gemini API）
+        将PIL Image转换为字节流（用于视觉分析 API）
 
         Args:
             images: PIL Image列表

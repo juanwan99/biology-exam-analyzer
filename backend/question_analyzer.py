@@ -9,8 +9,11 @@ from config import PROMPT_DIR
 from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
+from vision_context import extract_visual_context
 
 logger = get_logger()
+
+SCORE_SHARE_NORMALIZATION_MAX_DEVIATION = 0.10
 
 
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
@@ -134,7 +137,8 @@ class QuestionAnalyzer:
             "高": 0.85, "中": 0.65, "低": 0.45,
         }
 
-        for seu in data.get("scoring_units") or []:
+        scoring_units = data.get("scoring_units") or []
+        for seu in scoring_units:
             if not isinstance(seu, dict):
                 continue
             original = seu.get("score_share")
@@ -180,6 +184,23 @@ class QuestionAnalyzer:
                 if coerced != original:
                     link["share"] = coerced
                     notes.append("knowledge_link_share_to_float")
+
+        if isinstance(scoring_units, list) and scoring_units:
+            shares = []
+            for seu in scoring_units:
+                if not isinstance(seu, dict) or not isinstance(seu.get("score_share"), (int, float)):
+                    shares = []
+                    break
+                shares.append(float(seu["score_share"]))
+            share_sum = sum(shares)
+            deviation = abs(share_sum - 1.0)
+            if shares and share_sum > 0 and 0.02 < deviation <= SCORE_SHARE_NORMALIZATION_MAX_DEVIATION:
+                for seu, share in zip(scoring_units, shares):
+                    seu["score_share"] = share / share_sum
+                metadata = data.setdefault("_normalization_metadata", {})
+                metadata["score_share_sum_normalized_from"] = round(share_sum, 6)
+                metadata["score_share_sum_normalized_to"] = 1.0
+                notes.append("score_share_sum_normalized")
 
         for index, unit in enumerate(data.get("diagnostic_units") or [], 1):
             if not isinstance(unit, dict):
@@ -413,6 +434,9 @@ class QuestionAnalyzer:
         evidence_context_meta = None
         question_media_items = _question_images_to_media_items(question_images)
         question_media_refs = media_input_refs(question_media_items)
+        visual_context_text = ""
+        visual_call_record = None
+        analysis_timeout = 240.0 if question_type in ("short_answer", "non_choice") or len(question_text) > 500 else 120.0
 
         def build_call_record(payload: dict, parsed_schema: str, confidence: float,
                               validation_errors: list = None, *,
@@ -427,6 +451,8 @@ class QuestionAnalyzer:
                 metadata.update(metadata_extra)
             if evidence_context_meta:
                 metadata["evidence_context"] = evidence_context_meta
+            if visual_context_text:
+                metadata["visual_context_source"] = "qwen_vision"
             provider, model, fallback_count, metadata = _llm_call_trace(metadata)
             call = LLMCallRecord(
                 call_id=f"question-{question_id}-{call_suffix}",
@@ -498,7 +524,19 @@ class QuestionAnalyzer:
             prompt_sections.append(evidence_context_text)
             evidence_context_meta = evidence_context.get("metadata") or {}
 
+        if question_media_items:
+            visual_context_text, visual_call_record = await extract_visual_context(
+                question_media_items,
+                question_text=question_text,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header or "",
+                timeout=min(analysis_timeout, 120.0),
+            )
+            prompt_sections.append(visual_context_text)
+
         full_prompt = "\n\n".join(prompt_sections + [f"题目内容：\n{question_text}"])
+        initial_calls = [visual_call_record] if visual_call_record else []
 
         try:
             logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")
@@ -507,10 +545,9 @@ class QuestionAnalyzer:
                 total_img_size = sum(len(img) for img in question_images if img)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
-            analysis_timeout = 240.0 if question_type in ("short_answer", "non_choice") or len(question_text) > 500 else 120.0
             response_text = await llm_call(
-                messages=_question_messages(full_prompt, question_media_items),
-                max_tokens=8192,
+                messages=_question_messages(full_prompt, []),
+                max_tokens=12000,
                 temperature=0,
                 timeout=analysis_timeout,
                 purpose="question_analysis",
@@ -558,11 +595,14 @@ class QuestionAnalyzer:
                         from llm_schemas import (FineGrainedResult, validate_llm_output,
                                                  compute_summary_from_units, validate_score_conservation)
                         result, normalization_notes = self._normalize_fine_grained_result(result)
+                        normalization_metadata = result.get("_normalization_metadata") or {}
                         # R2-001 修复：在 Pydantic 归一化前检查原始 score_share
                         raw_seus = result.get("scoring_units", [])
                         score_share_penalty = 0
                         if isinstance(raw_seus, list) and raw_seus:
-                            raw_share_sum = sum(s.get("score_share", 0) for s in raw_seus if isinstance(s, dict))
+                            raw_share_sum = normalization_metadata.get("score_share_sum_normalized_from")
+                            if raw_share_sum is None:
+                                raw_share_sum = sum(s.get("score_share", 0) for s in raw_seus if isinstance(s, dict))
                             deviation = abs(raw_share_sum - 1.0)
                             if deviation > 0.05:
                                 logger.warning(f"[分析] 题目{question_id} 原始 score_share 总和={raw_share_sum:.3f}，偏离 1.0")
@@ -586,11 +626,11 @@ class QuestionAnalyzer:
                                 logger.warning(f"[分析] 题目{question_id} 分值守恒检查失败: {conservation_errors}")
                                 val_errors = (val_errors or []) + conservation_errors
                                 ext_conf = min(ext_conf, 0.6)
-                            # 记录归一化前的偏差（审计用）
-                            if isinstance(raw_seus, list) and raw_seus:
+                            # 记录未被归一化的偏差（审计用）；近似偏差写入 call metadata，不作为解析失败。
+                            if isinstance(raw_seus, list) and raw_seus and not normalization_metadata.get("score_share_sum_normalized_from"):
                                 raw_sum = sum(s.get("score_share", 0) for s in raw_seus if isinstance(s, dict))
                                 if abs(raw_sum - 1.0) > 0.02:
-                                    val_errors = (val_errors or []) + [f"原始 score_share 总和={raw_sum:.3f}，已自动归一化"]
+                                    val_errors = (val_errors or []) + [f"原始 score_share 总和={raw_sum:.3f}，未归一化"]
                             summary = compute_summary_from_units(fg)
                             validated.update(summary)
                             validated["_fine_grained"] = {
@@ -603,12 +643,17 @@ class QuestionAnalyzer:
                             if val_errors:
                                 validated["_validation_errors"] = val_errors
                             logger.info(f"[分析] 题目{question_id} v2分析完成 (confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)}, DU={len(fg.diagnostic_units)})")
-                            metadata_extra = {"normalization_notes": normalization_notes} if normalization_notes else None
+                            metadata_extra = {"normalization_notes": normalization_notes} if normalization_notes else {}
+                            if normalization_metadata:
+                                metadata_extra["normalization_metadata"] = normalization_metadata
+                            if not metadata_extra:
+                                metadata_extra = None
                             validated = attach_call_record(
                                 validated,
                                 "FineGrainedResult",
                                 ext_conf,
                                 val_errors,
+                                existing_calls=initial_calls,
                                 metadata_extra=metadata_extra,
                             )
                             validated = await self._retry_missing_evidence_units(
@@ -618,6 +663,7 @@ class QuestionAnalyzer:
                                 section_header=section_header,
                                 question_text=question_text,
                                 question_media_items=question_media_items,
+                                visual_context_text=visual_context_text,
                                 timeout=analysis_timeout,
                             )
                             return validated
@@ -647,7 +693,13 @@ class QuestionAnalyzer:
                 if val_errors:
                     result["_validation_errors"] = val_errors
                 logger.info(f"[分析] 题目{question_id} 分析完成 (extraction_confidence={ext_conf})")
-                result = attach_call_record(result, "AnalysisResult", ext_conf, val_errors)
+                result = attach_call_record(
+                    result,
+                    "AnalysisResult",
+                    ext_conf,
+                    val_errors,
+                    existing_calls=initial_calls,
+                )
                 return result
             except json.JSONDecodeError as json_err:
                 logger.error(f"[分析] 题目{question_id} JSON解析失败: {str(json_err)}")
@@ -666,10 +718,17 @@ class QuestionAnalyzer:
                     compact_prompt_id = "biology.question_analysis.v2.json_repair"
                     compact_response = await llm_call(
                         messages=_question_messages(
-                            f"{compact_prompt}\n\n题目内容：\n{question_text}",
-                            question_media_items,
+                            "\n\n".join(
+                                part for part in [
+                                    compact_prompt,
+                                    visual_context_text,
+                                    f"题目内容：\n{question_text}",
+                                ]
+                                if part
+                            ),
+                            [],
                         ),
-                        max_tokens=8192,
+                        max_tokens=12000,
                         temperature=0,
                         timeout=analysis_timeout,
                         purpose="question_analysis_retry",
@@ -721,6 +780,7 @@ class QuestionAnalyzer:
                         "FineGrainedResult",
                         ext_conf,
                         val_errors,
+                        existing_calls=initial_calls,
                         prompt_id=compact_prompt_id,
                         prompt_hash_value=compact_prompt_hash,
                         response_len=compact_response_length,
@@ -739,6 +799,7 @@ class QuestionAnalyzer:
                         section_header=section_header,
                         question_text=question_text,
                         question_media_items=question_media_items,
+                        visual_context_text=visual_context_text,
                         timeout=analysis_timeout,
                     )
                     return validated
@@ -778,6 +839,7 @@ class QuestionAnalyzer:
         question_text: str,
         timeout: float,
         question_media_items: list | None = None,
+        visual_context_text: str = "",
     ) -> dict:
         if not self._needs_evidence_units(analysis_payload, question_type):
             return analysis_payload
@@ -799,10 +861,17 @@ class QuestionAnalyzer:
         try:
             response_text = await llm_call(
                 messages=_question_messages(
-                    f"{prompt}\n\n题目内容：\n{question_text}",
-                    question_media_items or [],
+                    "\n\n".join(
+                        part for part in [
+                            prompt,
+                            visual_context_text,
+                            f"题目内容：\n{question_text}",
+                        ]
+                        if part
+                    ),
+                    [],
                 ),
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0,
                 timeout=min(timeout, 120.0),
                 purpose="missing_evidence_repair",
@@ -861,6 +930,8 @@ class QuestionAnalyzer:
         retry_metadata = {
             "response_length": len(response_text or ""),
             "validation_errors": validation_errors,
+            "repair_attempt": 1,
+            "repair_for": "question_analysis.evidence_units",
             "diagnostic_units_count": len(fine_grained.get("diagnostic_units") or []),
             "stimulus_units_count": len(fine_grained.get("stimulus_units") or []),
         }
@@ -868,7 +939,7 @@ class QuestionAnalyzer:
         call = LLMCallRecord(
             call_id=f"question-{question_id}-evidence-retry",
             question_id=question_id,
-            purpose="question_analysis",
+            purpose="missing_evidence_repair",
             prompt_id="biology.question_analysis.v2.evidence_retry",
             prompt_hash=prompt_hash,
             provider=provider,
@@ -884,7 +955,7 @@ class QuestionAnalyzer:
             confidence=confidence,
             validation_errors=validation_errors,
             fallback_count=fallback_count,
-            retry_count=1,
+            retry_count=0,
             metadata=retry_metadata,
         )
         analysis_payload.setdefault("_llm_calls", []).append(call.model_dump())

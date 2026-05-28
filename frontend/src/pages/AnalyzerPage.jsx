@@ -29,7 +29,7 @@ function AnalyzerPage() {
     {
       id: 'model',
       label: '普通模型审题',
-      help: '只走模型生成，不要求 Discovery Engine 证据门禁。',
+      help: '只走模型生成，不要求 证据服务门禁。',
     },
   ]
   const activeReviewChannel = reviewChannelOptions.find(option => option.id === reviewChannel) || reviewChannelOptions[0]

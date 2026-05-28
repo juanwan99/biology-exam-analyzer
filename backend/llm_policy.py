@@ -1,20 +1,21 @@
-"""Exam review model policy.
+"""LLM model policy for explicit fallback paths.
 
-This module is the single place that knows the Gemini model split for the
-exam-review pipeline. Business modules should pass a purpose string to
-llm_call/send_message_gpt instead of hard-coding provider model ids.
+The main exam-review LLM chain is purpose-aware: Qwen text is first for
+structured long-form analysis paths that must not truncate, DeepSeek remains in
+the text chain for general/report analysis, and Qwen vision handles image
+inputs. This module only controls the native model split when native text
+fallback or grounded generation is explicitly enabled.
+Business modules should still pass a purpose string to llm_call/send_message_gpt
+instead of hard-coding provider model ids.
 """
 from dataclasses import dataclass
 import os
 
 
-POLICY_ID = "exam-review-gemini31-global"
-DEFAULT_FLASH_MODEL = "publishers/google/models/gemini-3-flash-preview"
-DEFAULT_PRO_MODEL = "publishers/google/models/gemini-3.1-pro-preview"
-DISCONTINUED_MODELS = {
-    "gemini-3-pro-preview": DEFAULT_PRO_MODEL,
-    "publishers/google/models/gemini-3-pro-preview": DEFAULT_PRO_MODEL,
-}
+POLICY_ID = os.environ.get("LLM_POLICY_ID", "exam-review-global")
+DEFAULT_FLASH_MODEL = os.environ.get("LLM_EXAM_REVIEW_FLASH_MODEL", "")
+DEFAULT_PRO_MODEL = os.environ.get("LLM_EXAM_REVIEW_PRO_MODEL", "")
+DISCONTINUED_MODELS: dict[str, str] = {}
 
 FLASH_MODEL_ENV = "LLM_EXAM_REVIEW_FLASH_MODEL"
 PRO_MODEL_ENV = "LLM_EXAM_REVIEW_PRO_MODEL"
@@ -67,12 +68,7 @@ def resolve_model_profile(
     purpose: str | None = None,
     model_override: str | None = None,
 ) -> ModelProfile:
-    """Resolve the model profile for one LLM call.
-
-    Explicit model_override is intentionally kept at the gateway boundary. It
-    lets one-off tests or emergency operations choose a model without teaching
-    business modules about provider-specific routing.
-    """
+    """Resolve the model profile for one LLM call."""
     normalized = (purpose or "default").strip() or "default"
     if model_override:
         return ModelProfile(

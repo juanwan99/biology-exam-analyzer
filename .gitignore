@@ -11,3 +11,15 @@ artifacts/
 tmp_*
 node_modules/
 frontend/dist/
+
+# Evidence subsystem (external knowledge retrieval - not for public repo)
+backend/services/_kb_backend.py
+backend/services/evidence_gateway.py
+backend/services/evidence_context.py
+backend/services/evidence_audit.py
+backend/services/agent_search_corpus.py
+backend/test_kb_backend.py
+backend/test_evidence_gateway.py
+backend/test_evidence_context.py
+backend/test_evidence_audit.py
+backend/test_agent_search_corpus.py

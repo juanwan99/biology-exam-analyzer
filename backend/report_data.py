@@ -188,14 +188,22 @@ def _stimulus_units_blank(units: List[Any]) -> bool:
 def _call_has_retry_or_parse_failure(call: Dict) -> bool:
     prompt_id = str(call.get("prompt_id") or call.get("prompt") or "").lower()
     metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
-    return (
-        "compact_retry" in prompt_id
-        or int(_first_number(call.get("retry_count"), metadata.get("retry_count"), default=0)) > 0
-        or int(_first_number(call.get("fallback_count"), metadata.get("fallback_count"), default=0)) > 0
+    fallback_count = int(_first_number(call.get("fallback_count"), metadata.get("fallback_count"), default=0))
+    retry_count = int(_first_number(call.get("retry_count"), metadata.get("retry_count"), default=0))
+    has_failure_signal = (
+        fallback_count > 0
         or bool(metadata.get("provider_errors"))
         or bool(metadata.get("initial_parse_error"))
         or bool(metadata.get("validation_errors"))
-        or bool(metadata.get("normalization_notes"))
+        or bool(call.get("validation_errors"))
+        or str(metadata.get("status") or "").lower() in {"failed", "parse_failed", "provider_failed"}
+    )
+    if call.get("purpose") == "missing_evidence_repair" and not has_failure_signal:
+        return False
+    return (
+        "compact_retry" in prompt_id
+        or retry_count > 0
+        or has_failure_signal
     )
 
 
@@ -311,7 +319,7 @@ def _extract_question_detail(q: Dict) -> Dict:
         "density_reason": features.get("density_reason", ""),
         "novelty_reason": features.get("novelty_reason", ""),
         "representation_reason": features.get("representation_reason", ""),
-        # Gemini 分析
+        # 视觉分析
         "knowledge_points": analysis.get("knowledge_points", []),
         "detailed_analysis": analysis.get("detailed_analysis", ""),
         "common_mistakes": analysis.get("common_mistakes", []),

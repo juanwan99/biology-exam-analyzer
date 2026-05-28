@@ -17,7 +17,7 @@ _semaphores: dict[str, asyncio.Semaphore] = {}
 _native_client = None
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
 _review_channel: ContextVar[str | None] = ContextVar("llm_review_channel", default=None)
-_app_builder_gateway = None
+_evidence_gateway = None
 
 
 def get_last_llm_call_metadata() -> dict:
@@ -66,15 +66,15 @@ def _provider_error_summary(errors: list) -> list[dict]:
 
 
 async def close_llm_clients():
-    global _app_builder_gateway
+    global _evidence_gateway
     """关闭所有缓存的 HTTP 客户端（FastAPI shutdown 时调用）。"""
     for client in _clients.values():
         if not client.is_closed:
             await client.aclose()
     _clients.clear()
-    if _app_builder_gateway is not None:
-        await _app_builder_gateway.discovery_client.aclose()
-        _app_builder_gateway = None
+    if _evidence_gateway is not None:
+        await _evidence_gateway.evidence_client.aclose()
+        _evidence_gateway = None
 
 
 class AllProvidersFailed(Exception):
@@ -405,8 +405,8 @@ def _messages_to_grounded_generation(messages: list) -> tuple[str, str | None]:
 
 
 def _grounding_facts_from_prompt(prompt: str) -> list[dict]:
-    max_chars = int(os.environ.get("DISCOVERY_ENGINE_GENERATION_FACT_CHARS", "3500"))
-    max_facts = int(os.environ.get("DISCOVERY_ENGINE_GENERATION_MAX_FACTS", "12"))
+    max_chars = int(os.environ.get("EVIDENCE_GENERATION_FACT_CHARS", "3500"))
+    max_facts = int(os.environ.get("EVIDENCE_GENERATION_MAX_FACTS", "12"))
     text = str(prompt or "").strip()
     facts = []
     for idx in range(0, min(len(text), max_chars * max_facts), max_chars):
@@ -425,13 +425,13 @@ def _grounding_facts_from_prompt(prompt: str) -> list[dict]:
     return facts
 
 
-def _get_app_builder_gateway():
-    global _app_builder_gateway
-    if _app_builder_gateway is None:
+def _get_evidence_gateway():
+    global _evidence_gateway
+    if _evidence_gateway is None:
         from services.evidence_gateway import EvidenceGateway
 
-        _app_builder_gateway = EvidenceGateway()
-    return _app_builder_gateway
+        _evidence_gateway = EvidenceGateway()
+    return _evidence_gateway
 
 
 async def _call_app_builder_grounded_generation(
@@ -444,11 +444,11 @@ async def _call_app_builder_grounded_generation(
     from llm_policy import resolve_model_profile
 
     profile = resolve_model_profile(purpose=purpose, model_override=model)
-    configured_model = os.environ.get("DISCOVERY_ENGINE_GENERATION_MODEL", "").strip()
+    configured_model = os.environ.get("EVIDENCE_GENERATION_MODEL", "").strip()
     model_id = _app_builder_model_id(configured_model or profile.model)
     prompt, system_instruction = _messages_to_grounded_generation(messages)
     facts = _grounding_facts_from_prompt(prompt)
-    gateway = _get_app_builder_gateway()
+    gateway = _get_evidence_gateway()
     result = await gateway.generate_grounded_content(
         prompt=prompt,
         grounding_facts=facts,
@@ -459,7 +459,7 @@ async def _call_app_builder_grounded_generation(
     )
     _last_call_metadata.set({
         "status": "ok",
-        "provider": "discovery_engine",
+        "provider": "evidence_service",
         "model": model_id,
         "review_channel": _review_channel.get(),
         "purpose": purpose or profile.purpose,
@@ -706,7 +706,7 @@ async def llm_call(
         except Exception as exc:
             _last_call_metadata.set({
                 "status": "provider_failed",
-                "provider": "discovery_engine",
+                "provider": "evidence_service",
                 "model": None,
                 "review_channel": _review_channel.get(),
                 "purpose": purpose,
@@ -714,7 +714,7 @@ async def llm_call(
                 "model_policy": "exam-review-app-builder-grounded-generation",
                 "fallback_count": 0,
                 "provider_errors": [{
-                    "provider": "discovery_engine",
+                    "provider": "evidence_service",
                     "error_type": type(exc).__name__,
                     "message": str(exc)[:500],
                 }],

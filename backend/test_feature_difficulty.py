@@ -220,10 +220,10 @@ class TestPipelineRepresentation:
         f.update(overrides)
         return f
 
-    def test_gemini_repr_merged_via_kwarg(self):
-        """Gemini 的 representation_complexity 通过 analysis_result 传入。"""
+    def test_primary_repr_merged_via_kwarg(self):
+        """主模型的 representation_complexity 通过 analysis_result 传入。"""
         mock_features = self._mock_v3_features(representation_complexity=1)
-        gemini_analysis = {
+        primary_analysis = {
             "representation_complexity": 3,
             "representation_is_core_to_solving": True,
         }
@@ -233,14 +233,14 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "观察系谱图...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=primary_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] == 3
 
-    def test_gemini_repr_ignored_when_not_core(self):
+    def test_primary_repr_ignored_when_not_core(self):
         mock_features = self._mock_v3_features(representation_complexity=2)
-        gemini_analysis = {
+        primary_analysis = {
             "representation_complexity": 1,
             "representation_is_core_to_solving": False,
         }
@@ -250,7 +250,7 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "某题...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=gemini_analysis,
+                    analysis_result=primary_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] <= 2
@@ -1391,26 +1391,49 @@ class TestBigQuestionPipeline:
         })
         captured = {}
 
-        async def fake_llm_call(messages, **kwargs):
-            captured["messages"] = messages
+        async def fake_send_message(prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["purpose"] = kwargs["purpose"]
             return raw_json
 
-        with patch("feature_extractor.llm_call", new=AsyncMock(side_effect=fake_llm_call)):
-            from feature_extractor import extract_features
-            result = asyncio.get_event_loop().run_until_complete(
-                extract_features(
-                    "question with chart",
-                    subject="biology",
-                    media_items=[{"type": "image", "base64": "iVBORw0KGgoAAA"}],
-                )
-            )
+        async def fake_extract_visual_context(media_items, **kwargs):
+            assert media_items[0]["base64"].startswith("iVBOR")
+            return "Visual context extracted by Qwen Vision for DeepSeek review only:\nocr_text: chart axis", {
+                "call_id": "biology-feature-visual-context",
+                "question_id": None,
+                "purpose": "image_inputs",
+                "prompt_id": "biology.image_inputs.visual_context",
+                "prompt_hash": "a" * 64,
+                "provider": "qwen_vision",
+                "model": "qwen3-vl-plus",
+                "input_refs": {"media_count": 1, "media_types": ["image"]},
+                "parsed_schema": "VisualContextResult",
+                "confidence": 0.9,
+                "validation_errors": [],
+                "fallback_count": 0,
+                "retry_count": 0,
+                "metadata": {"used_as": "deepseek_text_prompt_context"},
+            }
 
-        assert isinstance(captured["messages"][0]["content"], list)
-        assert captured["messages"][0]["content"][1]["type"] == "image_url"
-        call = result["_llm_calls"][0]
+        with patch("feature_extractor.extract_visual_context", new=AsyncMock(side_effect=fake_extract_visual_context)):
+            with patch("feature_extractor.send_message_gpt", new=AsyncMock(side_effect=fake_send_message)):
+                from feature_extractor import extract_features
+                result = asyncio.get_event_loop().run_until_complete(
+                    extract_features(
+                        "question with chart",
+                        subject="biology",
+                        media_items=[{"type": "image", "base64": "iVBORw0KGgoAAA"}],
+                    )
+                )
+
+        assert "chart axis" in captured["prompt"]
+        assert captured["purpose"] == "feature_extraction"
+        assert result["_llm_calls"][0]["purpose"] == "image_inputs"
+        call = result["_llm_calls"][1]
         assert call["purpose"] == "feature_extraction"
         assert call["input_refs"]["media_count"] == 1
         assert call["input_refs"]["media_types"] == ["image"]
+        assert call["metadata"]["visual_context_source"] == "qwen_vision"
 
     def test_full_chain_with_raw_json(self):
         """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""

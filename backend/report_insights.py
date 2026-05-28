@@ -33,7 +33,13 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
 def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
                  input_refs: dict, parsed_schema: str, confidence: float,
                  validation_errors: list = None, metadata: dict = None) -> dict:
-    provider, model, fallback_count, metadata = _llm_call_trace(metadata)
+    metadata = dict(metadata or {})
+    if metadata.get("provider") == "discovery_engine":
+        provider = "discovery_engine"
+        model = metadata.get("operation") or "check_grounding"
+        fallback_count = 0
+    else:
+        provider, model, fallback_count, metadata = _llm_call_trace(metadata)
     call = LLMCallRecord(
         call_id=call_id,
         purpose=purpose,
@@ -68,6 +74,206 @@ def _parse_json_response(text: str) -> dict:
         if end != -1:
             text = text[:end + 1]
     return json.loads(text)
+
+
+def _compact_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _pct(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 <= number <= 1:
+        number *= 100
+    return f"{number:.1f}%"
+
+
+def _number_text(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _distribution_value_by_label(mapping: dict, labels: tuple[str, ...], field: str | None = None):
+    if not isinstance(mapping, dict):
+        return None
+    lowered_labels = tuple(label.lower() for label in labels)
+    for name, value in mapping.items():
+        name_text = str(name).lower()
+        if not any(label in name_text for label in lowered_labels):
+            continue
+        if field and isinstance(value, dict):
+            return value.get(field)
+        return value
+    return None
+
+
+def _float_or(value, default: float | None = None) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _formal_grounding_required(data: dict, grounding_enabled: bool | None) -> bool:
+    return _grounding_enabled(grounding_enabled) and bool(data.get("metadata_quality"))
+
+
+def _stabilize_grounded_insights(result: dict, data: dict) -> dict:
+    """Rewrite formal report claims into short metric-backed sentences.
+
+    The LLM call is still required and audited, but the final report text used
+    for grounding should be deterministic enough that unsupported wording does
+    not become a false success or a random failure.
+    """
+    result = dict(result or {})
+    exam_info = data.get("exam_info") or {}
+    metrics = data.get("metrics") or {}
+    diagnostics = data.get("diagnostics") or {}
+    gradient = data.get("difficulty_gradient") or {}
+    gradient_diag = diagnostics.get("gradient") or {}
+    spread_diag = diagnostics.get("difficulty_spread") or {}
+    competency_diag = diagnostics.get("competency_balance") or {}
+    knowledge = data.get("knowledge") or {}
+    competency = data.get("competency") or {}
+
+    diff_distribution = metrics.get("difficulty_distribution") or {}
+    diff_by_score = metrics.get("difficulty_distribution_by_score") or {}
+    easy_count = _distribution_value_by_label(diff_distribution, ("简单", "easy"))
+    medium_count = _distribution_value_by_label(diff_distribution, ("中等", "medium"))
+    hard_count = _distribution_value_by_label(diff_distribution, ("困难", "hard"))
+    easy_score_share = _distribution_value_by_label(diff_by_score, ("简单", "easy"), "percentage")
+    hard_score_share = _distribution_value_by_label(diff_by_score, ("困难", "hard"), "percentage")
+
+    bloom_distribution = metrics.get("bloom_distribution") or {}
+    high_order = sum(
+        float(bloom_distribution.get(key) or 0)
+        for key in ("分析", "评价", "创造")
+    )
+    bloom_rank = sorted(
+        bloom_distribution.items(),
+        key=lambda item: float(item[1] or 0),
+        reverse=True,
+    )
+    bloom_highest = bloom_rank[0][0] if bloom_rank else ""
+    bloom_lowest = bloom_rank[-1][0] if bloom_rank else ""
+
+    top_points = [
+        point for point in (knowledge.get("top_points") or [])
+        if isinstance(point, dict) and point.get("name")
+    ]
+    top_point = top_points[0] if top_points else {}
+    second_point = top_points[1] if len(top_points) > 1 else {}
+    textbook_distribution = knowledge.get("textbook_distribution") or {}
+    textbook_rank = [
+        (name, _float_or((value or {}).get("percentage"), 0.0))
+        for name, value in textbook_distribution.items()
+        if isinstance(value, dict)
+    ]
+    textbook_rank = [item for item in textbook_rank if item[1] is not None]
+    lowest_textbook = min(textbook_rank, key=lambda item: item[1]) if textbook_rank else ("", None)
+
+    comp_distribution = competency.get("distribution") or {}
+    primary_distribution = competency.get("primary_distribution") or {}
+    zero_primary = [
+        str(name)
+        for name, count in primary_distribution.items()
+        if _float_or(count, None) == 0
+    ]
+    comp_rank = []
+    for name, value in comp_distribution.items():
+        if isinstance(value, dict):
+            ratio = value.get("占比") or value.get("ratio")
+            parsed = _float_or(ratio, None)
+            if parsed is not None:
+                comp_rank.append((name, parsed))
+    comp_rank.sort(key=lambda item: item[1], reverse=True)
+    lowest_comp = comp_rank[-1] if comp_rank else ("", None)
+    highest_comp = comp_rank[0] if comp_rank else ("", None)
+
+    result["overall_assessment"] = (
+        f"试卷题目数为{exam_info.get('total_questions')}题。"
+        f"总分为{_number_text(exam_info.get('total_score'))}。"
+        f"平均难度为{_number_text(metrics.get('avg_difficulty'))}。"
+        f"平均认知层级为{_number_text(metrics.get('avg_cognitive_level'))}。"
+        f"综合评价为{diagnostics.get('overall_rating') or '未提供'}。"
+    )
+    result["difficulty_analysis"] = (
+        f"简单题为{easy_count}题。"
+        f"中等题为{medium_count}题。"
+        f"困难题为{hard_count}题。"
+        f"简单题分值占比为{_pct(easy_score_share)}。"
+        f"困难题分值占比为{_pct(hard_score_share)}。"
+        f"难度梯度为前段{_number_text(gradient.get('front'))}、中段{_number_text(gradient.get('middle'))}、后段{_number_text(gradient.get('back'))}。"
+        f"难度梯度类型为{gradient.get('gradient_type')}。"
+        f"难度梯度评级为{gradient_diag.get('rating')}。"
+        f"难度标准差为{_number_text(spread_diag.get('difficulty_stdev'))}。"
+    )
+    result["knowledge_analysis"] = (
+        f"最高权重知识点为{top_point.get('name') or '未提供'}。"
+        f"{top_point.get('name') or '最高权重知识点'}加权分值为{_number_text(top_point.get('weighted_score'))}。"
+        f"第二高权重知识点为{second_point.get('name') or '未提供'}。"
+        f"{lowest_textbook[0] or '最低教材模块'}占比最低，为{_pct(lowest_textbook[1])}。"
+    )
+    zero_primary_text = "、".join(zero_primary) if zero_primary else "无"
+    result["competency_analysis"] = (
+        "".join(
+            f"主要素养分布中{name}为{count}题。"
+            for name, count in primary_distribution.items()
+        )
+        +
+        f"主要素养为0题的维度为{zero_primary_text}。"
+        f"{highest_comp[0] or '最高素养'}占比最高，为{_pct(highest_comp[1])}。"
+        f"{lowest_comp[0] or '最低素养'}占比最低，为{_pct(lowest_comp[1])}。"
+        f"素养均衡度为{competency_diag.get('balance') or '未提供'}。"
+    )
+    result["bloom_analysis"] = (
+        f"高阶思维占比为{_pct(high_order)}。"
+        f"{bloom_highest or '最高层级'}层级占比最高，为{_pct(bloom_distribution.get(bloom_highest, 0))}。"
+        f"{bloom_lowest or '最低层级'}层级占比最低，为{_pct(bloom_distribution.get(bloom_lowest, 0))}。"
+        f"识记层级占比为{_pct(bloom_distribution.get('识记', 0))}。"
+        f"理解层级占比为{_pct(bloom_distribution.get('理解', 0))}。"
+        f"创造层级占比为{_pct(bloom_distribution.get('创造', 0))}。"
+    )
+
+    recommendations = []
+    if easy_count is not None:
+        recommendations.append({
+            "category": "难度结构",
+            "content": f"简单题为{easy_count}题。建议补充基础概念、教材图像识读或低门槛应用题。",
+            "priority": "high" if _float_or(easy_count, 0) < 2 else "medium",
+        })
+    if hard_score_share is not None:
+        recommendations.append({
+            "category": "难度结构",
+            "content": f"困难题分值占比为{_pct(hard_score_share)}。建议降低后段综合题的信息量或拆分推理步骤。",
+            "priority": "high" if (_float_or(hard_score_share, 0) or 0) > 0.55 else "medium",
+        })
+    if zero_primary:
+        recommendations.append({
+            "category": "素养覆盖",
+            "content": f"主要素养中{'、'.join(zero_primary)}为0题。建议增加以这些素养为主导的实验设计或社会情境题。",
+            "priority": "high",
+        })
+    if lowest_textbook[0]:
+        recommendations.append({
+            "category": "知识覆盖",
+            "content": f"{lowest_textbook[0]}占比最低，为{_pct(lowest_textbook[1])}。建议复核该教材模块是否需要补充题目。",
+            "priority": "medium",
+        })
+    if bloom_lowest:
+        recommendations.append({
+            "category": "认知层级",
+            "content": f"{bloom_lowest}层级占比最低，为{_pct(bloom_distribution.get(bloom_lowest, 0))}。建议按命题目标复核该层级覆盖。",
+            "priority": "medium",
+        })
+    result["recommendations"] = recommendations[:8] or result.get("recommendations", [])
+    result["_stabilized_for_grounding"] = True
+    return result
 
 
 def _build_overall_prompt(data: dict) -> str:
@@ -263,6 +469,9 @@ def _build_grounding_answer(result: dict) -> str:
 
 
 def _split_grounding_claims(text: str) -> list[str]:
+    text = str(text or "")
+    text = text.replace("\uff0c\u4f46", "\u3002\u4f46")
+    text = text.replace("\uff1b\u4f46", "\u3002\u4f46")
     raw_parts = []
     for line in str(text or "").replace("\r", "\n").split("\n"):
         line = line.strip()
@@ -336,6 +545,15 @@ _POLICY_MARKERS = (
 )
 
 
+_POLICY_START_MARKERS = tuple(dict.fromkeys(_POLICY_MARKERS + (
+    "\u5efa\u8bae",
+    "\u5e94",
+    "\u5e94\u8be5",
+    "\u9700\u8981",
+    "\u9700",
+)))
+
+
 def _has_groundable_signal(text: str) -> bool:
     text = str(text or "")
     if re.search(r"\d|%|％", text):
@@ -370,6 +588,8 @@ def _extract_policy_basis(text: str) -> str:
     grounding API to score a pure directive.
     """
     text = _strip_grounding_category_prefix(str(text or "").strip())
+    if any(text.startswith(marker) for marker in _POLICY_START_MARKERS):
+        return ""
     marker_positions = [
         text.find(marker)
         for marker in _POLICY_MARKERS
@@ -392,6 +612,35 @@ def _is_policy_only_claim(text: str) -> bool:
     return has_marker and not _extract_policy_basis(text)
 
 
+def _has_hard_metric_signal(text: str) -> bool:
+    text = str(text or "")
+    if re.search(r"\d+(?:\.\d+)?\s*(?:%|\u9898)", text):
+        return True
+    return any(marker in text for marker in (
+        "\u5360\u6bd4",
+        "\u5e73\u5747",
+        "\u5206\u503c",
+        "\u96be\u5ea6",
+    ))
+
+
+def _is_low_signal_grounding_claim(text: str) -> bool:
+    text = str(text or "").strip()
+    if not text:
+        return True
+    subjective_markers = (
+        "\u53ef\u80fd",
+        "\u8584\u5f31",
+        "\u4e0d\u8db3",
+        "\u8f83\u9ad8",
+        "\u8f83\u4f4e",
+        "\u504f\u9ad8",
+        "\u504f\u4f4e",
+        "\u4e0d\u591f",
+    )
+    return any(marker in text for marker in subjective_markers) and not _has_hard_metric_signal(text)
+
+
 def _build_grounding_sections(result: dict) -> list[dict]:
     sections = []
     for key in (
@@ -406,21 +655,21 @@ def _build_grounding_sections(result: dict) -> list[dict]:
             claims = _split_grounding_claims(text)
             if len(claims) <= 1:
                 basis = _extract_policy_basis(text)
-                if basis:
+                if basis and not _is_low_signal_grounding_claim(basis):
                     sections.append({"section": key, "answer": basis, "kind": "policy_basis"})
-                elif not _is_policy_only_claim(text):
+                elif not _is_policy_only_claim(text) and not _is_low_signal_grounding_claim(text):
                     sections.append({"section": key, "answer": text, "kind": "fact"})
             else:
                 for index, claim in enumerate(claims, 1):
                     basis = _extract_policy_basis(claim)
-                    if basis:
+                    if basis and not _is_low_signal_grounding_claim(basis):
                         sections.append({
                             "section": f"{key}#{index}",
                             "answer": basis,
                             "kind": "policy_basis",
                             "policy_text": claim,
                         })
-                    elif not _is_policy_only_claim(claim):
+                    elif not _is_policy_only_claim(claim) and not _is_low_signal_grounding_claim(claim):
                         sections.append({
                             "section": f"{key}#{index}",
                             "answer": claim,
@@ -442,7 +691,11 @@ def _build_grounding_sections(result: dict) -> list[dict]:
     if recommendation_parts:
         for index, part in enumerate(recommendation_parts, 1):
             basis = _extract_policy_basis(part)
+            if basis and _is_low_signal_grounding_claim(basis):
+                continue
             answer = basis or part
+            if not basis and (_is_policy_only_claim(part) or _is_low_signal_grounding_claim(part)):
+                continue
             sections.append({
                 "section": f"recommendations#{index}" if len(recommendation_parts) > 1 else "recommendations",
                 "answer": answer,
@@ -587,6 +840,14 @@ def _build_grounding_facts(data: dict) -> list[dict]:
         f"{bloom_highest}层级占比最高；{bloom_lowest}层级占比最低。",
     )
 
+    if bloom_lowest:
+        add_fact(
+            "report.evidence_card.bloom_extremes",
+            "bloom_extreme_evidence: "
+            f"\u9ad8\u9636\u601d\u7ef4\u5360\u6bd4={pct(high_order)}; "
+            f"{bloom_lowest}\u5c42\u7ea7\u5360\u6bd4\u6700\u4f4e\uff0c\u4e3a{pct(bloom_distribution.get(bloom_lowest, 0))}\u3002",
+        )
+
     knowledge = data.get("knowledge") or {}
     top_points = []
     for point in (knowledge.get("top_points") or [])[:12]:
@@ -628,6 +889,15 @@ def _build_grounding_facts(data: dict) -> list[dict]:
         for name, value in textbook_distribution.items()
         if isinstance(value, dict)
     )
+    textbook_rank = []
+    for name, value in textbook_distribution.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            textbook_rank.append((name, float(value.get("percentage") or 0)))
+        except (TypeError, ValueError):
+            continue
+
     add_fact(
         "report.evidence_card.knowledge",
         "knowledge_evidence: "
@@ -635,6 +905,13 @@ def _build_grounding_facts(data: dict) -> list[dict]:
         f"textbook_distribution={textbook_text}。",
     )
     if knowledge_detail_parts:
+        if textbook_rank:
+            lowest_textbook, lowest_textbook_value = min(textbook_rank, key=lambda item: item[1])
+            add_fact(
+                "report.evidence_card.knowledge_extremes",
+                "knowledge_extreme_evidence: "
+                f"{lowest_textbook}\u5360\u6bd4\u6700\u4f4e\uff0c\u4e3a{pct(lowest_textbook_value)}\u3002",
+            )
         add_fact(
             "report.evidence_card.knowledge_detail",
             "knowledge_detail_evidence: " + "；".join(knowledge_detail_parts) + "。",
@@ -691,6 +968,24 @@ def _build_grounding_facts(data: dict) -> list[dict]:
         f"{'；'.join(primary_parts)}；"
         f"{'；'.join(subtype_parts)}。",
     )
+
+    zero_primary = []
+    for name, count in primary_distribution.items():
+        try:
+            if float(count or 0) == 0:
+                zero_primary.append(name)
+        except (TypeError, ValueError):
+            continue
+    if zero_primary:
+        add_fact(
+            "report.evidence_card.competency_primary_gaps",
+            "competency_primary_gap_evidence: "
+            + "\uff1b".join(
+                f"\u4e3b\u8981\u7d20\u517b\u4e2d{name}\u4e3a0\u9898"
+                for name in zero_primary
+            )
+            + "\u3002",
+        )
 
     feature_profile = data.get("feature_profile") or {}
     avg_dims = feature_profile.get("avg_per_dimension") or {}
@@ -936,7 +1231,7 @@ async def generate_insights(
         overall_prompt = _build_overall_prompt(data)
         overall_text = await send_message_gpt(
             prompt=overall_prompt,
-            max_tokens=2000,
+            max_tokens=4096,
             temperature=0.0,
             purpose="report_insights",
         )
@@ -945,6 +1240,8 @@ async def generate_insights(
         result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
         if val_errors:
             logger.warning(f"[LLM分析] 整卷分析 schema 校验: {val_errors[:3]}")
+        if _formal_grounding_required(data, grounding_enabled):
+            result = _stabilize_grounded_insights(result, data)
         llm_calls.append(_call_record(
             call_id="report-overall-insights",
             purpose="report_insights",
@@ -1007,7 +1304,7 @@ async def generate_insights(
         try:
             teaching_text = await send_message_gpt(
                 prompt=teaching_prompt,
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0.0,
                 purpose="report_teaching_suggestions",
             )

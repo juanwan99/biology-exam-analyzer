@@ -104,6 +104,8 @@ class TestLlmConfig:
         env = {
             "LLM_SA_CREDENTIALS": sa_path,
             "LLM_SDK_MODULE": "",
+            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
             "DEEPSEEK_API_KEY": "",
         }
         try:
@@ -123,17 +125,20 @@ class TestLlmConfig:
             sa_path = f.name
         env = {
             "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "google.genai",
+            "LLM_SDK_MODULE": "test.sdk",
+            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
             "DEEPSEEK_API_KEY": "",
+            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
         }
         try:
             with patch.dict(os.environ, env, clear=False):
                 result = get_providers(
-                    model_override="publishers/google/models/gemini-3-flash-preview"
+                    model_override="flash-model-preview"
                 )
                 native = [p for p in result if p.get("api_format") == "native_sdk"]
                 assert len(native) == 1
-                assert native[0]["model"] == "publishers/google/models/gemini-3-flash-preview"
+                assert native[0]["model"] == "flash-model-preview"
                 assert native[0]["model_role"] == "custom"
                 assert native[0]["supports_images"] is True
         finally:
@@ -149,16 +154,19 @@ class TestLlmConfig:
             sa_path = f.name
         env = {
             "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "google.genai",
+            "LLM_SDK_MODULE": "test.sdk",
+            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
             "LLM_CLOUD_MODE": "true",
             "DEEPSEEK_API_KEY": "",
+            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
         }
         try:
             with patch.dict(os.environ, env, clear=True):
                 result = get_providers()
                 native = [p for p in result if p.get("api_format") == "native_sdk"]
                 assert len(native) == 1
-                assert native[0]["model"] == "publishers/google/models/gemini-3.1-pro-preview"
+                assert native[0]["model"] == "pro-model-preview"
         finally:
             os.unlink(sa_path)
 
@@ -172,16 +180,19 @@ class TestLlmConfig:
             sa_path = f.name
         env = {
             "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "google.genai",
+            "LLM_SDK_MODULE": "test.sdk",
+            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
             "LLM_NATIVE_MODEL": "",
             "DEEPSEEK_API_KEY": "",
+            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
         }
         try:
             with patch.dict(os.environ, env, clear=False):
                 result = get_providers()
                 native = [p for p in result if p.get("api_format") == "native_sdk"]
                 assert len(native) == 1
-                assert native[0]["model"] == "publishers/google/models/gemini-3.1-pro-preview"
+                assert native[0]["model"] == "pro-model-preview"
                 assert native[0]["model_role"] == "pro"
         finally:
             os.unlink(sa_path)
@@ -215,24 +226,24 @@ class TestFallback:
         from llm_client import get_last_llm_call_metadata, llm_call
         providers = _mock_providers(1)
         providers[0]["model_role"] = "flash"
-        providers[0]["model_policy"] = "exam-review-gemini3"
+        providers[0]["model_policy"] = "exam-review-primary"
 
         with patch("llm_client._http_post", new_callable=AsyncMock, return_value=_anthropic_ok()):
             with patch("llm_client.get_providers", return_value=providers) as get_providers:
                 await llm_call(
                     [{"role": "user", "content": "hi"}],
                     purpose="question_split",
-                    model="publishers/google/models/gemini-3-flash-preview",
+                    model="flash-model-preview",
                 )
                 get_providers.assert_called_once_with(
                     purpose="question_split",
-                    model_override="publishers/google/models/gemini-3-flash-preview",
+                    model_override="flash-model-preview",
                     requires_images=False,
                 )
                 metadata = get_last_llm_call_metadata()
                 assert metadata["purpose"] == "question_split"
                 assert metadata["model_role"] == "flash"
-                assert metadata["model_policy"] == "exam-review-gemini3"
+                assert metadata["model_policy"] == "exam-review-primary"
 
     @pytest.mark.asyncio
     async def test_app_builder_alias_uses_model_generation_with_evidence_channel_metadata(self):
@@ -262,7 +273,9 @@ class TestFallback:
         assert metadata.get("operation") is None
 
     @pytest.mark.asyncio
-    async def test_grounded_generation_channel_uses_discovery_grounded_generation(self):
+    async def test_grounded_generation_channel_uses_evidence_grounded_generation(self, monkeypatch):
+        monkeypatch.setenv("LLM_EXAM_REVIEW_FLASH_MODEL", "flash-model-preview")
+        monkeypatch.setenv("LLM_EXAM_REVIEW_PRO_MODEL", "pro-model-preview")
         from llm_client import (
             get_last_llm_call_metadata,
             llm_call,
@@ -280,7 +293,7 @@ class TestFallback:
                     "text": "{\"ok\": true}",
                     "grounding_score": 0.9,
                     "metadata": {
-                        "provider": "discovery_engine",
+                        "provider": "evidence_service",
                         "operation": "generate_grounded_content",
                     },
                 }
@@ -288,7 +301,7 @@ class TestFallback:
         gateway = FakeGateway()
         token = set_llm_review_channel("grounded_generation")
         try:
-            with patch("llm_client._get_app_builder_gateway", return_value=gateway):
+            with patch("llm_client._get_evidence_gateway", return_value=gateway):
                 with patch("llm_client.get_providers") as get_providers:
                     result = await llm_call(
                         [{"role": "user", "content": "只返回 JSON"}],
@@ -299,9 +312,9 @@ class TestFallback:
 
         assert result == "{\"ok\": true}"
         assert get_providers.call_count == 0
-        assert gateway.calls[0]["model_id"] == "gemini-3.1-pro-preview"
+        assert gateway.calls[0]["model_id"] == "pro-model-preview"
         metadata = get_last_llm_call_metadata()
-        assert metadata["provider"] == "discovery_engine"
+        assert metadata["provider"] == "evidence_service"
         assert metadata["operation"] == "generate_grounded_content"
         assert metadata["review_channel"] == "grounded_generation"
         assert metadata["model_policy"] == "exam-review-app-builder-grounded-generation"

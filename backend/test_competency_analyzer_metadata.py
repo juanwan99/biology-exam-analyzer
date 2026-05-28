@@ -57,6 +57,53 @@ async def test_analyze_competency_attaches_llm_call_metadata(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_analyze_competency_normalizes_near_miss_weight_sum(monkeypatch, tmp_path):
+    library_path = tmp_path / "competency_library.json"
+    library_path.write_text("{}", encoding="utf-8")
+
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+        "competency prompt {question_text} {knowledge_points}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+
+    payload = {
+        "生命观念": {"涉及": True, "具体维度": ["结构与功能观"], "权重": 0.4, "分析说明": "结构"},
+        "科学思维": {"涉及": True, "具体维度": ["模型与建模"], "权重": 0.5, "分析说明": "模型"},
+        "科学探究": {"涉及": False, "具体维度": [], "权重": 0.0, "分析说明": ""},
+        "社会责任": {"涉及": False, "具体维度": [], "权重": 0.0, "分析说明": ""},
+        "primary_competency": "科学思维",
+        "competency_level": "高",
+    }
+
+    async def fake_llm_call(messages, **kwargs):
+        return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(competency_analyzer, "llm_call", fake_llm_call)
+
+    analyzer = CompetencyAnalyzer(library_path=str(library_path))
+    result = await analyzer.analyze_competency({
+        "id": 13,
+        "content": "叶绿体蛋白转运",
+        "knowledge_points": ["蛋白质转运"],
+    })
+
+    call = result["_llm_calls"][0]
+    assert call["validation_errors"] == []
+    assert call["metadata"]["weight_sum_normalized_from"] == 0.9
+    assert abs(call["metadata"]["total_weight"] - 1.0) <= 0.01
+    assert abs(
+        result["生命观念"]["权重"]
+        + result["科学思维"]["权重"]
+        + result["科学探究"]["权重"]
+        + result["社会责任"]["权重"]
+        - 1.0
+    ) <= 0.01
+
+
+@pytest.mark.asyncio
 async def test_analyze_competency_failed_json_keeps_call_metadata(monkeypatch, tmp_path):
     library_path = tmp_path / "competency_library.json"
     library_path.write_text("{}", encoding="utf-8")
@@ -112,11 +159,31 @@ async def test_analyze_competency_sends_media_and_records_fallback(monkeypatch, 
     }
     captured = {}
 
+    async def fake_extract_visual_context(media_items, **kwargs):
+        assert media_items[0]["base64"].startswith("iVBOR")
+        return "Visual context extracted by Qwen Vision for DeepSeek review only:\nocr_text: chart labels", {
+            "call_id": "question-18-competency-visual-context",
+            "question_id": 18,
+            "purpose": "image_inputs",
+            "prompt_id": "biology.image_inputs.visual_context",
+            "prompt_hash": "a" * 64,
+            "provider": "qwen_vision",
+            "model": "qwen3-vl-plus",
+            "input_refs": {"media_count": 1, "media_types": ["image"]},
+            "parsed_schema": "VisualContextResult",
+            "confidence": 0.9,
+            "validation_errors": [],
+            "fallback_count": 0,
+            "retry_count": 0,
+            "metadata": {"used_as": "deepseek_text_prompt_context"},
+        }
+
     async def fake_llm_call(messages, **kwargs):
         captured["messages"] = messages
         return json.dumps(payload, ensure_ascii=False)
 
     monkeypatch.setattr(competency_analyzer, "llm_call", fake_llm_call)
+    monkeypatch.setattr(competency_analyzer, "extract_visual_context", fake_extract_visual_context)
     monkeypatch.setattr(
         competency_analyzer,
         "get_last_call_metadata",
@@ -138,10 +205,13 @@ async def test_analyze_competency_sends_media_and_records_fallback(monkeypatch, 
     })
 
     content = captured["messages"][0]["content"]
-    assert isinstance(content, list)
-    assert content[1]["type"] == "image_url"
-    call = result["_llm_calls"][0]
+    assert isinstance(content, str)
+    assert "chart labels" in content
+    assert "image_url" not in content
+    assert result["_llm_calls"][0]["purpose"] == "image_inputs"
+    call = result["_llm_calls"][1]
     assert call["fallback_count"] == 1
     assert call["provider"] == "deepseek"
     assert call["input_refs"]["media_count"] == 1
+    assert call["metadata"]["visual_context_source"] == "qwen_vision"
     assert call["metadata"]["provider_errors"]

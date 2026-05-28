@@ -5,34 +5,34 @@ from unittest.mock import patch
 import pytest
 
 
-def test_default_policy_uses_gemini_31_pro(monkeypatch):
+def test_default_policy_uses_pro(monkeypatch):
     from llm_policy import resolve_model_profile
 
-    monkeypatch.delenv("LLM_EXAM_REVIEW_PRO_MODEL", raising=False)
+    monkeypatch.setenv("LLM_EXAM_REVIEW_PRO_MODEL", "pro-model-preview")
     profile = resolve_model_profile()
 
     assert profile.role == "pro"
-    assert profile.model == "publishers/google/models/gemini-3.1-pro-preview"
+    assert profile.model == "pro-model-preview"
 
 
-def test_fast_purpose_uses_gemini_3_flash(monkeypatch):
+def test_fast_purpose_uses_flash(monkeypatch):
     from llm_policy import resolve_model_profile
 
-    monkeypatch.delenv("LLM_EXAM_REVIEW_FLASH_MODEL", raising=False)
+    monkeypatch.setenv("LLM_EXAM_REVIEW_FLASH_MODEL", "flash-model-preview")
     profile = resolve_model_profile("question_split")
 
     assert profile.role == "flash"
-    assert profile.model == "publishers/google/models/gemini-3-flash-preview"
+    assert profile.model == "flash-model-preview"
 
 
-def test_critical_purpose_uses_gemini_31_pro(monkeypatch):
+def test_critical_purpose_uses_pro(monkeypatch):
     from llm_policy import resolve_model_profile
 
-    monkeypatch.delenv("LLM_EXAM_REVIEW_PRO_MODEL", raising=False)
+    monkeypatch.setenv("LLM_EXAM_REVIEW_PRO_MODEL", "pro-model-preview")
     profile = resolve_model_profile("difficulty_review")
 
     assert profile.role == "pro"
-    assert profile.model == "publishers/google/models/gemini-3.1-pro-preview"
+    assert profile.model == "pro-model-preview"
 
 
 def test_explicit_model_override_keeps_vendor_choice_at_gateway_boundary():
@@ -40,41 +40,43 @@ def test_explicit_model_override_keeps_vendor_choice_at_gateway_boundary():
 
     profile = resolve_model_profile(
         "question_split",
-        model_override="publishers/google/models/custom-model",
+        model_override="custom-model",
     )
 
     assert profile.role == "custom"
-    assert profile.model == "publishers/google/models/custom-model"
+    assert profile.model == "custom-model"
 
 
-def test_gemini_3_preview_env_values_are_not_downgraded(monkeypatch):
+def test_preview_env_values_are_not_downgraded(monkeypatch):
     from llm_policy import resolve_model_profile
 
     monkeypatch.setenv(
         "LLM_EXAM_REVIEW_FLASH_MODEL",
-        "publishers/google/models/gemini-3-flash-preview",
+        "flash-model-preview",
     )
     monkeypatch.setenv(
         "LLM_EXAM_REVIEW_PRO_MODEL",
-        "publishers/google/models/gemini-3.1-pro-preview",
+        "pro-model-preview",
     )
 
     assert (
         resolve_model_profile("question_split").model
-        == "publishers/google/models/gemini-3-flash-preview"
+        == "flash-model-preview"
     )
     assert (
         resolve_model_profile("difficulty_review").model
-        == "publishers/google/models/gemini-3.1-pro-preview"
+        == "pro-model-preview"
     )
 
 
-def test_discontinued_gemini_3_pro_preview_fails_closed(monkeypatch):
+def test_discontinued_model_fails_closed(monkeypatch):
+    import llm_policy
     from llm_policy import resolve_model_profile
 
+    monkeypatch.setattr(llm_policy, "DISCONTINUED_MODELS", {"discontinued-model": "pro-model-preview"})
     monkeypatch.setenv(
         "LLM_EXAM_REVIEW_PRO_MODEL",
-        "publishers/google/models/gemini-3-pro-preview",
+        "discontinued-model",
     )
 
     with pytest.raises(ValueError, match="discontinued"):
@@ -89,31 +91,36 @@ def test_get_providers_applies_policy_to_native_provider():
         sa_path = f.name
     env = {
         "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "google.genai",
+        "LLM_SDK_MODULE": "test.sdk",
         "LLM_CLOUD_MODE": "true",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
         "DEEPSEEK_API_KEY": "",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
     }
     try:
         with patch.dict(os.environ, env, clear=True):
             providers = get_providers(purpose="question_split")
             native = [p for p in providers if p.get("api_format") == "native_sdk"]
             assert len(native) == 1
-            assert native[0]["model"] == "publishers/google/models/gemini-3-flash-preview"
+            assert native[0]["model"] == "flash-model-preview"
             assert native[0]["model_role"] == "flash"
-            assert native[0]["model_policy"] == "exam-review-gemini31-global"
+            assert native[0]["model_policy"] == "exam-review-global"
     finally:
         os.unlink(sa_path)
 
 
-def test_qwen_vision_provider_is_used_only_for_image_requests(monkeypatch):
+def test_qwen_key_enables_vision_provider_only_by_default(monkeypatch):
     from llm_config import get_providers
 
     monkeypatch.setenv("QWEN_API_KEY", "test-qwen")
     monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.delenv("QWEN_TEXT_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("LLM_SA_CREDENTIALS", raising=False)
 
-    assert get_providers(purpose="question_analysis", requires_images=False) == []
+    text_providers = get_providers(purpose="question_analysis", requires_images=False)
+    assert text_providers == []
 
     providers = get_providers(purpose="question_analysis", requires_images=True)
     assert [provider["name"] for provider in providers] == ["qwen_vision"]
@@ -129,7 +136,7 @@ def test_qwen_vision_does_not_validate_unused_native_model(monkeypatch):
     monkeypatch.setenv("LLM_VISION_PROVIDER", "qwen")
     monkeypatch.setenv(
         "LLM_EXAM_REVIEW_PRO_MODEL",
-        "publishers/google/models/gemini-3-pro-preview",
+        "discontinued-model",
     )
     monkeypatch.delenv("LLM_SA_CREDENTIALS", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -148,9 +155,11 @@ def test_image_requests_auto_prefer_configured_qwen_over_native_provider():
     env = {
         "QWEN_API_KEY": "test-qwen",
         "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "google.genai",
+        "LLM_SDK_MODULE": "test.sdk",
         "LLM_CLOUD_MODE": "true",
         "DEEPSEEK_API_KEY": "",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
     }
     try:
         with patch.dict(os.environ, env, clear=True):
@@ -158,6 +167,109 @@ def test_image_requests_auto_prefer_configured_qwen_over_native_provider():
             assert [provider["name"] for provider in providers] == ["qwen_vision"]
     finally:
         os.unlink(sa_path)
+
+
+def test_general_text_requests_prefer_deepseek_then_qwen_without_native_by_default():
+    from llm_config import get_providers
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(b"{}")
+        sa_path = f.name
+    env = {
+        "DEEPSEEK_API_KEY": "test-deepseek",
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_SA_CREDENTIALS": sa_path,
+        "LLM_SDK_MODULE": "test.sdk",
+        "LLM_CLOUD_MODE": "true",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "false",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
+    }
+    try:
+        with patch.dict(os.environ, env, clear=True):
+            providers = get_providers(purpose="difficulty_review")
+            assert [provider["name"] for provider in providers] == ["deepseek"]
+            assert all(provider.get("api_format") != "native_sdk" for provider in providers)
+            assert providers[0]["model_policy"] == "exam-review-deepseek-primary"
+    finally:
+        os.unlink(sa_path)
+
+
+def test_text_requests_can_enable_native_as_explicit_fallback():
+    from llm_config import get_providers
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(b"{}")
+        sa_path = f.name
+    env = {
+        "DEEPSEEK_API_KEY": "test-deepseek",
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_SA_CREDENTIALS": sa_path,
+        "LLM_SDK_MODULE": "test.sdk",
+        "LLM_CLOUD_MODE": "true",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
+    }
+    try:
+        with patch.dict(os.environ, env, clear=True):
+            providers = get_providers(purpose="difficulty_review")
+            assert [provider["name"] for provider in providers] == [
+                "deepseek",
+                "primary",
+            ]
+            native = providers[-1]
+            assert native["model"] == "pro-model-preview"
+            assert native["model_role"] == "pro"
+            assert native["model_policy"] == "exam-review-global"
+    finally:
+        os.unlink(sa_path)
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    [
+        "big_question_feature_extraction",
+        "competency_analysis",
+        "feature_extraction",
+        "missing_evidence_repair",
+        "question_analysis",
+        "question_analysis_retry",
+        "report_teaching_suggestions",
+    ],
+)
+def test_review_text_purposes_use_deepseek_without_qwen_text_by_default(purpose):
+    from llm_config import get_providers
+
+    env = {
+        "DEEPSEEK_API_KEY": "test-deepseek",
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "false",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        providers = get_providers(purpose=purpose)
+        assert [provider["name"] for provider in providers] == ["deepseek"]
+        assert providers[0]["model_policy"] == "exam-review-deepseek-primary"
+
+
+def test_qwen_text_fallback_requires_explicit_opt_in():
+    from llm_config import get_providers
+
+    env = {
+        "DEEPSEEK_API_KEY": "test-deepseek",
+        "QWEN_API_KEY": "test-qwen",
+        "LLM_ENABLE_QWEN_TEXT_FALLBACK": "true",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "false",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        providers = get_providers(purpose="question_analysis")
+        assert [provider["name"] for provider in providers] == ["deepseek", "qwen_text"]
+        assert providers[0]["model_policy"] == "exam-review-deepseek-primary"
+        assert providers[1]["model_policy"] == "exam-review-qwen-text"
 
 
 def test_image_requests_can_force_native_vision_provider():
@@ -170,9 +282,11 @@ def test_image_requests_can_force_native_vision_provider():
         "QWEN_API_KEY": "test-qwen",
         "LLM_VISION_PROVIDER": "native",
         "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "google.genai",
+        "LLM_SDK_MODULE": "test.sdk",
         "LLM_CLOUD_MODE": "true",
         "DEEPSEEK_API_KEY": "",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
     }
     try:
         with patch.dict(os.environ, env, clear=True):
@@ -190,17 +304,20 @@ def test_legacy_native_model_env_does_not_override_policy_by_default():
         sa_path = f.name
     env = {
         "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "google.genai",
+        "LLM_SDK_MODULE": "test.sdk",
         "LLM_CLOUD_MODE": "true",
-        "LLM_NATIVE_MODEL": "publishers/google/models/gemini-2.5-pro",
+        "LLM_NATIVE_MODEL": "legacy-pro-model",
+        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
         "DEEPSEEK_API_KEY": "",
+        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
+        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
     }
     try:
         with patch.dict(os.environ, env, clear=True):
             providers = get_providers(purpose="difficulty_review")
             native = [p for p in providers if p.get("api_format") == "native_sdk"]
             assert len(native) == 1
-            assert native[0]["model"] == "publishers/google/models/gemini-3.1-pro-preview"
+            assert native[0]["model"] == "pro-model-preview"
             assert native[0]["model_role"] == "pro"
     finally:
         os.unlink(sa_path)

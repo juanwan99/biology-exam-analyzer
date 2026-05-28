@@ -826,7 +826,7 @@ class AnalysisService:
     @staticmethod
     def build_channel_usage(questions: List[Dict] | None,
                             report_insights: Dict | None = None) -> Dict:
-        """Summarize which parts of the review used Discovery Engine vs model calls."""
+        """Summarize which parts of the review used 证据服务 vs model calls."""
         from services.evidence_audit import summarize_evidence_usage
 
         return summarize_evidence_usage(questions, report_insights)
@@ -846,23 +846,23 @@ class AnalysisService:
         ):
             raise RuntimeError(
                 "agent_search channel requested but no Search App answer_query evidence "
-                "was recorded; verify DISCOVERY_ENGINE_ENGINE_ID and the question evidence context"
+                "was recorded; verify EVIDENCE_ENGINE_ID and the question evidence context"
             )
         if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
             raise RuntimeError(
-                "证据增强审题失败：检测到不应使用的 Discovery Engine "
+                "证据增强审题失败：检测到不应使用的 证据服务 "
                 "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
             )
-        if int(channel_usage.get("discovery_rank_count") or 0) <= 0:
+        if int(channel_usage.get("evidence_rank_count") or 0) <= 0:
             missing = channel_usage.get("missing_rank_question_ids") or []
             if missing:
                 first = missing[0]
                 raise RuntimeError(
                     f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                    "（Discovery Engine Ranking 未记录），不能进入正式报告。"
+                    "（证据服务 Ranking 未记录），不能进入正式报告。"
                 )
             raise RuntimeError(
-                "证据增强审题失败：缺少 Discovery Engine Ranking 记录，"
+                "证据增强审题失败：缺少 证据服务 Ranking 记录，"
                 "不能进入正式报告。"
             )
         missing = channel_usage.get("missing_rank_question_ids") or []
@@ -870,12 +870,12 @@ class AnalysisService:
             first = missing[0]
             raise RuntimeError(
                 f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                "（Discovery Engine Ranking 未记录），不能进入正式报告。"
+                "（证据服务 Ranking 未记录），不能进入正式报告。"
             )
-        if require_grounding and int(channel_usage.get("discovery_grounding_check_count") or 0) <= 0:
+        if require_grounding and int(channel_usage.get("evidence_grounding_check_count") or 0) <= 0:
             raise RuntimeError(
                 "证据增强审题失败：报告结论缺少 Check Grounding 校验"
-                "（Discovery Engine Check Grounding 未记录），不能进入正式报告。"
+                "（证据服务 Check Grounding 未记录），不能进入正式报告。"
             )
 
     @staticmethod
@@ -1084,19 +1084,29 @@ class AnalysisService:
             metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
             input_refs = call.get("input_refs") if isinstance(call.get("input_refs"), dict) else {}
             prompt_id = str(call.get("prompt_id") or "").lower()
+            purpose = call.get("purpose") or "unknown"
             retry_count = call.get("retry_count") or metadata.get("retry_count") or 0
-            if "compact_retry" in prompt_id or retry_count:
-                add_warning(f"llm_retry:{call.get('purpose') or 'unknown'}")
+            call_has_failure_signal = (
+                int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0
+                or bool(metadata.get("provider_errors"))
+                or bool(metadata.get("initial_parse_error"))
+                or bool(metadata.get("validation_errors"))
+                or bool(call.get("validation_errors"))
+                or str(metadata.get("status") or "").lower() in {"failed", "parse_failed", "provider_failed"}
+            )
+            successful_evidence_repair = purpose == "missing_evidence_repair" and not call_has_failure_signal
+            if ("compact_retry" in prompt_id or retry_count) and not successful_evidence_repair:
+                add_warning(f"llm_retry:{purpose}")
             if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
-                add_warning(f"llm_fallback:{call.get('purpose') or 'unknown'}")
+                add_warning(f"llm_fallback:{purpose}")
             if metadata.get("provider_errors"):
-                add_warning(f"llm_provider_error:{call.get('purpose') or 'unknown'}")
+                add_warning(f"llm_provider_error:{purpose}")
             if (
                 metadata.get("initial_parse_error")
                 or metadata.get("validation_errors")
                 or call.get("validation_errors")
             ):
-                add_warning(f"llm_parse_failure:{call.get('purpose') or 'unknown'}")
+                add_warning(f"llm_parse_failure:{purpose}")
             if (
                 (question.get("_media_for_ai") or question.get("media_items") or question.get("image_indices"))
                 and call.get("purpose") in {

@@ -82,6 +82,54 @@ async def test_extract_features_attaches_llm_call_metadata(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_extract_features_uses_visual_context_without_sending_images_to_deepseek(monkeypatch, tmp_path):
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", _prepare_prompt_dir(tmp_path))
+
+    captured = {}
+
+    async def fake_extract_visual_context(media_items, **kwargs):
+        assert media_items[0]["base64"].startswith("iVBOR")
+        return "Visual context extracted by Qwen Vision for DeepSeek review only:\nocr_text: curve labels", {
+            "call_id": "biology-feature-visual-context",
+            "question_id": None,
+            "purpose": "image_inputs",
+            "prompt_id": "biology.image_inputs.visual_context",
+            "prompt_hash": "a" * 64,
+            "provider": "qwen_vision",
+            "model": "qwen3-vl-plus",
+            "input_refs": {"media_count": 1, "media_types": ["image"]},
+            "parsed_schema": "VisualContextResult",
+            "confidence": 0.9,
+            "validation_errors": [],
+            "fallback_count": 0,
+            "retry_count": 0,
+            "metadata": {"used_as": "deepseek_text_prompt_context"},
+        }
+
+    async def fake_send_message(prompt, **kwargs):
+        captured["prompt"] = prompt
+        assert kwargs["purpose"] == "feature_extraction"
+        return json.dumps(_feature_payload(), ensure_ascii=False)
+
+    monkeypatch.setattr(feature_extractor, "extract_visual_context", fake_extract_visual_context)
+    monkeypatch.setattr(feature_extractor, "send_message_gpt", fake_send_message)
+
+    result = await extract_features(
+        "图像题题干",
+        question_type="实验题",
+        subject="biology",
+        media_items=[{"type": "image", "base64": "iVBORw0KGgoAAA"}],
+    )
+
+    assert "curve labels" in captured["prompt"]
+    assert result["_llm_calls"][0]["purpose"] == "image_inputs"
+    call = result["_llm_calls"][1]
+    assert call["purpose"] == "feature_extraction"
+    assert call["input_refs"]["media_count"] == 1
+    assert call["metadata"]["visual_context_source"] == "qwen_vision"
+
+
+@pytest.mark.asyncio
 async def test_extract_big_question_features_attaches_llm_call_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", _prepare_prompt_dir(tmp_path))
 
@@ -111,6 +159,7 @@ async def test_extract_big_question_features_attaches_llm_call_metadata(monkeypa
 
     async def fake_send_message(prompt, **kwargs):
         assert "big prompt" in prompt
+        assert kwargs["purpose"] == "big_question_feature_extraction"
         return json.dumps(payload, ensure_ascii=False)
 
     monkeypatch.setattr(feature_extractor, "send_message_gpt", fake_send_message)

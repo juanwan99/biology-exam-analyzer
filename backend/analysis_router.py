@@ -102,9 +102,9 @@ def _ensure_review_channel_ready(exam_review_channel: Optional[str]) -> str | No
         return channel
 
     try:
-        from services.discovery_engine_client import DiscoveryEngineClient, DiscoveryEngineConfig
+        from services.evidence_client_loader import EvidenceClient, EvidenceConfig
 
-        config = DiscoveryEngineConfig.from_env()
+        config = EvidenceConfig.from_env()
         credentials_path = Path(config.credentials_file)
         if not credentials_path.is_file():
             raise RuntimeError(f"credentials file not found: {config.credentials_file}")
@@ -122,7 +122,7 @@ def _ensure_review_channel_ready(exam_review_channel: Optional[str]) -> str | No
         if _APP_BUILDER_READY_CACHE.get(cache_key, 0) > now:
             return channel
 
-        DiscoveryEngineClient(config)._access_token()
+        EvidenceClient(config)._access_token()
         _APP_BUILDER_READY_CACHE.clear()
         _APP_BUILDER_READY_CACHE[cache_key] = now + _APP_BUILDER_READY_TTL_SECONDS
         return channel
@@ -132,7 +132,7 @@ def _ensure_review_channel_ready(exam_review_channel: Optional[str]) -> str | No
         logger.error("[审题渠道] App Builder preflight failed: %s", exc, exc_info=True)
         raise HTTPException(
             503,
-            detail=f"1000赠金审题渠道不可用，请切换普通模型渠道或检查 Discovery Engine 配置：{exc}",
+            detail=f"1000赠金审题渠道不可用，请切换普通模型渠道或检查 证据服务配置：{exc}",
         ) from exc
 
 

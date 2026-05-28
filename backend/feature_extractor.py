@@ -11,6 +11,7 @@ from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from prompt_loader import PromptLoader
 from logger import get_logger
+from vision_context import extract_visual_context
 
 logger = get_logger()
 
@@ -112,7 +113,8 @@ async def _send_prompt(prompt: str, *, max_tokens: int, temperature: float,
 def _attach_llm_call(payload: dict, *, call_id: str, purpose: str, prompt_id: str,
                      prompt: str, input_refs: dict, parsed_schema: str,
                      confidence: float, validation_errors: list = None,
-                     retry_count: int = 0, metadata: dict = None) -> dict:
+                     retry_count: int = 0, metadata: dict = None,
+                     existing_calls: list | None = None) -> dict:
     provider, model, fallback_count, metadata = _llm_call_trace(metadata)
     call = LLMCallRecord(
         call_id=call_id,
@@ -129,7 +131,7 @@ def _attach_llm_call(payload: dict, *, call_id: str, purpose: str, prompt_id: st
         retry_count=retry_count,
         metadata=metadata,
     )
-    payload["_llm_calls"] = [call.model_dump()]
+    payload["_llm_calls"] = list(existing_calls or []) + [call.model_dump()]
     return payload
 
 
@@ -341,12 +343,23 @@ async def extract_features(question_text: str, options: str = "",
     else:
         prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
     try:
+        visual_call_record = None
+        prompt_for_llm = prompt
+        if media_input_refs(media_items):
+            visual_context_text, visual_call_record = await extract_visual_context(
+                media_items,
+                question_text=question_text,
+                question_type=question_type,
+                call_id=f"{subject}-feature-visual-context",
+            )
+            prompt_for_llm = "\n\n".join([prompt, visual_context_text])
+
         raw = await _send_prompt(
-            prompt,
-            max_tokens=2500,
+            prompt_for_llm,
+            max_tokens=8192,
             temperature=0,
             purpose="feature_extraction",
-            media_items=media_items,
+            media_items=None,
         )
         selected_raw = raw
         retry_count = 0
@@ -359,11 +372,11 @@ async def extract_features(question_text: str, options: str = "",
             try:
                 retry_count = 1
                 raw2 = await _send_prompt(
-                    prompt,
-                    max_tokens=3000,
+                    prompt_for_llm,
+                    max_tokens=8192,
                     temperature=0,
                     purpose="feature_extraction",
-                    media_items=media_items,
+                    media_items=None,
                 )
                 result2 = parse_features(raw2, include_status=True)
                 if result2.get("_raw_core_count", 0) > raw_core:
@@ -416,16 +429,18 @@ async def extract_features(question_text: str, options: str = "",
             call_id=f"{subject}-feature-extraction",
             purpose="feature_extraction",
             prompt_id=f"{subject}.feature_extraction",
-            prompt=prompt,
+            prompt=prompt_for_llm,
             input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="FeatureResult",
             confidence=ext_conf,
             validation_errors=val_errors,
             retry_count=retry_count,
+            existing_calls=[visual_call_record] if visual_call_record else None,
             metadata={
                 "response_length": len(selected_raw),
                 "feature_status": result.get("_feature_status"),
                 "raw_core_count": raw_core_count,
+                **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
             },
         )
     except Exception as e:
@@ -1028,12 +1043,23 @@ async def extract_big_question_features(question_text: str, options: str = "",
     else:
         prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
     try:
+        visual_call_record = None
+        prompt_for_llm = prompt
+        if media_input_refs(media_items):
+            visual_context_text, visual_call_record = await extract_visual_context(
+                media_items,
+                question_text=question_text,
+                question_type=question_type,
+                call_id=f"{subject}-big-question-visual-context",
+            )
+            prompt_for_llm = "\n\n".join([prompt, visual_context_text])
+
         raw = await _send_prompt(
-            prompt,
+            prompt_for_llm,
             max_tokens=5000,
             temperature=0,
-            purpose="difficulty_review",
-            media_items=media_items,
+            purpose="big_question_feature_extraction",
+            media_items=None,
         )
         parsed = parse_big_question_features(raw, total_score=total_score, detailed=True)
         retry_count = 0
@@ -1043,11 +1069,11 @@ async def extract_big_question_features(question_text: str, options: str = "",
                 logger.warning(f"[大题提取] {failure_type}，按同一结构化合同重试一次")
                 retry_count = 1
                 raw_retry = await _send_prompt(
-                    prompt,
+                    prompt_for_llm,
                     max_tokens=5000,
                     temperature=0,
-                    purpose="difficulty_review",
-                    media_items=media_items,
+                    purpose="big_question_feature_extraction",
+                    media_items=None,
                 )
                 parsed_retry = parse_big_question_features(
                     raw_retry,
@@ -1095,16 +1121,18 @@ async def extract_big_question_features(question_text: str, options: str = "",
             call_id=f"{subject}-big-question-feature-extraction",
             purpose="big_question_feature_extraction",
             prompt_id=f"{subject}.big_question_feature_extraction",
-            prompt=prompt,
+            prompt=prompt_for_llm,
             input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="BigQuestionFeatureResult",
             confidence=1.0,
             retry_count=retry_count,
+            existing_calls=[visual_call_record] if visual_call_record else None,
             metadata={
                 "status": "ok",
                 "response_length": len(raw),
                 "subquestion_count": len(result.get("subquestions", [])),
                 "dependency_count": len(result.get("dependencies", [])),
+                **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
             },
         )
         logger.info(f"[大题提取] 成功: {len(result['subquestions'])}小问, "

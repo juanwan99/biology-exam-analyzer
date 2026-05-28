@@ -11,8 +11,13 @@ from config import RULES_DIR, PROMPT_DIR
 from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
+from vision_context import extract_visual_context
 
 logger = get_logger()
+
+COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任"]
+NORMALIZABLE_WEIGHT_MIN = 0.75
+NORMALIZABLE_WEIGHT_MAX = 1.25
 
 
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
@@ -61,6 +66,49 @@ def _extract_json(text: str) -> dict:
             except json.JSONDecodeError:
                 continue
     raise ValueError(f"无法从LLM响应中提取JSON: {text[:100]}...")
+
+
+def _competency_weight_sum(result: dict) -> float:
+    total = 0.0
+    for dim in COMPETENCY_DIMS:
+        value = (result.get(dim) or {}).get("权重", 0)
+        try:
+            total += float(value)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _normalise_competency_weights(result: dict) -> dict:
+    total = _competency_weight_sum(result)
+    metadata = {"total_weight_raw": round(total, 4)}
+    if abs(total - 1.0) <= 0.01:
+        return metadata
+    if not (NORMALIZABLE_WEIGHT_MIN <= total <= NORMALIZABLE_WEIGHT_MAX):
+        metadata["weight_sum_error"] = f"competency_weight_sum_mismatch:{total:.4f}"
+        return metadata
+
+    for dim in COMPETENCY_DIMS:
+        payload = result.get(dim)
+        if not isinstance(payload, dict):
+            continue
+        try:
+            payload["权重"] = round(float(payload.get("权重", 0)) / total, 4)
+        except (TypeError, ValueError):
+            payload["权重"] = 0.0
+
+    primary = result.get("primary_competency")
+    valid_weights = {
+        dim: (result.get(dim) or {}).get("权重", 0)
+        for dim in COMPETENCY_DIMS
+        if isinstance(result.get(dim), dict)
+    }
+    if primary not in COMPETENCY_DIMS and valid_weights:
+        result["primary_competency"] = max(valid_weights, key=valid_weights.get)
+
+    metadata["weight_sum_normalized_from"] = round(total, 4)
+    metadata["weight_sum_normalized_to"] = round(_competency_weight_sum(result), 4)
+    return metadata
 
 
 class CompetencyAnalyzer:
@@ -144,12 +192,23 @@ class CompetencyAnalyzer:
                 "knowledge_point_count": len(question.get("knowledge_points", [])),
                 **media_input_refs(media_items),
             }
+            visual_call_record = None
+            if media_input_refs(media_items):
+                visual_context_text, visual_call_record = await extract_visual_context(
+                    media_items,
+                    question_text=question.get("content", ""),
+                    question_id=question.get("id"),
+                    question_type=str(question.get("type") or question.get("question_type") or ""),
+                    section_header=str(question.get("_section_header") or ""),
+                    call_id=f"question-{question.get('id')}-competency-visual-context",
+                )
+                prompt = "\n\n".join([prompt, visual_context_text])
 
             # 通过统一 LLM 客户端调用（自动 fallback）
             logger.debug(f"[素养分析] 调用LLM分析题目 {question.get('id')}")
             response_text = await llm_call(
-                messages=messages_with_media(prompt, media_items),
-                max_tokens=2048,
+                messages=messages_with_media(prompt, []),
+                max_tokens=4096,
                 temperature=0.1,
                 purpose="competency_analysis",
             )
@@ -165,22 +224,29 @@ class CompetencyAnalyzer:
             # 添加题目ID
             result["question_id"] = question.get("id")
 
-            # 验证权重总和
-            total_weight = sum([
-                result.get("生命观念", {}).get("权重", 0),
-                result.get("科学思维", {}).get("权重", 0),
-                result.get("科学探究", {}).get("权重", 0),
-                result.get("社会责任", {}).get("权重", 0)
-            ])
+            weight_metadata = _normalise_competency_weights(result)
+            total_weight = _competency_weight_sum(result)
 
-            if abs(total_weight - 1.0) > 0.01:
+            if weight_metadata.get("weight_sum_normalized_from") is not None:
+                logger.warning(
+                    "[素养分析] 题目 %s 权重总和 %.4f 已归一化为 %.4f",
+                    question.get("id"),
+                    weight_metadata["weight_sum_normalized_from"],
+                    weight_metadata["weight_sum_normalized_to"],
+                )
+            elif abs(total_weight - 1.0) > 0.01:
                 logger.warning(f"[素养分析] 题目 {question.get('id')} 权重总和异常: {total_weight}")
-                val_errors = (val_errors or []) + [f"competency_weight_sum_mismatch:{total_weight:.4f}"]
+                val_errors = (val_errors or []) + [
+                    weight_metadata.get("weight_sum_error")
+                    or f"competency_weight_sum_mismatch:{total_weight:.4f}"
+                ]
 
             call_metadata = {
                 "response_length": len(response_text),
                 "total_weight": round(total_weight, 4),
                 "primary_competency": result.get("primary_competency"),
+                **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
+                **weight_metadata,
             }
             provider, model, fallback_count, call_metadata = _llm_call_trace(call_metadata)
             call = LLMCallRecord(
@@ -198,7 +264,7 @@ class CompetencyAnalyzer:
                 fallback_count=fallback_count,
                 metadata=call_metadata,
             )
-            result["_llm_calls"] = [call.model_dump()]
+            result["_llm_calls"] = list([visual_call_record] if visual_call_record else []) + [call.model_dump()]
 
             logger.info(f"[素养分析] 题目 {question.get('id')} 分析完成，主要素养: {result.get('primary_competency')}")
             return result

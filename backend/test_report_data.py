@@ -39,6 +39,20 @@ def _make_question(qid, difficulty, bloom, total_score, knowledge_points=None,
 from report_data import aggregate_report_data
 
 
+def _minimal_statistics(avg_difficulty=5.0):
+    return {
+        "avg_difficulty": avg_difficulty,
+        "avg_cognitive_level": 5.0,
+        "difficulty_distribution": {},
+        "difficulty_distribution_by_score": {},
+        "bloom_distribution": {},
+        "difficulty_curve": [],
+        "top_knowledge_points": [],
+        "knowledge_textbook_distribution": {},
+        "competency_distribution": {},
+    }
+
+
 class TestAggregateReportData:
     def test_failed_exam_statistics_is_not_silently_rendered_as_zero_metrics(self):
         q = _make_question(1, 5.0, 3, 2)
@@ -438,6 +452,81 @@ class TestAggregateReportData:
         assert {"id": 21, "purpose": "feature_extraction"} not in missing
         assert {"id": 21, "purpose": "competency_analysis"} not in missing
         assert result["metadata_quality"]["llm_call_counts"]["big_question_feature_extraction"] == 1
+
+    def test_metadata_quality_keeps_successful_evidence_repair_visible_without_retry_failure(self):
+        q = _make_question(18, 6.8, 4, 12)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [{"label": "analysis", "score_share": 1.0, "competency_tags": ["inquiry"]}],
+            "diagnostic_units": [{"du_id": "du_1", "option_or_trap": "trap", "misconception": "gap"}],
+            "stimulus_units": [{"su_id": "su_1", "stimulus_type": "text", "description": "context", "complexity": 2}],
+        }
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {"purpose": "question_analysis"},
+                {"purpose": "big_question_feature_extraction"},
+                {"purpose": "competency_analysis"},
+                {
+                    "purpose": "missing_evidence_repair",
+                    "retry_count": 1,
+                    "fallback_count": 0,
+                    "validation_errors": [],
+                    "metadata": {
+                        "validation_errors": [],
+                        "repair_attempt": 1,
+                        "diagnostic_units_count": 1,
+                        "stimulus_units_count": 1,
+                    },
+                },
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(6.8), {"name": "t", "total": 1, "mode": "deep"})
+        quality = result["metadata_quality"]
+
+        assert quality["retry_questions"] == []
+        assert quality["evidence_gap_questions"] == []
+        assert quality["llm_call_counts"]["missing_evidence_repair"] == 1
+
+    def test_metadata_quality_blocks_failed_evidence_repair_and_not_score_normalization_notes(self):
+        q = _make_question(19, 7.1, 4, 12)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [{"label": "analysis", "score_share": 1.0, "competency_tags": ["thinking"]}],
+            "diagnostic_units": [{"du_id": "du_1", "option_or_trap": "trap", "misconception": "gap"}],
+            "stimulus_units": [{"su_id": "su_1", "stimulus_type": "text", "description": "context", "complexity": 2}],
+        }
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {
+                    "purpose": "question_analysis",
+                    "metadata": {"normalization_notes": ["score_share_sum_normalized"]},
+                },
+                {"purpose": "big_question_feature_extraction"},
+                {"purpose": "competency_analysis"},
+                {
+                    "purpose": "missing_evidence_repair",
+                    "retry_count": 0,
+                    "fallback_count": 0,
+                    "validation_errors": ["diagnostic_units_empty_after_retry"],
+                    "metadata": {
+                        "validation_errors": ["diagnostic_units_empty_after_retry"],
+                        "repair_attempt": 1,
+                    },
+                },
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(7.1), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert {"id": 19, "purpose": "question_analysis"} not in result["metadata_quality"]["retry_questions"]
+        assert {"id": 19, "purpose": "missing_evidence_repair"} in result["metadata_quality"]["retry_questions"]
 
     def test_metadata_quality_blocks_failed_difficulty_and_missing_big_question_evidence(self):
         q = _make_question(21, 5.0, 4, 14)

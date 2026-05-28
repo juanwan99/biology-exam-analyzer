@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 
 
-APP_BUILDER_ALIASES = {"app_builder", "genai_app_builder", "discovery", "grant", "1000_grant"}
+APP_BUILDER_ALIASES = {"app_builder", "genai_app_builder", "grant", "1000_grant"}
 EVIDENCE_CHANNELS = {"evidence", "evidence_enhanced", "agent_evidence"} | APP_BUILDER_ALIASES
 AGENT_SEARCH_CHANNELS = {"agent_search"}
-GROUNDED_GENERATION_CHANNELS = {"grounded_generation", "discovery_generation"}
+GROUNDED_GENERATION_CHANNELS = {"grounded_generation", "evidence_generation"}
 MODEL_CHANNELS = {"model", "llm", "standard"}
 
 

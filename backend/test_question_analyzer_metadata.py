@@ -133,8 +133,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
         question_analyzer,
         "get_last_call_metadata",
         lambda: {
-            "provider": "google_genai",
-            "model": "gemini-3-pro",
+            "provider": "native_sdk",
+            "model": "primary-pro",
             "fallback_count": 1,
             "provider_errors": [{"provider": "deepseek", "error": "timeout"}],
         },
@@ -150,8 +150,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
     )
 
     call = result["_llm_calls"][0]
-    assert call["provider"] == "google_genai"
-    assert call["model"] == "gemini-3-pro"
+    assert call["provider"] == "native_sdk"
+    assert call["model"] == "primary-pro"
     assert call["fallback_count"] == 1
     assert call["metadata"]["provider_errors"][0]["provider"] == "deepseek"
 
@@ -174,7 +174,7 @@ async def test_analyze_question_injects_ranked_evidence_context_when_enabled(mon
             return {
                 "context_text": "【审题证据上下文】\n1. 评分细则与采分点闭合：检查小问、采分点和分值边界。",
                 "metadata": {
-                    "provider": "discovery_engine",
+                    "provider": "evidence_service",
                     "operation": "rank",
                     "record_ids": ["rubric-closure"],
                     "ranked_count": 1,
@@ -397,6 +397,27 @@ async def test_invalid_v2_json_uses_compact_retry_with_metadata(monkeypatch, tmp
 
     monkeypatch.setattr(question_analyzer, "llm_call", fake_llm_call)
 
+    async def fake_extract_visual_context(media_items, **kwargs):
+        assert media_items[0]["base64"].startswith("iVBOR")
+        return "Visual context extracted by Qwen Vision for DeepSeek review only:\nocr_text: figure labels", {
+            "call_id": "question-21-visual-context",
+            "question_id": 21,
+            "purpose": "image_inputs",
+            "prompt_id": "biology.image_inputs.visual_context",
+            "prompt_hash": "a" * 64,
+            "provider": "qwen_vision",
+            "model": "qwen3-vl-plus",
+            "input_refs": {"media_count": 1, "media_types": ["image"]},
+            "parsed_schema": "VisualContextResult",
+            "confidence": 0.9,
+            "validation_errors": [],
+            "fallback_count": 0,
+            "retry_count": 0,
+            "metadata": {"used_as": "deepseek_text_prompt_context"},
+        }
+
+    monkeypatch.setattr(question_analyzer, "extract_visual_context", fake_extract_visual_context)
+
     png_bytes = b"\x89PNG\r\n\x1a\nfake"
 
     result = await QuestionAnalyzer().analyze_question(
@@ -411,12 +432,14 @@ async def test_invalid_v2_json_uses_compact_retry_with_metadata(monkeypatch, tmp
     for llm_call_kwargs in calls:
         content = llm_call_kwargs["messages"][0]["content"]
         assert isinstance(content, list)
-        assert content[-1]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert len(content) == 1
+        assert "figure labels" in content[0]["text"]
     assert result["_analysis_version"] == "v2_json_repair"
     assert result["_fine_grained"]["scoring_units"]
     assert result["_fine_grained"]["diagnostic_units"]
     assert result["_fine_grained"]["stimulus_units"]
-    call = result["_llm_calls"][0]
+    assert result["_llm_calls"][0]["purpose"] == "image_inputs"
+    call = result["_llm_calls"][1]
     assert call["call_id"] == "question-21-analysis-repair"
     assert call["purpose"] == "question_analysis"
     assert call["prompt_id"] == "biology.question_analysis.v2.json_repair"
@@ -426,7 +449,8 @@ async def test_invalid_v2_json_uses_compact_retry_with_metadata(monkeypatch, tmp
     assert "initial_parse_error" in call["metadata"]
     assert call["metadata"]["initial_response_length"] > 0
     assert call["metadata"]["normalization_notes"]
-    evidence_call = result["_llm_calls"][1]
+    assert call["metadata"]["visual_context_source"] == "qwen_vision"
+    evidence_call = result["_llm_calls"][2]
     assert evidence_call["call_id"] == "question-21-evidence-retry"
     assert evidence_call["prompt_id"] == "biology.question_analysis.v2.evidence_retry"
     assert evidence_call["input_refs"]["media_count"] == 1
