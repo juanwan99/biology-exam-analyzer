@@ -846,14 +846,14 @@ class AnalysisService:
         ):
             raise RuntimeError(
                 "agent_search channel requested but no Search App answer_query evidence "
-                "was recorded; verify EVIDENCE_ENGINE_ID and the question evidence context"
+                "was recorded; verify DISCOVERY_ENGINE_ENGINE_ID and the question evidence context"
             )
         if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
             raise RuntimeError(
                 "证据增强审题失败：检测到不应使用的 证据服务 "
                 "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
             )
-        if int(channel_usage.get("evidence_rank_count") or 0) <= 0:
+        if int(channel_usage.get("discovery_rank_count") or 0) <= 0:
             missing = channel_usage.get("missing_rank_question_ids") or []
             if missing:
                 first = missing[0]
@@ -872,7 +872,7 @@ class AnalysisService:
                 f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
                 "（证据服务 Ranking 未记录），不能进入正式报告。"
             )
-        if require_grounding and int(channel_usage.get("evidence_grounding_check_count") or 0) <= 0:
+        if require_grounding and int(channel_usage.get("discovery_grounding_check_count") or 0) <= 0:
             raise RuntimeError(
                 "证据增强审题失败：报告结论缺少 Check Grounding 校验"
                 "（证据服务 Check Grounding 未记录），不能进入正式报告。"

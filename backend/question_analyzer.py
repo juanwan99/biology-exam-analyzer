@@ -514,12 +514,12 @@ class QuestionAnalyzer:
                 )
             except Exception as exc:
                 raise RuntimeError(
-                    f"题目{question_id}证据重排失败（Discovery Engine Ranking）: {exc}"
+                    f"题目{question_id}证据重排失败（证据排序服务）: {exc}"
                 ) from exc
             evidence_context_text = str(evidence_context.get("context_text") or "").strip()
             if not evidence_context_text:
                 raise RuntimeError(
-                    f"题目{question_id}证据重排失败（Discovery Engine Ranking）: empty context"
+                    f"题目{question_id}证据重排失败（证据排序服务）: empty context"
                 )
             prompt_sections.append(evidence_context_text)
             evidence_context_meta = evidence_context.get("metadata") or {}

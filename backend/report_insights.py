@@ -34,8 +34,8 @@ def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
                  input_refs: dict, parsed_schema: str, confidence: float,
                  validation_errors: list = None, metadata: dict = None) -> dict:
     metadata = dict(metadata or {})
-    if metadata.get("provider") == "discovery_engine":
-        provider = "discovery_engine"
+    if metadata.get("provider") == "evidence_service":
+        provider = "evidence_service"
         model = metadata.get("operation") or "check_grounding"
         fallback_count = 0
     else:
@@ -344,7 +344,7 @@ def _build_overall_prompt(data: dict) -> str:
 {diag_section}
 {metadata_section}
 ## Grounding Evidence Cards
-以下证据卡会用于 Discovery Engine Check Grounding。输出中的事实、数字和判断必须能被这些证据卡直接支撑。
+以下证据卡会用于 证据校验服务。输出中的事实、数字和判断必须能被这些证据卡直接支撑。
 {evidence_section}
 
 ## Grounding requirements
@@ -581,7 +581,7 @@ def _strip_grounding_category_prefix(text: str) -> str:
 def _extract_policy_basis(text: str) -> str:
     """Return the factual trigger behind a recommendation/policy sentence.
 
-    Discovery Check Grounding is unstable for imperative sentences such as
+    证据校验服务 is unstable for imperative sentences such as
     "建议增加简单题"; those are policy conclusions, not factual claims.  The
     gate should therefore verify the data trigger ("简单题为0题") and keep the
     recommendation policy explicit in evidence cards instead of asking the
@@ -1185,7 +1185,7 @@ async def _run_grounding_check(
         "section_count": len(checks),
         "checks": checks,
         "metadata": {
-            "provider": "discovery_engine",
+            "provider": "evidence_service",
             "operation": "check_grounding",
             "fact_count": len(facts),
             "citation_threshold": citation_threshold,
@@ -1267,7 +1267,7 @@ async def generate_insights(
                 )
             except Exception as exc:
                 raise RuntimeError(
-                    f"整卷证据校验失败（Discovery Engine Check Grounding）: {exc}"
+                    f"整卷证据校验失败（证据校验服务）: {exc}"
                 ) from exc
             llm_calls.append(_call_record(
                 call_id="report-overall-grounding",

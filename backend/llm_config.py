@@ -12,7 +12,7 @@ VISION_PROVIDER_ENV = "LLM_VISION_PROVIDER"
 QWEN_TEXT_FALLBACK_ENV = "LLM_ENABLE_QWEN_TEXT_FALLBACK"
 
 QWEN_VISION_PROVIDER_NAMES = {"qwen", "qwen_vision", "dashscope"}
-NATIVE_VISION_PROVIDER_NAMES = {"native", "gemini", "google", "primary"}
+NATIVE_VISION_PROVIDER_NAMES = {"native", "primary"}
 TEXT_REVIEW_PURPOSES = {
     "big_question_feature_extraction",
     "competency_analysis",
