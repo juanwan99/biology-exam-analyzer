@@ -206,9 +206,163 @@ def build_feature_prompt(question_text: str, options: str = "",
 """
 
 
+def build_compact_feature_retry_prompt(question_text: str, options: str = "",
+                                       correct_answer: str = "",
+                                       question_type: str = "",
+                                       visual_context_text: str = "") -> str:
+    parts = [question_text[:1800]]
+    if options:
+        parts.append(f"选项：{options[:800]}")
+    if correct_answer:
+        parts.append(f"正确答案：{correct_answer[:300]}")
+    if visual_context_text:
+        parts.append(f"视觉信息：{visual_context_text[:1200]}")
+    question_block = "\n".join(parts)
+    return f"""你是高中生物命题审查专家。上一次特征提取 JSON 不可解析，现在只做紧凑重试。
+只返回一个合法 JSON 对象，不要 markdown，不要解释，不要省略号。
+
+题目：
+{question_block}
+题型：{question_type or "unknown"}
+
+必须输出这些键：
+working_memory, working_memory_reason, reasoning_steps, steps_detail,
+chain_coupling, coupling_reason, trap_density, trap_reason, novelty,
+novelty_reason, knowledge_breadth, breadth_reason, bloom, bloom_distribution,
+bloom_reason, info_density, density_reason, representation_complexity,
+representation_reason, quality_score, quality_scientific, quality_normative,
+quality_language, quality_context, quality_sensitivity, teacher_comment。
+
+数值范围：
+working_memory 1-5；reasoning_steps 1-10；chain_coupling 1-3；
+trap_density 1-3；novelty 1-3；knowledge_breadth 1-3；bloom 1-6；
+info_density 1-3；representation_complexity 1-3；quality_score 1-5。
+所有 reason/quality 字段不超过 40 个汉字，teacher_comment 不超过 120 个汉字。
+"""
+
+
+def _decode_json_candidate(candidate: str):
+    variants = [
+        candidate,
+        re.sub(r",\s*([}\]])", r"\1", candidate),
+    ]
+    decoder = json.JSONDecoder(strict=False)
+    for variant in variants:
+        text = str(variant or "").strip()
+        if not text:
+            continue
+        try:
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        try:
+            value, _ = decoder.raw_decode(text)
+            return value
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
+
+
+def _json_object_candidates(text: str) -> list[str]:
+    text = str(text or "").strip()
+    candidates = [text]
+    candidates.extend(match.group(1).strip() for match in re.finditer(
+        r'```(?:json)?\s*\n?([\s\S]*?)\n?```',
+        text,
+        re.DOTALL,
+    ))
+    starts = [idx for idx, char in enumerate(text) if char == "{"]
+    for start in starts:
+        stack = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\" and in_string:
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                stack += 1
+            elif char == "}":
+                stack -= 1
+                if stack == 0:
+                    candidates.append(text[start:idx + 1])
+                    break
+    seen = set()
+    unique = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _json_string_value(raw_value: str) -> str:
+    try:
+        return json.loads(f'"{raw_value}"', strict=False)
+    except Exception:
+        return raw_value.replace('\\"', '"').replace("\\n", "\n").strip()
+
+
+def _salvage_feature_fields(raw: str) -> dict | None:
+    text = str(raw or "")
+    data = {}
+    for key in FEATURE_RANGES:
+        match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*("(?P<quoted>(?:\\.|[^"\\])*)"|(?P<number>-?\d+(?:\.\d+)?))',
+            text,
+            re.DOTALL,
+        )
+        if not match:
+            continue
+        if match.group("number") is not None:
+            try:
+                data[key] = int(float(match.group("number")))
+            except ValueError:
+                continue
+        else:
+            data[key] = _json_string_value(match.group("quoted"))
+
+    for key in _REASON_KEYS + _QUALITY_KEYS:
+        match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+            text,
+            re.DOTALL,
+        )
+        if match:
+            data[key] = _json_string_value(match.group(1))
+
+    match = re.search(r'"quality_score"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+    if match:
+        try:
+            data["quality_score"] = int(float(match.group(1)))
+        except ValueError:
+            pass
+
+    bloom_pos = text.find('"bloom_distribution"')
+    if bloom_pos != -1:
+        object_start = text.find("{", bloom_pos)
+        if object_start != -1:
+            bloom_value = _decode_json_candidate(text[object_start:])
+            if isinstance(bloom_value, dict):
+                data["bloom_distribution"] = bloom_value
+
+    core_count = len([key for key in FEATURE_RANGES if key in data])
+    return data if core_count >= 4 else None
+
+
 def parse_features(raw: str, include_status: bool = False) -> dict:
     """从 LLM 原始输出解析特征，带容错和范围裁剪。"""
     data = None
+    parse_recovery = None
 
     if not isinstance(raw, str):
         logger.warning(f"特征解析输入非字符串: {type(raw)}")
@@ -218,29 +372,12 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
             defaults["_feature_status"] = "failed"
         return defaults
 
-    # 策略 1: 直接解析
-    try:
-        data = json.loads(raw.strip())
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # 策略 2: code block
-    if data is None:
-        m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
-        if m:
-            try:
-                data = json.loads(m.group(1))
-            except json.JSONDecodeError:
-                pass
-
-    # 策略 3: 第一个 JSON object（支持一层嵌套）
-    if data is None:
-        m = re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', raw)
-        if m:
-            try:
-                data = json.loads(m.group())
-            except json.JSONDecodeError:
-                pass
+    for index, candidate in enumerate(_json_object_candidates(raw)):
+        decoded = _decode_json_candidate(candidate)
+        if isinstance(decoded, dict):
+            data = decoded
+            parse_recovery = None if index == 0 else "json_candidate"
+            break
 
     # 截断检测
     if data is None and raw.count('{') > raw.count('}'):
@@ -252,10 +389,19 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
                 candidate = re.sub(r',\s*"[^"]*":\s*"?[^"{}]*$', '', candidate)
                 if not candidate.endswith('}'):
                     candidate += '}'
-                data = json.loads(candidate)
+                data = json.loads(candidate, strict=False)
+                parse_recovery = "truncated_json_repair"
                 logger.info(f"[特征提取] 截断修复成功，恢复了 {len(data)} 个字段")
             except (json.JSONDecodeError, Exception):
                 pass
+
+    if data is None:
+        data = _salvage_feature_fields(raw)
+        if isinstance(data, dict):
+            parse_recovery = "field_salvage"
+            logger.warning(
+                f"[特征提取] 使用字段级恢复解析 JSON，核心字段={len([k for k in FEATURE_RANGES if k in data])}"
+            )
 
     # 全部失败
     if not isinstance(data, dict):
@@ -281,6 +427,8 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
         result[key] = max(lo, min(hi, val))
 
     result["_raw_core_count"] = raw_core_count
+    if parse_recovery:
+        result["_parse_recovery"] = parse_recovery
 
     # 保留 reason 字段
     for reason_key in _REASON_KEYS:
@@ -362,18 +510,26 @@ async def extract_features(question_text: str, options: str = "",
             media_items=None,
         )
         selected_raw = raw
+        selected_prompt = prompt_for_llm
         retry_count = 0
         result = parse_features(raw, include_status=True)
 
-        # raw_core=0 重试（JSON 成功但核心维度缺失）
+        # 核心字段不足时用短 prompt 再试一次；DeepSeek 仍是唯一文本主审。
         raw_core = result.get("_raw_core_count", 0)
-        if raw_core == 0 and not result.get("_feature_failed"):
-            logger.warning(f"[特征提取] raw_core=0 但 JSON 成功，重试一次（raw前100: {raw[:100]}）")
+        if raw_core < 6:
+            logger.warning(f"[特征提取] raw_core={raw_core} 不足，触发紧凑重试（raw前100: {raw[:100]}）")
             try:
                 retry_count = 1
+                retry_prompt = build_compact_feature_retry_prompt(
+                    question_text,
+                    options,
+                    correct_answer,
+                    question_type,
+                    visual_context_text if visual_call_record else "",
+                )
                 raw2 = await _send_prompt(
-                    prompt_for_llm,
-                    max_tokens=8192,
+                    retry_prompt,
+                    max_tokens=4096,
                     temperature=0,
                     purpose="feature_extraction",
                     media_items=None,
@@ -382,9 +538,10 @@ async def extract_features(question_text: str, options: str = "",
                 if result2.get("_raw_core_count", 0) > raw_core:
                     result = result2
                     selected_raw = raw2
+                    selected_prompt = retry_prompt
                     logger.info(f"[特征提取] 重试成功 raw_core={result2.get('_raw_core_count', 0)}")
                 else:
-                    logger.warning("[特征提取] 重试后 raw_core 仍为 0")
+                    logger.warning(f"[特征提取] 重试后 raw_core 仍不足: {result2.get('_raw_core_count', 0)}")
             except Exception as retry_err:
                 logger.warning(f"[特征提取] 重试失败: {retry_err}")
 
@@ -429,7 +586,7 @@ async def extract_features(question_text: str, options: str = "",
             call_id=f"{subject}-feature-extraction",
             purpose="feature_extraction",
             prompt_id=f"{subject}.feature_extraction",
-            prompt=prompt_for_llm,
+            prompt=selected_prompt,
             input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="FeatureResult",
             confidence=ext_conf,
@@ -440,6 +597,8 @@ async def extract_features(question_text: str, options: str = "",
                 "response_length": len(selected_raw),
                 "feature_status": result.get("_feature_status"),
                 "raw_core_count": raw_core_count,
+                "parse_recovery": result.get("_parse_recovery"),
+                **({"recovery_status": "ok"} if retry_count and result.get("_feature_status") == "ok" else {}),
                 **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
             },
         )
@@ -1056,7 +1215,7 @@ async def extract_big_question_features(question_text: str, options: str = "",
 
         raw = await _send_prompt(
             prompt_for_llm,
-            max_tokens=5000,
+            max_tokens=16000,
             temperature=0,
             purpose="big_question_feature_extraction",
             media_items=None,
@@ -1070,7 +1229,7 @@ async def extract_big_question_features(question_text: str, options: str = "",
                 retry_count = 1
                 raw_retry = await _send_prompt(
                     prompt_for_llm,
-                    max_tokens=5000,
+                    max_tokens=16000,
                     temperature=0,
                     purpose="big_question_feature_extraction",
                     media_items=None,

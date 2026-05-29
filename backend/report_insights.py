@@ -34,8 +34,8 @@ def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
                  input_refs: dict, parsed_schema: str, confidence: float,
                  validation_errors: list = None, metadata: dict = None) -> dict:
     metadata = dict(metadata or {})
-    if metadata.get("provider") == "evidence_service":
-        provider = "evidence_service"
+    if metadata.get("provider") in {"discovery_engine", "evidence_service"}:
+        provider = metadata.get("provider")
         model = metadata.get("operation") or "check_grounding"
         fallback_count = 0
     else:
@@ -789,18 +789,34 @@ def _build_grounding_facts(data: dict) -> list[dict]:
         for name, item in diff_by_score.items()
         if isinstance(item, dict)
     )
+    simple_count = diff_distribution.get("简单", 0)
+    medium_count = diff_distribution.get("中等", 0)
+    hard_count = diff_distribution.get("困难", 0)
+    score_share_parts = []
+    for name in ("简单", "中等", "困难"):
+        score_item = diff_by_score.get(name)
+        if isinstance(score_item, dict):
+            score_share_parts.append(f"{name}题分值占比为{pct(score_item.get('percentage'))}。")
     top_difficulty_text = "、".join(
         f"Q{item.get('id')} 难度{item.get('difficulty')} 分值{item.get('score')}"
         for item in top_difficulty
         if item.get("id")
     )
     add_fact(
+        "report.evidence_card.difficulty_distribution_detail",
+        "difficulty_distribution_detail: "
+        f"简单题为{simple_count}题。"
+        f"中等题为{medium_count}题。"
+        f"困难题为{hard_count}题。"
+        f"{''.join(score_share_parts)}",
+    )
+    add_fact(
         "report.evidence_card.difficulty",
         "difficulty_evidence: "
         f"avg_difficulty={metrics.get('avg_difficulty')}，"
-        f"难度分布为简单{diff_distribution.get('简单', 0)}题、"
-        f"中等{diff_distribution.get('中等', 0)}题、"
-        f"困难{diff_distribution.get('困难', 0)}题；"
+        f"难度分布为简单{simple_count}题、"
+        f"中等{medium_count}题、"
+        f"困难{hard_count}题；"
         f"按分值占比为{by_score_text}；"
         f"difficulty_gradient=前段{gradient.get('front')}、"
         f"中段{gradient.get('middle')}、后段{gradient.get('back')}，"
@@ -1185,7 +1201,7 @@ async def _run_grounding_check(
         "section_count": len(checks),
         "checks": checks,
         "metadata": {
-            "provider": "evidence_service",
+            "provider": "discovery_engine",
             "operation": "check_grounding",
             "fact_count": len(facts),
             "citation_threshold": citation_threshold,

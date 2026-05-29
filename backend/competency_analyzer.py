@@ -68,6 +68,45 @@ def _extract_json(text: str) -> dict:
     raise ValueError(f"无法从LLM响应中提取JSON: {text[:100]}...")
 
 
+def _is_length_provider_failure(exc: Exception) -> bool:
+    text = str(exc)
+    return "finish_reason=length" in text or "provider_incomplete_response" in text
+
+
+def _build_compact_competency_prompt(question: Dict[str, Any],
+                                     visual_context_text: str = "") -> str:
+    knowledge_points = ", ".join(question.get("knowledge_points", []))
+    parts = [
+        "你是高中生物核心素养分析器。上一次输出过长或不可解析，现在只做紧凑恢复。",
+        "只返回一个合法 JSON 对象，不要 markdown，不要解释，不要省略号。",
+        "必须包含：生命观念、科学思维、科学探究、社会责任、primary_competency、competency_level。",
+        "四个素养对象必须包含：涉及、具体维度、权重、分析说明。",
+        "权重总和必须等于 1.0；未涉及的素养用 涉及=false、具体维度=[]、权重=0、分析说明=\"\"。",
+        "每个具体维度最多 2 个；分析说明不超过 35 个汉字。",
+        "primary_competency 必须是权重最高的素养；competency_level 只能是 低/中/高。",
+        f"题目内容：\n{str(question.get('content', ''))[:2600]}",
+        f"已识别知识点：{knowledge_points[:500]}",
+    ]
+    if visual_context_text:
+        parts.append(f"视觉信息：\n{visual_context_text[:1000]}")
+    return "\n\n".join(parts)
+
+
+def _parse_competency_response(response_text: str, question_id) -> tuple[dict, float, list]:
+    result = _extract_json(response_text)
+    from llm_schemas import validate_llm_output, CompetencyResult
+    result, ext_conf, val_errors = validate_llm_output(
+        result,
+        CompetencyResult,
+        f"素养分析 题目{question_id}",
+    )
+    if val_errors:
+        logger.warning(f"[素养] Schema校验: {val_errors[:3]}")
+    result["_extraction_confidence"] = ext_conf
+    result["question_id"] = question_id
+    return result, ext_conf, val_errors
+
+
 def _competency_weight_sum(result: dict) -> float:
     total = 0.0
     for dim in COMPETENCY_DIMS:
@@ -204,25 +243,51 @@ class CompetencyAnalyzer:
                 )
                 prompt = "\n\n".join([prompt, visual_context_text])
 
-            # 通过统一 LLM 客户端调用（自动 fallback）
+            # 通过统一 LLM 客户端调用；文本主审固定由 DeepSeek 路由承担。
             logger.debug(f"[素养分析] 调用LLM分析题目 {question.get('id')}")
-            response_text = await llm_call(
-                messages=messages_with_media(prompt, []),
-                max_tokens=4096,
-                temperature=0.1,
-                purpose="competency_analysis",
-            )
-            logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
-
-            # 解析JSON（四级降级：直接解析→代码块→首对象→截断修复）
-            result = _extract_json(response_text)
-            from llm_schemas import validate_llm_output, CompetencyResult
-            result, ext_conf, val_errors = validate_llm_output(result, CompetencyResult, f"素养分析 题目{question.get('id', '?')}")
-            if val_errors:
-                logger.warning(f"[素养] Schema校验: {val_errors[:3]}")
-            result["_extraction_confidence"] = ext_conf
-            # 添加题目ID
-            result["question_id"] = question.get("id")
+            selected_prompt = prompt
+            retry_count = 0
+            recovery_metadata = {}
+            try:
+                response_text = await llm_call(
+                    messages=messages_with_media(prompt, []),
+                    max_tokens=8192,
+                    temperature=0.1,
+                    purpose="competency_analysis",
+                )
+                logger.debug(f"[素养分析] LLM响应: {response_text[:200]}...")
+                result, ext_conf, val_errors = _parse_competency_response(
+                    response_text,
+                    question.get("id"),
+                )
+            except Exception as first_exc:
+                if not (_is_length_provider_failure(first_exc) or response_text):
+                    raise
+                logger.warning(
+                    f"[素养分析] 题目 {question.get('id')} 触发紧凑恢复: {first_exc}"
+                )
+                retry_count = 1
+                recovery_metadata = {
+                    "initial_error": str(first_exc)[:300],
+                    "initial_response_length": len(response_text or ""),
+                    "recovery_mode": "compact_json",
+                    "recovery_status": "ok",
+                }
+                selected_prompt = _build_compact_competency_prompt(
+                    question,
+                    visual_context_text if visual_call_record else "",
+                )
+                response_text = await llm_call(
+                    messages=messages_with_media(selected_prompt, []),
+                    max_tokens=4096,
+                    temperature=0,
+                    purpose="competency_analysis",
+                )
+                logger.debug(f"[素养分析] 紧凑恢复响应: {response_text[:200]}...")
+                result, ext_conf, val_errors = _parse_competency_response(
+                    response_text,
+                    question.get("id"),
+                )
 
             weight_metadata = _normalise_competency_weights(result)
             total_weight = _competency_weight_sum(result)
@@ -247,6 +312,7 @@ class CompetencyAnalyzer:
                 "primary_competency": result.get("primary_competency"),
                 **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
                 **weight_metadata,
+                **recovery_metadata,
             }
             provider, model, fallback_count, call_metadata = _llm_call_trace(call_metadata)
             call = LLMCallRecord(
@@ -254,7 +320,7 @@ class CompetencyAnalyzer:
                 question_id=question.get("id"),
                 purpose="competency_analysis",
                 prompt_id="biology.competency_analysis",
-                prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
+                prompt_hash=sha256(selected_prompt.encode("utf-8")).hexdigest(),
                 provider=provider,
                 model=model,
                 input_refs=input_refs,
@@ -262,6 +328,7 @@ class CompetencyAnalyzer:
                 confidence=ext_conf,
                 validation_errors=val_errors,
                 fallback_count=fallback_count,
+                retry_count=retry_count,
                 metadata=call_metadata,
             )
             result["_llm_calls"] = list([visual_call_record] if visual_call_record else []) + [call.model_dump()]

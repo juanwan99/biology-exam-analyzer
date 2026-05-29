@@ -118,6 +118,15 @@ class QuestionAnalyzer:
         if "answer" in data and not isinstance(data.get("answer"), str):
             data["answer"] = json.dumps(data["answer"], ensure_ascii=False)
             notes.append("answer_object_to_json_string")
+        if isinstance(data.get("difficulty"), (int, float)):
+            numeric_difficulty = float(data["difficulty"])
+            if numeric_difficulty <= 4:
+                data["difficulty"] = "简单"
+            elif numeric_difficulty <= 7:
+                data["difficulty"] = "中等"
+            else:
+                data["difficulty"] = "困难"
+            notes.append("difficulty_number_to_label")
 
         bloom_map = {
             "识记": 1, "记忆": 1, "remember": 1, "remembering": 1,
@@ -179,6 +188,13 @@ class QuestionAnalyzer:
                             link["knowledge_point"] = link[alt_key]
                             notes.append(f"{alt_key}_to_knowledge_point")
                             break
+                    else:
+                        if seu.get("label"):
+                            link["knowledge_point"] = str(seu["label"])
+                            notes.append("seu_label_to_knowledge_point")
+                        elif link.get("k_id") or link.get("id"):
+                            link["knowledge_point"] = str(link.get("k_id") or link.get("id"))
+                            notes.append("id_to_knowledge_point")
                 original = link.get("share")
                 coerced = cls._coerce_float(original)
                 if coerced != original:
@@ -234,6 +250,15 @@ class QuestionAnalyzer:
         for index, unit in enumerate(data.get("stimulus_units") or [], 1):
             if not isinstance(unit, dict):
                 continue
+            if not unit.get("su_id"):
+                for alt_key in ("stu_id", "id", "label", "name"):
+                    if unit.get(alt_key):
+                        unit["su_id"] = str(unit[alt_key])
+                        notes.append(f"{alt_key}_to_su_id")
+                        break
+                else:
+                    unit["su_id"] = f"su_{index}"
+                    notes.append("su_id_defaulted")
             if not unit.get("description"):
                 for alt_key in ("label", "name", "content", "summary", "su_id"):
                     if unit.get(alt_key):
@@ -432,11 +457,14 @@ class QuestionAnalyzer:
         prompt_hash = sha256(analysis_prompt_template.encode("utf-8")).hexdigest()
         analysis_prompt_id = "biology.question_analysis." + ("v" + "2" if use_v2 else "v1")
         evidence_context_meta = None
+        evidence_context_text = ""
         question_media_items = _question_images_to_media_items(question_images)
         question_media_refs = media_input_refs(question_media_items)
         visual_context_text = ""
         visual_call_record = None
-        analysis_timeout = 240.0 if question_type in ("short_answer", "non_choice") or len(question_text) > 500 else 120.0
+        is_long_analysis = question_type in ("short_answer", "non_choice") or len(question_text) > 500
+        analysis_timeout = 240.0 if is_long_analysis else 120.0
+        analysis_max_tokens = 16000 if is_long_analysis else 12000
 
         def build_call_record(payload: dict, parsed_schema: str, confidence: float,
                               validation_errors: list = None, *,
@@ -538,6 +566,198 @@ class QuestionAnalyzer:
         full_prompt = "\n\n".join(prompt_sections + [f"题目内容：\n{question_text}"])
         initial_calls = [visual_call_record] if visual_call_record else []
 
+        def _last_provider_error_messages() -> list[str]:
+            try:
+                trace = get_last_call_metadata() or {}
+            except Exception:
+                trace = {}
+            messages = []
+            for error in trace.get("provider_errors") or []:
+                if isinstance(error, dict):
+                    messages.append(str(error.get("message") or ""))
+            return messages
+
+        def _is_length_provider_failure(exc: Exception) -> bool:
+            error_messages = [str(exc)] + _last_provider_error_messages()
+            for _, provider_exc in getattr(exc, "errors", []) or []:
+                error_messages.append(str(provider_exc))
+            error_text = " ".join(error_messages).lower()
+            return "finish_reason=length" in error_text
+
+        async def _compact_analysis_retry(initial_reason: str, initial_response_length: int = 0) -> dict:
+            logger.warning(f"[分析] 题目{question_id} 触发 compact v2 重试: {initial_reason}")
+            compact_prompt = self._get_compact_analysis_retry_prompt(
+                question_type=question_type,
+                section_header=section_header,
+            )
+            compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
+            compact_prompt_id = "biology.question_analysis.v2.compact_retry"
+            try:
+                compact_response = await llm_call(
+                    messages=_question_messages(
+                        "\n\n".join(
+                            part for part in [
+                                compact_prompt,
+                                visual_context_text[:1500],
+                                f"Question content:\n{question_text[:3500]}",
+                            ]
+                            if part
+                        ),
+                        [],
+                    ),
+                    max_tokens=analysis_max_tokens,
+                    temperature=0,
+                    timeout=analysis_timeout,
+                    purpose="question_analysis_retry",
+                )
+            except Exception as compact_exc:
+                if _is_length_provider_failure(compact_exc):
+                    return await _minimal_analysis_retry(
+                        f"{initial_reason}; compact_retry_failed: {compact_exc}",
+                        retry_count=2,
+                    )
+                raise
+            compact_response_length = len(compact_response) if compact_response else 0
+            compact_json = self.extract_json(compact_response)
+            if not compact_json.startswith('{'):
+                start = compact_json.find('{')
+                if start != -1:
+                    compact_json = compact_json[start:]
+            if not compact_json.endswith('}'):
+                end = compact_json.rfind('}')
+                if end != -1:
+                    compact_json = compact_json[:end + 1]
+            try:
+                compact_result = json.loads(compact_json)
+                compact_result, normalization_notes = self._normalize_fine_grained_result(compact_result)
+                from llm_schemas import (FineGrainedResult, validate_llm_output,
+                                         compute_summary_from_units, validate_score_conservation)
+                validated, ext_conf, val_errors = validate_llm_output(
+                    compact_result,
+                    FineGrainedResult,
+                    f"题目{question_id} compact v2",
+                )
+                fg = FineGrainedResult(**validated)
+            except Exception as compact_parse_exc:
+                return await _minimal_analysis_retry(
+                    f"{initial_reason}; compact_retry_parse_failed: {compact_parse_exc}",
+                    retry_count=2,
+                )
+            expected_total_score = fg.total_score if isinstance(fg.total_score, (int, float)) and fg.total_score > 0 else None
+            if expected_total_score is None:
+                is_conserved = False
+                conservation_errors = ["fine_grained total_score missing_or_non_positive"]
+            else:
+                is_conserved, conservation_errors = validate_score_conservation(fg, expected_total_score)
+            if not is_conserved:
+                val_errors = (val_errors or []) + conservation_errors
+                ext_conf = min(ext_conf, 0.6)
+            summary = compute_summary_from_units(fg)
+            validated.update(summary)
+            validated["_fine_grained"] = {
+                "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
+                "diagnostic_units": [d.model_dump() if hasattr(d, 'model_dump') else d for d in fg.diagnostic_units],
+                "stimulus_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.stimulus_units],
+            }
+            validated["_extraction_confidence"] = ext_conf
+            validated["_analysis_version"] = "v2_compact_retry"
+            if val_errors:
+                validated["_validation_errors"] = val_errors
+            validated = attach_call_record(
+                validated,
+                "FineGrainedResult",
+                ext_conf,
+                val_errors,
+                existing_calls=initial_calls,
+                prompt_id=compact_prompt_id,
+                prompt_hash_value=compact_prompt_hash,
+                response_len=compact_response_length,
+                call_suffix="analysis-compact-retry",
+                retry_count=1,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_response_length": initial_response_length,
+                    "initial_provider_errors": _last_provider_error_messages(),
+                    "normalization_notes": normalization_notes,
+                },
+            )
+            logger.info(f"[分析] 题目{question_id} compact v2 重试完成 (confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)})")
+            return await self._retry_missing_evidence_units(
+                analysis_payload=validated,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header,
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+                timeout=analysis_timeout,
+            )
+
+        async def _minimal_analysis_retry(initial_reason: str, retry_count: int = 1) -> dict:
+            logger.warning(f"[分析] 题目{question_id} 触发 minimal JSON 重试: {initial_reason}")
+            provider_errors_before = _last_provider_error_messages()
+            minimal_prompt = (
+                "You are the DeepSeek primary reviewer for a high-school biology exam item.\n"
+                "Return ONLY one compact JSON object. Do not include markdown or extra text.\n"
+                "Required keys: knowledge_points, detailed_analysis, difficulty, common_mistakes, "
+                "answer, total_score, bloom_level.\n"
+                "Do not include scoring_units, diagnostic_units, stimulus_units, sub_questions, tables, or explanations outside JSON.\n"
+                "Limits: knowledge_points <= 5 short strings; common_mistakes <= 3 short strings; "
+                "detailed_analysis <= 120 Chinese characters; answer <= 80 Chinese characters; "
+                "difficulty must be one of 简单, 中等, 困难; bloom_level must be an integer 1-6.\n"
+                f"Section: {section_header or 'unknown'}\n"
+                f"Question type: {question_type}\n"
+                f"Visual context, if any:\n{visual_context_text[:1200]}\n"
+                f"Question content:\n{question_text[:3500]}"
+            )
+            minimal_prompt_hash = sha256(minimal_prompt.encode("utf-8")).hexdigest()
+            minimal_response = await llm_call(
+                messages=_question_messages(minimal_prompt, []),
+                max_tokens=8192,
+                temperature=0,
+                timeout=analysis_timeout,
+                purpose="question_analysis_retry",
+            )
+            minimal_response_length = len(minimal_response) if minimal_response else 0
+            minimal_json = self.extract_json(minimal_response)
+            if not minimal_json.startswith('{'):
+                start = minimal_json.find('{')
+                if start != -1:
+                    minimal_json = minimal_json[start:]
+            if not minimal_json.endswith('}'):
+                end = minimal_json.rfind('}')
+                if end != -1:
+                    minimal_json = minimal_json[:end + 1]
+            minimal_result = json.loads(minimal_json)
+            from llm_schemas import validate_llm_output, AnalysisResult
+            result, ext_conf, val_errors = validate_llm_output(
+                minimal_result,
+                AnalysisResult,
+                f"题目{question_id} minimal length retry",
+            )
+            result["_extraction_confidence"] = ext_conf
+            result["_analysis_version"] = "v1_length_recovery"
+            if val_errors:
+                result["_validation_errors"] = val_errors
+            logger.info(f"[分析] 题目{question_id} minimal JSON 重试完成 (confidence={ext_conf})")
+            return attach_call_record(
+                result,
+                "AnalysisResult",
+                ext_conf,
+                val_errors,
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v1.length_recovery",
+                prompt_hash_value=minimal_prompt_hash,
+                response_len=minimal_response_length,
+                call_suffix="analysis-length-recovery",
+                retry_count=retry_count,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_provider_errors": provider_errors_before,
+                    "recovery_mode": "minimal_json",
+                },
+            )
+
         try:
             logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")
             logger.debug(f"[分析] 请求包含 {len(question_media_items)} 张图片")
@@ -547,7 +767,7 @@ class QuestionAnalyzer:
 
             response_text = await llm_call(
                 messages=_question_messages(full_prompt, []),
-                max_tokens=12000,
+                max_tokens=analysis_max_tokens,
                 temperature=0,
                 timeout=analysis_timeout,
                 purpose="question_analysis",
@@ -728,7 +948,7 @@ class QuestionAnalyzer:
                             ),
                             [],
                         ),
-                        max_tokens=12000,
+                        max_tokens=analysis_max_tokens,
                         temperature=0,
                         timeout=analysis_timeout,
                         purpose="question_analysis_retry",
@@ -811,6 +1031,8 @@ class QuestionAnalyzer:
             logger.error(f"[分析] 题目{question_id} JSON解析失败（外层捕获）: {e}")
             raise
         except Exception as e:
+            if use_v2 and _is_length_provider_failure(e):
+                return await _compact_analysis_retry(str(e))
             logger.error(f"[分析] 题目{question_id} API调用失败: {str(e)}", exc_info=True)
             raise
 
@@ -886,6 +1108,7 @@ class QuestionAnalyzer:
                 if end != -1:
                     json_text = json_text[:end + 1]
             evidence = json.loads(json_text)
+            evidence, normalization_notes = self._normalize_fine_grained_result(evidence)
 
             from llm_schemas import DiagnosticUnit, StimulusUnit
 
@@ -935,6 +1158,8 @@ class QuestionAnalyzer:
             "diagnostic_units_count": len(fine_grained.get("diagnostic_units") or []),
             "stimulus_units_count": len(fine_grained.get("stimulus_units") or []),
         }
+        if 'normalization_notes' in locals() and normalization_notes:
+            retry_metadata["normalization_notes"] = normalization_notes
         provider, model, fallback_count, retry_metadata = _llm_call_trace(retry_metadata)
         call = LLMCallRecord(
             call_id=f"question-{question_id}-evidence-retry",
@@ -971,14 +1196,15 @@ class QuestionAnalyzer:
             "只返回一个合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
-            "scoring_units 输出 3-6 个，按小问或采分点合并，score_share 总和必须等于 1.0。\n"
+            "scoring_units 输出 3-5 个，按小问或采分点合并，score_share 总和必须等于 1.0。\n"
             "每个 scoring_unit 必须包含：seu_id, label, score_share, allocation_source, "
             "allocation_confidence, knowledge_links, bloom_level, competency_weights, "
             "difficulty_estimate, reasoning_brief。\n"
             "knowledge_links 每个单元 1-2 个，share 总和等于 1.0。\n"
             "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
-            "大题必须输出 2-3 个 diagnostic_units 和 1-2 个 stimulus_units；"
-            "只有选择题且确无材料时才允许 stimulus_units=[]。文本字段保持简短。"
+            "knowledge_points 最多 5 个；common_mistakes 最多 3 个；detailed_analysis 不超过 120 个汉字。\n"
+            "大题必须输出 2 个 diagnostic_units 和 1-2 个 stimulus_units；"
+            "只有选择题且确无材料时才允许 stimulus_units=[]。所有 label/reason 字段不超过 40 个汉字。"
         )
 
     @staticmethod

@@ -6,6 +6,69 @@ import question_analyzer
 from question_analyzer import QuestionAnalyzer
 
 
+@pytest.mark.asyncio
+async def test_analyze_question_recovers_length_failures_with_minimal_json(monkeypatch, tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "analysis_prompt_v2.txt").write_text(
+        "Return a full fine-grained JSON object for {question_type}; section={section_header}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(question_analyzer, "PROMPT_DIR", prompt_dir)
+
+    purposes = []
+
+    async def fake_llm_call(**kwargs):
+        purposes.append(kwargs.get("purpose"))
+        if len(purposes) <= 2:
+            raise RuntimeError("openai_chat provider_incomplete_response: finish_reason=length")
+        return json.dumps({
+            "knowledge_points": ["gene editing"],
+            "detailed_analysis": "Use the experimental design to infer the result.",
+            "difficulty": "困难",
+            "common_mistakes": ["ignore control group"],
+            "answer": "reference answer",
+            "total_score": 12,
+            "bloom_level": 4,
+        })
+
+    monkeypatch.setattr(question_analyzer, "llm_call", fake_llm_call)
+    monkeypatch.setattr(
+        question_analyzer,
+        "get_last_call_metadata",
+        lambda: {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "fallback_count": 0,
+            "provider_errors": [],
+            "status": "ok",
+            "model_policy": "exam-review-deepseek-primary",
+        },
+        raising=False,
+    )
+
+    result = await QuestionAnalyzer().analyze_question(
+        question_text="Long experimental biology item " * 120,
+        question_images=[],
+        question_id=21,
+        question_type="short_answer",
+        section_header="non-choice, 12 points",
+    )
+
+    assert purposes == [
+        "question_analysis",
+        "question_analysis_retry",
+        "question_analysis_retry",
+    ]
+    assert result["_analysis_version"] == "v1_length_recovery"
+    assert result["answer"] == "reference answer"
+    call = result["_llm_calls"][0]
+    assert call["provider"] == "deepseek"
+    assert call["model"] == "deepseek-v4-pro"
+    assert call["retry_count"] == 2
+    assert call["metadata"]["recovery_mode"] == "minimal_json"
+
+
 def test_normalize_fine_grained_accepts_du_su_alias_fields():
     data = {
         "scoring_units": [
@@ -15,7 +78,7 @@ def test_normalize_fine_grained_accepts_du_su_alias_fields():
                 "score_share": 1.0,
                 "allocation_source": "inferred",
                 "allocation_confidence": 0.8,
-                "knowledge_links": [{"knowledge_point": "gene expression", "share": 1.0}],
+                "knowledge_links": [{"k_id": "KP1", "share": 1.0}],
                 "bloom_level": 4,
                 "competency_weights": {
                     "生命观念": 0.4,
@@ -37,13 +100,14 @@ def test_normalize_fine_grained_accepts_du_su_alias_fields():
         ],
         "stimulus_units": [
             {
-                "su_id": "SU_1",
+                "stu_id": "SU_1",
                 "label": "fusion protein stem",
                 "type": "text",
                 "complexity": "high",
                 "is_core": True,
             }
         ],
+        "difficulty": 8.0,
     }
 
     normalized, notes = QuestionAnalyzer._normalize_fine_grained_result(data)
@@ -51,13 +115,19 @@ def test_normalize_fine_grained_accepts_du_su_alias_fields():
     from llm_schemas import FineGrainedResult
 
     result = FineGrainedResult(**normalized)
+    assert result.difficulty == "困难"
+    assert result.scoring_units[0].knowledge_links[0].knowledge_point == "infer mechanism"
     assert result.diagnostic_units[0].option_or_trap == "ignore N-terminal signal"
     assert result.diagnostic_units[0].misconception == "ignore N-terminal signal"
     assert result.diagnostic_units[0].if_selected_means == ["missed protein localization cue"]
+    assert result.stimulus_units[0].su_id == "SU_1"
     assert result.stimulus_units[0].description == "fusion protein stem"
     assert result.stimulus_units[0].stimulus_type == "text"
     assert result.stimulus_units[0].complexity == 3
     assert "label_to_option_or_trap" in notes
+    assert "seu_label_to_knowledge_point" in notes
+    assert "stu_id_to_su_id" in notes
+    assert "difficulty_number_to_label" in notes
 
 
 @pytest.mark.asyncio
@@ -133,8 +203,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
         question_analyzer,
         "get_last_call_metadata",
         lambda: {
-            "provider": "native_sdk",
-            "model": "primary-pro",
+            "provider": "google_genai",
+            "model": "gemini-3-pro",
             "fallback_count": 1,
             "provider_errors": [{"provider": "deepseek", "error": "timeout"}],
         },
@@ -150,8 +220,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
     )
 
     call = result["_llm_calls"][0]
-    assert call["provider"] == "native_sdk"
-    assert call["model"] == "primary-pro"
+    assert call["provider"] == "google_genai"
+    assert call["model"] == "gemini-3-pro"
     assert call["fallback_count"] == 1
     assert call["metadata"]["provider_errors"][0]["provider"] == "deepseek"
 
@@ -174,7 +244,7 @@ async def test_analyze_question_injects_ranked_evidence_context_when_enabled(mon
             return {
                 "context_text": "【审题证据上下文】\n1. 评分细则与采分点闭合：检查小问、采分点和分值边界。",
                 "metadata": {
-                    "provider": "evidence_service",
+                    "provider": "discovery_engine",
                     "operation": "rank",
                     "record_ids": ["rubric-closure"],
                     "ranked_count": 1,

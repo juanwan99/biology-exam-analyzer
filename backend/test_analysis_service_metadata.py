@@ -52,7 +52,7 @@ def _ready_question_with_ranked_evidence(question_id=1):
     })
     question["_metadata_envelope"]["llm_calls"][0]["metadata"] = {
         "evidence_context": {
-            "provider": "evidence_service",
+            "provider": "discovery_engine",
             "operation": "rank",
             "question_id": question_id,
             "ranked_count": 5,
@@ -269,8 +269,8 @@ async def test_auto_analysis_blocks_app_builder_when_ranking_usage_missing():
 def test_evidence_channel_allows_direct_model_generation_when_ranking_recorded():
     usage = {
         "direct_model_call_count": 1,
-        "discovery_generation_count": 0,
-        "discovery_rank_count": 1,
+        "evidence_generation_count": 0,
+        "evidence_rank_count": 1,
         "missing_rank_question_ids": [],
     }
 
@@ -280,7 +280,7 @@ def test_evidence_channel_allows_direct_model_generation_when_ranking_recorded()
 def test_evidence_channel_blocks_question_missing_ranked_evidence():
     usage = {
         "direct_model_call_count": 2,
-        "discovery_rank_count": 1,
+        "evidence_rank_count": 1,
         "missing_rank_question_ids": [21],
     }
 
@@ -291,7 +291,7 @@ def test_evidence_channel_blocks_question_missing_ranked_evidence():
 def test_agent_search_channel_requires_answer_query_evidence():
     usage = {
         "direct_model_call_count": 1,
-        "discovery_rank_count": 1,
+        "evidence_rank_count": 1,
         "missing_rank_question_ids": [],
         "agent_search_answer_count": 0,
     }
@@ -303,7 +303,7 @@ def test_agent_search_channel_requires_answer_query_evidence():
 def test_agent_search_channel_accepts_rank_and_answer_query_evidence():
     usage = {
         "direct_model_call_count": 1,
-        "discovery_rank_count": 1,
+        "evidence_rank_count": 1,
         "missing_rank_question_ids": [],
         "agent_search_answer_count": 1,
     }
@@ -348,11 +348,11 @@ async def test_auto_analysis_reports_app_builder_channel_usage_when_ranking_reco
         exam_review_channel="app_builder",
     )
 
-    assert result["channel_usage"]["discovery_rank_count"] == 1
-    assert result["channel_usage"]["discovery_rank_question_ids"] == [1]
+    assert result["channel_usage"]["evidence_rank_count"] == 1
+    assert result["channel_usage"]["evidence_rank_question_ids"] == [1]
     assert result["channel_usage"]["model_call_count"] == 3
     assert result["channel_usage"]["direct_model_call_count"] == 3
-    assert result["channel_usage"]["discovery_generation_count"] == 0
+    assert result["channel_usage"]["evidence_generation_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -543,7 +543,12 @@ async def test_analysis_service_retries_questions_with_missing_metadata_envelope
     assert service.calls == 2
     assert results[0]["_metadata_envelope"]["llm_calls"][0]["purpose"] == "question_analysis"
     warnings = results[0]["_metadata_envelope"]["warnings"]
-    assert "question_retried_after_metadata_failure:missing_metadata_envelope" in warnings
+    assert "question_retried_after_metadata_failure:missing_metadata_envelope" not in warnings
+    assert results[0]["_metadata_envelope"]["lineage"]["recovered_retry"] == {
+        "reason": "missing_metadata_envelope",
+        "recovered_by": "sequential_retry",
+        "warning_emitted": False,
+    }
 
 
 def test_metadata_retry_requires_independent_competency_call():
@@ -972,7 +977,7 @@ async def test_generate_report_app_builder_channel_enables_grounding(monkeypatch
             "_grounding_status": "ok",
             "_grounding_checks": [{
                 "support_score": 0.9,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
+                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
             }],
         }
 
@@ -1035,7 +1040,7 @@ async def test_generate_report_blocks_app_builder_grounding_needs_review(monkeyp
                 "status": "needs_review",
                 "support_score": 0.42,
                 "threshold": 0.6,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
+                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
             }],
             "_llm_calls": [_call("report-grounding", "report_grounding_check", "GroundingCheck")],
         }
@@ -1082,7 +1087,7 @@ async def test_generate_report_grounding_validation_error_is_readable_block(monk
                 "status": "needs_review",
                 "support_score": 0.42,
                 "threshold": 0.6,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
+                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
             }],
             "_llm_calls": [grounding_call],
         }

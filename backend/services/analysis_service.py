@@ -349,11 +349,16 @@ class AnalysisService:
                 )
             else:
                 retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
-            if not self._metadata_retry_needed(retry):
-                self._mark_recovered_metadata_retry(retry, retry_reason)
+            retry_still_needed = self._metadata_retry_reason(retry)
+            if not retry_still_needed:
+                self._mark_recovered_metadata_retry(retry, retry_reason, emit_warning=False)
                 results[idx] = retry
             elif self._metadata_retry_needed(result) and isinstance(retry.get("_metadata_envelope"), dict):
-                self._mark_recovered_metadata_retry(retry, retry_reason)
+                self._mark_recovered_metadata_retry(
+                    retry,
+                    retry_still_needed or retry_reason,
+                    emit_warning=True,
+                )
                 results[idx] = retry
 
         return results
@@ -853,7 +858,17 @@ class AnalysisService:
                 "证据增强审题失败：检测到不应使用的 证据服务 "
                 "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
             )
-        if int(channel_usage.get("discovery_rank_count") or 0) <= 0:
+        rank_count = int(
+            channel_usage.get("discovery_rank_count")
+            or channel_usage.get("evidence_rank_count")
+            or 0
+        )
+        grounding_count = int(
+            channel_usage.get("discovery_grounding_check_count")
+            or channel_usage.get("evidence_grounding_check_count")
+            or 0
+        )
+        if rank_count <= 0:
             missing = channel_usage.get("missing_rank_question_ids") or []
             if missing:
                 first = missing[0]
@@ -872,7 +887,7 @@ class AnalysisService:
                 f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
                 "（证据服务 Ranking 未记录），不能进入正式报告。"
             )
-        if require_grounding and int(channel_usage.get("discovery_grounding_check_count") or 0) <= 0:
+        if require_grounding and grounding_count <= 0:
             raise RuntimeError(
                 "证据增强审题失败：报告结论缺少 Check Grounding 校验"
                 "（证据服务 Check Grounding 未记录），不能进入正式报告。"
@@ -938,27 +953,34 @@ class AnalysisService:
         return None
 
     @staticmethod
-    def _mark_recovered_metadata_retry(question: Dict, reason: str | None) -> None:
+    def _mark_recovered_metadata_retry(
+        question: Dict,
+        reason: str | None,
+        *,
+        emit_warning: bool = False,
+    ) -> None:
         if not isinstance(question, dict) or not reason:
             return
         warning = f"question_retried_after_metadata_failure:{reason}"
         question.setdefault("_recovered_failures", []).append({
             "stage": "question_analysis",
-            "severity": "warning",
+            "severity": "warning" if emit_warning else "info",
             "reason": reason,
             "recovered_by": "sequential_retry",
         })
         envelope = question.get("_metadata_envelope")
         if not isinstance(envelope, dict):
             return
-        warnings = envelope.setdefault("warnings", [])
-        if isinstance(warnings, list) and warning not in warnings:
-            warnings.append(warning)
+        if emit_warning:
+            warnings = envelope.setdefault("warnings", [])
+            if isinstance(warnings, list) and warning not in warnings:
+                warnings.append(warning)
         lineage = envelope.setdefault("lineage", {})
         if isinstance(lineage, dict):
             lineage["recovered_retry"] = {
                 "reason": reason,
                 "recovered_by": "sequential_retry",
+                "warning_emitted": emit_warning,
             }
 
     @staticmethod
@@ -1095,7 +1117,16 @@ class AnalysisService:
                 or str(metadata.get("status") or "").lower() in {"failed", "parse_failed", "provider_failed"}
             )
             successful_evidence_repair = purpose == "missing_evidence_repair" and not call_has_failure_signal
-            if ("compact_retry" in prompt_id or retry_count) and not successful_evidence_repair:
+            successful_model_recovery = (
+                bool(retry_count)
+                and metadata.get("recovery_status") == "ok"
+                and not call_has_failure_signal
+            )
+            if (
+                ("compact_retry" in prompt_id or retry_count)
+                and not successful_evidence_repair
+                and not successful_model_recovery
+            ):
                 add_warning(f"llm_retry:{purpose}")
             if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
                 add_warning(f"llm_fallback:{purpose}")

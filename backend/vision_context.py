@@ -146,7 +146,18 @@ async def extract_visual_context(
         timeout=timeout,
         purpose="image_inputs",
     )
-    payload = _extract_json_object(response_text)
+    parse_recovery = None
+    try:
+        payload = _extract_json_object(response_text)
+    except Exception:
+        parse_recovery = "raw_visual_text"
+        payload = {
+            "visual_text": str(response_text or "").strip()[:2500],
+            "ocr_text": "",
+            "tables": [],
+            "figures": [],
+            "uncertainties": ["Qwen Vision returned non-JSON visual context; raw text was passed to DeepSeek."],
+        }
     context_text = _visual_context_text(payload)
     if not context_text:
         raise RuntimeError("vision_context_empty")
@@ -157,6 +168,8 @@ async def extract_visual_context(
         "used_as": "deepseek_text_prompt_context",
         "uncertainties": _string_list(payload.get("uncertainties")),
     }
+    if parse_recovery:
+        metadata["parse_recovery"] = parse_recovery
     provider, model, fallback_count, metadata = _llm_call_trace(metadata)
     call = LLMCallRecord(
         call_id=call_id or (

@@ -104,6 +104,69 @@ async def test_analyze_competency_normalizes_near_miss_weight_sum(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_analyze_competency_recovers_length_failure_with_compact_json(monkeypatch, tmp_path):
+    library_path = tmp_path / "competency_library.json"
+    library_path.write_text("{}", encoding="utf-8")
+
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+        "competency prompt {question_text} {knowledge_points}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+
+    payload = {
+        "生命观念": {"涉及": True, "具体维度": ["稳态与平衡观"], "权重": 0.3, "分析说明": "理解调节机制"},
+        "科学思维": {"涉及": True, "具体维度": ["演绎与推理"], "权重": 0.5, "分析说明": "分析实验结果"},
+        "科学探究": {"涉及": True, "具体维度": ["得出结论"], "权重": 0.2, "分析说明": "根据数据判断"},
+        "社会责任": {"涉及": False, "具体维度": [], "权重": 0.0, "分析说明": ""},
+        "primary_competency": "科学思维",
+        "competency_level": "高",
+    }
+    calls = []
+
+    async def fake_llm_call(messages, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("openai_chat provider_incomplete_response: finish_reason=length")
+        return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(competency_analyzer, "llm_call", fake_llm_call)
+    monkeypatch.setattr(
+        competency_analyzer,
+        "get_last_call_metadata",
+        lambda: {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "fallback_count": 0,
+            "provider_errors": [],
+            "status": "ok",
+            "model_policy": "exam-review-deepseek-primary",
+        },
+        raising=False,
+    )
+
+    analyzer = CompetencyAnalyzer(library_path=str(library_path))
+    result = await analyzer.analyze_competency({
+        "id": 18,
+        "content": "实验分析大题" * 200,
+        "knowledge_points": ["稳态调节", "实验分析"],
+    })
+
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 8192
+    assert calls[1]["max_tokens"] == 4096
+    assert result["primary_competency"] == "科学思维"
+    call = result["_llm_calls"][0]
+    assert call["provider"] == "deepseek"
+    assert call["model"] == "deepseek-v4-pro"
+    assert call["retry_count"] == 1
+    assert call["metadata"]["recovery_mode"] == "compact_json"
+    assert call["metadata"]["recovery_status"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_analyze_competency_failed_json_keeps_call_metadata(monkeypatch, tmp_path):
     library_path = tmp_path / "competency_library.json"
     library_path.write_text("{}", encoding="utf-8")

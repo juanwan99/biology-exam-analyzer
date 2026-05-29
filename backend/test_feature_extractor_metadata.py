@@ -4,7 +4,7 @@ import pytest
 
 import feature_extractor
 import prompt_loader
-from feature_extractor import extract_big_question_features, extract_features
+from feature_extractor import extract_big_question_features, extract_features, parse_features
 
 
 def _prepare_prompt_dir(tmp_path):
@@ -50,6 +50,53 @@ def _feature_payload():
         "quality_sensitivity": "无舆情风险",
         "teacher_comment": "适合考查变量分析。",
     }
+
+
+def test_parse_features_recovers_nested_json_with_trailing_text():
+    raw = json.dumps(_feature_payload(), ensure_ascii=False) + "\n模型备注：已完成。"
+
+    result = parse_features(raw, include_status=True)
+
+    assert result["_raw_core_count"] == 9
+    assert result["working_memory"] == 4
+    assert result["teacher_comment"] == "适合考查变量分析。"
+
+
+def test_parse_features_salvages_fields_from_truncated_json():
+    raw = """
+    {
+      "working_memory": 4,
+      "working_memory_reason": "遗传方式+电泳结果+家系关系",
+      "reasoning_steps": 5,
+      "steps_detail": "判断遗传方式并结合电泳排除",
+      "chain_coupling": 1,
+      "coupling_reason": "选项独立判断",
+      "trap_density": 2,
+      "trap_reason": "电泳条带易错",
+      "novelty": 2,
+      "novelty_reason": "遗传题变式",
+      "knowledge_breadth": 2,
+      "breadth_reason": "遗传和检测",
+      "bloom": 5,
+      "bloom_reason": "评价选项证据",
+      "info_density": 3,
+      "density_reason": "图文信息较多",
+      "representation_complexity": 2,
+      "representation_reason": "系谱图和电泳图",
+      "quality_score": 4,
+      "quality_scientific": "无明显问题",
+      "quality_normative": "图示信息充分",
+      "quality_language": "表述清晰",
+      "quality_context": "情境合理",
+      "quality_sensitivity": "无舆情风险",
+      "teacher_comment": "适合训练遗传证据推理。"
+    """
+
+    result = parse_features(raw, include_status=True)
+
+    assert result["_raw_core_count"] == 9
+    assert result["_parse_recovery"] == "field_salvage"
+    assert result["representation_complexity"] == 2
 
 
 @pytest.mark.asyncio

@@ -136,7 +136,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 3,
                     "cited_chunk_count": 2,
-                    "metadata": {"provider": "evidence_service"},
+                    "metadata": {"provider": "discovery_engine"},
                 }
 
         gateway = FakeGateway()
@@ -161,7 +161,7 @@ class TestGenerateInsights:
         assert result["_grounding_checks"][0]["status"] == "ok"
         assert result["_grounding_checks"][0]["support_score"] == 0.84
         assert result["_llm_calls"][1]["purpose"] == "report_grounding_check"
-        assert result["_llm_calls"][1]["provider"] == "evidence_service"
+        assert result["_llm_calls"][1]["provider"] == "discovery_engine"
         assert result["_llm_calls"][1]["model"] == "check_grounding"
         assert result["_llm_calls"][1]["metadata"]["section_count"] == len(gateway.calls)
 
@@ -177,6 +177,7 @@ class TestGenerateInsights:
         assert 5 <= len(facts) <= 20
         assert "report.evidence_card.overall" in sources
         assert "report.evidence_card.difficulty" in sources
+        assert "report.evidence_card.difficulty_distribution_detail" in sources
         assert "report.evidence_card.bloom" in sources
         assert "report.evidence_card.knowledge" in sources
         assert "report.evidence_card.competency" in sources
@@ -192,6 +193,14 @@ class TestGenerateInsights:
         )
         assert "avg_difficulty" in difficulty_card["factText"]
         assert "difficulty_gradient" in difficulty_card["factText"]
+        difficulty_detail_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source")
+            == "report.evidence_card.difficulty_distribution_detail"
+        )
+        assert "简单题为1题。" in difficulty_detail_card["factText"]
+        assert "中等题为1题。" in difficulty_detail_card["factText"]
+        assert "困难题为0题。" in difficulty_detail_card["factText"]
         summary_card = next(
             fact for fact in facts
             if (fact.get("attributes") or {}).get("source") == "report.evidence_card.summary"
@@ -362,7 +371,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 2,
                     "cited_chunk_count": 0,
-                    "metadata": {"provider": "evidence_service"},
+                    "metadata": {"provider": "discovery_engine"},
                 }
 
         from report_insights import generate_insights
