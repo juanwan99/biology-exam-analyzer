@@ -605,3 +605,31 @@ class TestResponseExtraction:
         }
         with pytest.raises(RuntimeError, match="provider_incomplete_response"):
             _extract_text("openai_responses", data)
+
+
+
+# ── RC2: 确定性 seed 注入（native + openai_chat 统一） ──────────────
+class TestDeterministicSeed:
+    def test_openai_chat_injects_seed_at_zero_temp(self):
+        from llm_client import _build_request_body
+        provider = {"api_format": "openai_chat", "model": "deepseek", "max_tokens": 8192}
+        body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0)
+        assert body.get("seed") == 20260526
+
+    def test_openai_chat_no_seed_when_hot(self):
+        from llm_client import _build_request_body
+        provider = {"api_format": "openai_chat", "model": "deepseek", "max_tokens": 8192}
+        body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0.7)
+        assert "seed" not in body
+
+    def test_provider_seed_overrides_default(self):
+        from llm_client import _build_request_body
+        provider = {"api_format": "openai_chat", "model": "deepseek", "max_tokens": 8192, "deterministic_seed": 42}
+        body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0)
+        assert body.get("seed") == 42
+
+    def test_native_seed_uses_shared_helper(self):
+        from llm_client import _native_generation_config_kwargs
+        provider = {"max_tokens": 8192, "deterministic_seed": 99}
+        cfg = _native_generation_config_kwargs(provider, 1000, 0)
+        assert cfg.get("seed") == 99

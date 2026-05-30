@@ -231,6 +231,18 @@ def _raise_if_incomplete_finish(provider_name: str, finish_reason):
     )
 
 
+def _deterministic_seed(provider: dict) -> int:
+    """确定性复现 seed（temperature<=0 时使用）。统一 native 与 openai_chat 两条路径，
+    消除 'seed 只接 Gemini、DeepSeek 没接' 的分叉（RC2 根因修复）。"""
+    seed = provider.get("deterministic_seed")
+    if seed is None:
+        seed = os.environ.get("LLM_DETERMINISTIC_SEED", "20260526")
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return 20260526
+
+
 def _native_generation_config_kwargs(provider: dict, max_tokens: int,
                                      temperature: float) -> dict:
     thinking_mult = provider.get("thinking_overhead", 1)
@@ -245,16 +257,9 @@ def _native_generation_config_kwargs(provider: dict, max_tokens: int,
     except (TypeError, ValueError):
         is_zero_temperature = False
     if is_zero_temperature:
-        seed = provider.get("deterministic_seed")
-        if seed is None:
-            seed = os.environ.get("LLM_DETERMINISTIC_SEED", "20260526")
-        try:
-            seed = int(seed)
-        except (TypeError, ValueError):
-            seed = 20260526
         config_kwargs.update({
             "candidate_count": 1,
-            "seed": seed,
+            "seed": _deterministic_seed(provider),
             "top_p": float(provider.get("deterministic_top_p", 1.0)),
             "top_k": int(provider.get("deterministic_top_k", 1)),
         })
@@ -309,6 +314,13 @@ def _build_request_body(provider: dict, messages: list, max_tokens: int,
         }
         if provider.get("response_format") == "json_object":
             body["response_format"] = {"type": "json_object"}
+        # RC2: 确定性 seed 注入 openai_chat 路径（此前仅 native 有 seed，DeepSeek
+        # 主审没接 -> temperature=0 仍跨跑漂移）。与 native 共用同一 helper。
+        try:
+            if float(temperature) <= 0:
+                body["seed"] = _deterministic_seed(provider)
+        except (TypeError, ValueError):
+            pass
         return body
 
 
