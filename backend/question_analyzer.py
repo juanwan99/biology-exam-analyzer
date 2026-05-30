@@ -1161,7 +1161,8 @@ class QuestionAnalyzer:
 
         async def _analyze_one_subquestion(sub_idx: int, sub_meta: dict, all_subs: list, big_total: float):
             """RC7 方案A：单子问定向分析。喂全题干 + 只产第 sub_idx 问 SEU（局部 score_share 和=1.0）。
-            子问级轻量小阶梯（截断→缩到 2048）做故障隔离：单子问失败不波及其它子问。"""
+            预算小阶梯（4096→2048 治 length）+ 同预算瞬时重试（治 DeepSeek 空内容/providers failed 抖动）。
+            子问级故障隔离：单子问失败不波及其它子问（由 _split_merge_analysis 串行编排兜底回退）。"""
             from llm_schemas import FineGrainedResult, validate_llm_output
             brief_list = "；".join(
                 f"第{j}问({s.get('brief','')})" for j, s in enumerate(all_subs, start=1))
@@ -1174,7 +1175,8 @@ class QuestionAnalyzer:
                 "硬性规则：\n"
                 f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
                 "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
-                "3. 严格输出 JSON（不要解释、不要 markdown）：\n"
+                "3. bloom_level 必须是 1-6 的整数（不是中文）。\n"
+                "4. 严格输出 JSON（不要解释、不要 markdown）：\n"
                 "{\"scoring_units\":[{\"seu_id\":\"seu_1\",\"label\":\"\",\"score_share\":0.0,"
                 "\"knowledge_links\":[{\"knowledge_point\":\"\",\"share\":1.0}],\"bloom_level\":3,"
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
@@ -1182,59 +1184,70 @@ class QuestionAnalyzer:
             )
             sub_timeout = min(analysis_timeout, 150.0)
             for sub_budget in (4096, 2048):
-                try:
-                    sub_resp = await asyncio.wait_for(
-                        llm_call(
-                            messages=_question_messages(
-                                "\n\n".join(part for part in [
-                                    sub_prompt,
-                                    (visual_context_text or "")[:1200],
-                                    f"题目内容：\n{question_text}",
-                                ] if part),
-                                [],
+                _transient_left = 1
+                while True:
+                    try:
+                        sub_resp = await asyncio.wait_for(
+                            llm_call(
+                                messages=_question_messages(
+                                    "\n\n".join(part for part in [
+                                        sub_prompt,
+                                        (visual_context_text or "")[:1200],
+                                        f"题目内容：\n{question_text}",
+                                    ] if part),
+                                    [],
+                                ),
+                                max_tokens=sub_budget,
+                                temperature=0,
+                                timeout=sub_timeout,
+                                purpose="question_analysis_subquestion",
                             ),
-                            max_tokens=sub_budget,
-                            temperature=0,
-                            timeout=sub_timeout,
-                            purpose="question_analysis_subquestion",
-                        ),
-                        timeout=sub_timeout + 5.0,
-                    )
-                except Exception as sub_exc:
-                    if _is_length_provider_failure(sub_exc) and sub_budget > 2048:
-                        continue
-                    logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问调用失败: {sub_exc}")
-                    return None
-                sub_clean = self.extract_json(sub_resp)
-                if not sub_clean.startswith('{'):
-                    _s = sub_clean.find('{')
-                    sub_clean = sub_clean[_s:] if _s != -1 else sub_clean
-                if not sub_clean.endswith('}'):
-                    _e = sub_clean.rfind('}')
-                    sub_clean = sub_clean[:_e + 1] if _e != -1 else sub_clean
-                try:
-                    sub_obj = json.loads(sub_clean)
-                    sub_obj, _ = self._normalize_fine_grained_result(sub_obj)
-                    sub_validated, _conf, _errs = validate_llm_output(
-                        sub_obj, FineGrainedResult, f"题目{question_id} 第{sub_idx}问")
-                    sub_fg = FineGrainedResult(**sub_validated)
-                except Exception as sub_parse_exc:
-                    if sub_budget > 2048:
-                        continue
-                    logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问解析失败: {sub_parse_exc}")
-                    return None
-                if not sub_fg.scoring_units:
-                    return None
-                return {
-                    "scoring_units": [u.model_dump() for u in sub_fg.scoring_units],
-                    "diagnostic_units": [u.model_dump() for u in sub_fg.diagnostic_units],
-                    "stimulus_units": [u.model_dump() for u in sub_fg.stimulus_units],
-                    "detailed_analysis": sub_validated.get("detailed_analysis", ""),
-                }
+                            timeout=sub_timeout + 5.0,
+                        )
+                    except Exception as sub_exc:
+                        if _is_length_provider_failure(sub_exc):
+                            break
+                        if _transient_left > 0:
+                            _transient_left -= 1
+                            logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问瞬时失败重试: {sub_exc}")
+                            continue
+                        logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问调用失败: {sub_exc}")
+                        return None
+                    sub_clean = self.extract_json(sub_resp)
+                    if not sub_clean.startswith('{'):
+                        _s = sub_clean.find('{')
+                        sub_clean = sub_clean[_s:] if _s != -1 else sub_clean
+                    if not sub_clean.endswith('}'):
+                        _e = sub_clean.rfind('}')
+                        sub_clean = sub_clean[:_e + 1] if _e != -1 else sub_clean
+                    try:
+                        sub_obj = json.loads(sub_clean)
+                        sub_obj, _ = self._normalize_fine_grained_result(sub_obj)
+                        sub_validated, _conf, _errs = validate_llm_output(
+                            sub_obj, FineGrainedResult, f"题目{question_id} 第{sub_idx}问")
+                        sub_fg = FineGrainedResult(**sub_validated)
+                    except Exception as sub_parse_exc:
+                        if sub_budget > 2048:
+                            break
+                        if _transient_left > 0:
+                            _transient_left -= 1
+                            logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问解析失败重试: {sub_parse_exc}")
+                            continue
+                        logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问解析失败: {sub_parse_exc}")
+                        return None
+                    if not sub_fg.scoring_units:
+                        return None
+                    return {
+                        "scoring_units": [u.model_dump() for u in sub_fg.scoring_units],
+                        "diagnostic_units": [u.model_dump() for u in sub_fg.diagnostic_units],
+                        "stimulus_units": [u.model_dump() for u in sub_fg.stimulus_units],
+                        "detailed_analysis": sub_validated.get("detailed_analysis", ""),
+                    }
             return None
 
         async def _split_merge_analysis(initial_reason: str):
             """RC7 方案A：大题按子问拆分→定向输出→合并。复用 extractor(缓存近免费)拿子问分段+权重。
+            子问调用【串行】（E2E 实证并行会把 DeepSeek 打挂 All providers failed）。
             extract 失败 / 子问<2 / 任一子问失败 → 返回 None，调用方回退现有整题阶梯（安全网保留）。"""
             big_total = _infer_fallback_total_score()
             if not big_total or big_total < 8:
@@ -1251,19 +1264,22 @@ class QuestionAnalyzer:
             sub_metas = bigq["subquestions"]
             if len(sub_metas) < 2:
                 return None
-            logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分 ({initial_reason})")
-            results = await asyncio.gather(
-                *[_analyze_one_subquestion(_i, _sm, sub_metas, big_total)
-                  for _i, _sm in enumerate(sub_metas, start=1)],
-                return_exceptions=True,
-            )
+            logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分（串行）({initial_reason})")
+            results = []
+            for _i, _sm in enumerate(sub_metas, start=1):
+                try:
+                    _one = await _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+                except Exception as _one_exc:
+                    logger.warning(f"[分析] 题目{question_id} 第{_i}问 split 异常: {_one_exc}")
+                    _one = None
+                results.append(_one)
             ok_results, ok_metas = [], []
             for _idx, _r in enumerate(results):
                 if isinstance(_r, dict) and _r.get("scoring_units"):
                     ok_results.append(_r)
                     ok_metas.append(sub_metas[_idx])
                 else:
-                    logger.warning(f"[分析] 题目{question_id} 第{_idx+1}问 split 失败: {_r}")
+                    logger.warning(f"[分析] 题目{question_id} 第{_idx+1}问 split 失败")
             if len(ok_results) < len(sub_metas):
                 logger.warning(f"[分析] 题目{question_id} split-merge 子问不全 ({len(ok_results)}/{len(sub_metas)})，回退阶梯")
                 return None
@@ -1319,7 +1335,6 @@ class QuestionAnalyzer:
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
             )
-
 
         async def _ultra_compact_analysis_retry(initial_reason: str, retry_count: int = 2) -> dict:
             logger.warning(f"[分析] 题目{question_id} 触发 ultra-compact v2 重试: {initial_reason}")
