@@ -1159,6 +1159,168 @@ class QuestionAnalyzer:
                 timeout=analysis_timeout,
             )
 
+        async def _analyze_one_subquestion(sub_idx: int, sub_meta: dict, all_subs: list, big_total: float):
+            """RC7 方案A：单子问定向分析。喂全题干 + 只产第 sub_idx 问 SEU（局部 score_share 和=1.0）。
+            子问级轻量小阶梯（截断→缩到 2048）做故障隔离：单子问失败不波及其它子问。"""
+            from llm_schemas import FineGrainedResult, validate_llm_output
+            brief_list = "；".join(
+                f"第{j}问({s.get('brief','')})" for j, s in enumerate(all_subs, start=1))
+            sub_pts = sub_meta.get("points") or round((sub_meta.get("score_share") or 0) * big_total) or "若干"
+            sub_prompt = (
+                "你是生物学审题专家。下面是整道大题的完整题干与子问清单。\n"
+                f"本次【只分析第{sub_idx}问】（{sub_meta.get('brief','')}，约{sub_pts}分），"
+                f"只为这一问产出采分点 scoring_units(SEU)，不要分析其它子问。\n"
+                f"子问清单：{brief_list}\n"
+                "硬性规则：\n"
+                f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
+                "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
+                "3. 严格输出 JSON（不要解释、不要 markdown）：\n"
+                "{\"scoring_units\":[{\"seu_id\":\"seu_1\",\"label\":\"\",\"score_share\":0.0,"
+                "\"knowledge_links\":[{\"knowledge_point\":\"\",\"share\":1.0}],\"bloom_level\":3,"
+                "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
+                f"题型:{question_type} 板块:{section_header or ''}"
+            )
+            sub_timeout = min(analysis_timeout, 150.0)
+            for sub_budget in (4096, 2048):
+                try:
+                    sub_resp = await asyncio.wait_for(
+                        llm_call(
+                            messages=_question_messages(
+                                "\n\n".join(part for part in [
+                                    sub_prompt,
+                                    (visual_context_text or "")[:1200],
+                                    f"题目内容：\n{question_text}",
+                                ] if part),
+                                [],
+                            ),
+                            max_tokens=sub_budget,
+                            temperature=0,
+                            timeout=sub_timeout,
+                            purpose="question_analysis_subquestion",
+                        ),
+                        timeout=sub_timeout + 5.0,
+                    )
+                except Exception as sub_exc:
+                    if _is_length_provider_failure(sub_exc) and sub_budget > 2048:
+                        continue
+                    logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问调用失败: {sub_exc}")
+                    return None
+                sub_clean = self.extract_json(sub_resp)
+                if not sub_clean.startswith('{'):
+                    _s = sub_clean.find('{')
+                    sub_clean = sub_clean[_s:] if _s != -1 else sub_clean
+                if not sub_clean.endswith('}'):
+                    _e = sub_clean.rfind('}')
+                    sub_clean = sub_clean[:_e + 1] if _e != -1 else sub_clean
+                try:
+                    sub_obj = json.loads(sub_clean)
+                    sub_obj, _ = self._normalize_fine_grained_result(sub_obj)
+                    sub_validated, _conf, _errs = validate_llm_output(
+                        sub_obj, FineGrainedResult, f"题目{question_id} 第{sub_idx}问")
+                    sub_fg = FineGrainedResult(**sub_validated)
+                except Exception as sub_parse_exc:
+                    if sub_budget > 2048:
+                        continue
+                    logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问解析失败: {sub_parse_exc}")
+                    return None
+                if not sub_fg.scoring_units:
+                    return None
+                return {
+                    "scoring_units": [u.model_dump() for u in sub_fg.scoring_units],
+                    "diagnostic_units": [u.model_dump() for u in sub_fg.diagnostic_units],
+                    "stimulus_units": [u.model_dump() for u in sub_fg.stimulus_units],
+                    "detailed_analysis": sub_validated.get("detailed_analysis", ""),
+                }
+            return None
+
+        async def _split_merge_analysis(initial_reason: str):
+            """RC7 方案A：大题按子问拆分→定向输出→合并。复用 extractor(缓存近免费)拿子问分段+权重。
+            extract 失败 / 子问<2 / 任一子问失败 → 返回 None，调用方回退现有整题阶梯（安全网保留）。"""
+            big_total = _infer_fallback_total_score()
+            if not big_total or big_total < 8:
+                return None
+            try:
+                from feature_extractor import extract_big_question_features
+                bigq = await extract_big_question_features(
+                    question_text, question_type=question_type, total_score=big_total)
+            except Exception as extract_exc:
+                logger.warning(f"[分析] 题目{question_id} split-merge extract 异常 {extract_exc}，回退阶梯")
+                return None
+            if not (isinstance(bigq, dict) and bigq.get("subquestions")):
+                return None
+            sub_metas = bigq["subquestions"]
+            if len(sub_metas) < 2:
+                return None
+            logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分 ({initial_reason})")
+            results = await asyncio.gather(
+                *[_analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+                  for _i, _sm in enumerate(sub_metas, start=1)],
+                return_exceptions=True,
+            )
+            ok_results, ok_metas = [], []
+            for _idx, _r in enumerate(results):
+                if isinstance(_r, dict) and _r.get("scoring_units"):
+                    ok_results.append(_r)
+                    ok_metas.append(sub_metas[_idx])
+                else:
+                    logger.warning(f"[分析] 题目{question_id} 第{_idx+1}问 split 失败: {_r}")
+            if len(ok_results) < len(sub_metas):
+                logger.warning(f"[分析] 题目{question_id} split-merge 子问不全 ({len(ok_results)}/{len(sub_metas)})，回退阶梯")
+                return None
+            from fine_grained_merge import merge_subquestion_results
+            merged = merge_subquestion_results(ok_results, ok_metas, big_total)
+            from llm_schemas import (FineGrainedResult, validate_llm_output,
+                                     compute_summary_from_units, validate_score_conservation)
+            try:
+                validated, ext_conf, val_errors = validate_llm_output(
+                    merged, FineGrainedResult, f"题目{question_id} split-merge")
+                fg = FineGrainedResult(**validated)
+            except Exception as merge_exc:
+                logger.warning(f"[分析] 题目{question_id} split-merge 合并构造失败 {merge_exc}，回退阶梯")
+                return None
+            is_conserved, conservation_errors = validate_score_conservation(fg, fg.total_score)
+            if not is_conserved:
+                val_errors = (val_errors or []) + conservation_errors
+                ext_conf = min(ext_conf, 0.6)
+            summary = compute_summary_from_units(fg)
+            validated.update(summary)
+            validated["_fine_grained"] = {
+                "scoring_units": [u.model_dump() if hasattr(u, 'model_dump') else u for u in fg.scoring_units],
+                "diagnostic_units": [u.model_dump() if hasattr(u, 'model_dump') else u for u in fg.diagnostic_units],
+                "stimulus_units": [u.model_dump() if hasattr(u, 'model_dump') else u for u in fg.stimulus_units],
+            }
+            validated["_extraction_confidence"] = ext_conf
+            validated["_analysis_version"] = "v2_split_merge"
+            if val_errors:
+                validated["_validation_errors"] = val_errors
+            validated = attach_call_record(
+                validated, "FineGrainedResult", ext_conf, val_errors,
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v2.split_merge",
+                prompt_hash_value=sha256(("split_merge:" + str(question_type)).encode("utf-8")).hexdigest(),
+                response_len=0,
+                call_suffix="analysis-split-merge",
+                retry_count=1,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "recovery_mode": "split_merge",
+                    "subquestion_count": len(sub_metas),
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
+                },
+            )
+            logger.info(f"[分析] 题目{question_id} split-merge 完成 (子问={len(sub_metas)}, SEU={len(fg.scoring_units)}, conserved={is_conserved})")
+            return await self._retry_missing_evidence_units(
+                analysis_payload=validated,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header,
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+                timeout=analysis_timeout,
+            )
+
+
         async def _ultra_compact_analysis_retry(initial_reason: str, retry_count: int = 2) -> dict:
             logger.warning(f"[分析] 题目{question_id} 触发 ultra-compact v2 重试: {initial_reason}")
             provider_errors_before = _last_provider_error_messages()
@@ -2043,6 +2205,13 @@ class QuestionAnalyzer:
             raise
         except Exception as e:
             if use_v2 and (isinstance(e, asyncio.TimeoutError) or _is_length_provider_failure(e)):
+                try:
+                    _split_result = await _split_merge_analysis(str(e))
+                except Exception as _sm_exc:
+                    logger.warning(f"[分析] 题目{question_id} split-merge 顶层异常 {_sm_exc}，回退阶梯")
+                    _split_result = None
+                if _split_result is not None:
+                    return _split_result
                 return await _compact_analysis_retry(str(e))
             logger.error(f"[分析] 题目{question_id} API调用失败: {str(e)}", exc_info=True)
             raise
