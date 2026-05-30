@@ -1258,7 +1258,7 @@ def _big_question_failure_payload(*, failure_type: str, errors: list[str],
     )
 
 
-async def extract_big_question_features(question_text: str, options: str = "",
+async def _extract_big_question_features_uncached(question_text: str, options: str = "",
                                         correct_answer: str = "",
                                         question_type: str = "",
                                         subject: str = "biology",
@@ -1415,4 +1415,30 @@ async def extract_features(question_text: str, options: str = "",
         question_text, options, correct_answer, question_type, subject, media_items)
     if isinstance(result, dict) and result.get("_feature_status") in ("ok", "partial"):
         feature_cache.set(question_text, options, correct_answer, question_type, subject, result)
+    return result
+
+
+async def extract_big_question_features(question_text: str, options: str = "",
+                                        correct_answer: str = "",
+                                        question_type: str = "",
+                                        subject: str = "biology",
+                                        total_score: float | None = None,
+                                        return_failure: bool = False,
+                                        media_items: list | None = None) -> dict | None:
+    """RC1: 同卷大题特征缓存包装（补齐 Task2，原仅覆盖小题）。
+    实测 seed 对 deepseek-v4-pro 大题无效（同输入两次结构不同），故大题复现必须靠缓存：
+    同题（内容指纹相同）复用首次结构化特征 → 同卷重跑大题难度可复现、零额外 LLM/token。
+    用 bigq:: 命名空间与小题缓存隔离；仅缓存成功结果。实际提取见 _extract_big_question_features_uncached。"""
+    import feature_cache
+    cache_subject = "bigq::" + subject
+    cached = feature_cache.get(question_text, options, correct_answer, question_type, cache_subject)
+    if cached is not None:
+        logger.info(f"[大题特征缓存] 命中，复用结构化特征（零 LLM 调用）: {question_text[:30]}...")
+        return cached
+    result = await _extract_big_question_features_uncached(
+        question_text, options, correct_answer, question_type, subject,
+        total_score, return_failure, media_items)
+    if (isinstance(result, dict) and not result.get("_big_question_failed")
+            and result.get("subquestions")):
+        feature_cache.set(question_text, options, correct_answer, question_type, cache_subject, result)
     return result
