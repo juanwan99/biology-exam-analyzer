@@ -2,6 +2,7 @@ import json
 import re
 import base64
 import time
+import asyncio
 from hashlib import sha256
 from pathlib import Path
 from logger import get_logger
@@ -115,10 +116,94 @@ class QuestionAnalyzer:
         if not isinstance(data, dict):
             return data, notes
 
+        def _first_text(source, keys: tuple[str, ...] = ()) -> str:
+            if isinstance(source, str):
+                return source.strip()
+            if isinstance(source, (list, tuple)):
+                for item in source:
+                    text = _first_text(item, keys)
+                    if text:
+                        return text
+                return ""
+            if isinstance(source, dict):
+                for key in keys:
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                    if isinstance(value, (list, tuple, dict)):
+                        nested = _first_text(value, keys)
+                        if nested:
+                            return nested
+                    if value not in (None, "", []):
+                        return str(value).strip()
+            return ""
+
+        def _is_placeholder_knowledge_point(value: str) -> bool:
+            text = str(value or "").strip()
+            if not text:
+                return False
+            return bool(
+                re.fullmatch(r"(?i)(kp|k|knowledge[_\s-]*point)[_\s-]*\d+", text)
+                or re.fullmatch(r"知识点\d+", text)
+                or re.fullmatch(r"教材知识点\d+", text)
+                or re.fullmatch(r"判断(?:选项)?[A-DＡ-Ｄ](?:项)?(?:正确|错误|正误)?", text)
+                or re.fullmatch(r"(?:选项)?[A-DＡ-Ｄ](?:项)?(?:正确|错误|正误)?判断", text)
+                or re.fullmatch(r"[A-DＡ-Ｄ]选项(?:正确|错误|正误)?", text)
+            )
+
+        def _first_non_placeholder_text(source, keys: tuple[str, ...]) -> str:
+            for key in keys:
+                text = _first_text(source, (key,))
+                if text and not _is_placeholder_knowledge_point(text):
+                    return text
+            text = _first_text(source, keys)
+            return "" if _is_placeholder_knowledge_point(text) else text
+
+        difficulty_label_map = {
+            "easy": "简单", "simple": "简单", "low": "简单", "简单": "简单", "低": "简单",
+            "medium": "中等", "middle": "中等", "moderate": "中等", "中等": "中等", "中": "中等",
+            "一般": "中等", "适中": "中等", "中等偏易": "中等", "较易": "中等", "偏易": "中等",
+            "hard": "困难", "difficult": "困难", "high": "困难", "困难": "困难", "高": "困难",
+            "较难": "困难", "偏难": "困难", "中等偏难": "困难", "很难": "困难", "高难": "困难", "难": "困难",
+        }
+
+        def _difficulty_label_from_units() -> str:
+            values = []
+            score_map = {
+                "easy": 3.0, "simple": 3.0, "low": 3.0, "简单": 3.0, "低": 3.0,
+                "medium": 5.5, "middle": 5.5, "moderate": 5.5, "中等": 5.5, "中": 5.5,
+                "一般": 5.5, "适中": 5.5, "中等偏易": 4.8, "较易": 4.2, "偏易": 4.5,
+                "hard": 8.0, "difficult": 8.0, "high": 8.0, "困难": 8.0, "高": 8.0,
+                "较难": 7.5, "偏难": 7.2, "中等偏难": 6.8, "很难": 8.8, "高难": 8.8, "难": 8.0,
+            }
+            for seu in data.get("scoring_units") or []:
+                if not isinstance(seu, dict):
+                    continue
+                value = cls._coerce_float(seu.get("difficulty_estimate"), score_map)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    values.append(float(value))
+            if not values:
+                return "中等"
+            average = sum(values) / len(values)
+            if average <= 4:
+                return "简单"
+            if average <= 7:
+                return "中等"
+            return "困难"
+
         if "answer" in data and not isinstance(data.get("answer"), str):
             data["answer"] = json.dumps(data["answer"], ensure_ascii=False)
             notes.append("answer_object_to_json_string")
-        if isinstance(data.get("difficulty"), (int, float)):
+        if isinstance(data.get("difficulty"), str):
+            raw_difficulty = data["difficulty"].strip()
+            normalized_difficulty = difficulty_label_map.get(
+                raw_difficulty.lower(),
+                difficulty_label_map.get(raw_difficulty),
+            )
+            if normalized_difficulty and normalized_difficulty != data["difficulty"]:
+                data["difficulty"] = normalized_difficulty
+                notes.append("difficulty_text_to_label")
+        elif isinstance(data.get("difficulty"), (int, float)) and not isinstance(data.get("difficulty"), bool):
             numeric_difficulty = float(data["difficulty"])
             if numeric_difficulty <= 4:
                 data["difficulty"] = "简单"
@@ -127,6 +212,61 @@ class QuestionAnalyzer:
             else:
                 data["difficulty"] = "困难"
             notes.append("difficulty_number_to_label")
+        elif "difficulty" in data and data.get("difficulty") not in (None, ""):
+            difficulty_text = _first_text(
+                data.get("difficulty"),
+                ("difficulty", "label", "name", "value", "level", "d", "diff"),
+            )
+            normalized_difficulty = difficulty_label_map.get(
+                difficulty_text.lower(),
+                difficulty_label_map.get(difficulty_text),
+            )
+            if normalized_difficulty:
+                data["difficulty"] = normalized_difficulty
+                notes.append("difficulty_object_to_label")
+            elif difficulty_text:
+                data["difficulty"] = difficulty_text
+                notes.append("difficulty_object_to_text")
+            else:
+                data["difficulty"] = _difficulty_label_from_units()
+                notes.append("difficulty_defaulted_from_units")
+        if isinstance(data.get("common_mistakes"), str):
+            data["common_mistakes"] = [data["common_mistakes"].strip()]
+            notes.append("common_mistakes_string_to_list")
+        knowledge_point_aliases = {}
+        if isinstance(data.get("knowledge_points"), list):
+            for point in data["knowledge_points"]:
+                if not isinstance(point, dict):
+                    continue
+                alias = _first_text(point, ("id", "kp_id", "k_id", "code", "ref"))
+                label = _first_non_placeholder_text(
+                    point,
+                    ("knowledge_point", "point", "name", "label", "kp"),
+                )
+                if alias and label:
+                    knowledge_point_aliases[alias.strip().upper()] = label
+            normalized_points = []
+            changed = False
+            for point in data["knowledge_points"]:
+                text = _first_text(
+                    point,
+                    ("knowledge_point", "point", "name", "label", "kp", "kp_id", "id"),
+                )
+                if text:
+                    normalized_points.append(text)
+                    changed = changed or not isinstance(point, str)
+                elif isinstance(point, str):
+                    normalized_points.append(point)
+            if changed:
+                data["knowledge_points"] = normalized_points
+                notes.append("knowledge_points_dicts_to_strings")
+        top_level_knowledge_fallbacks = [
+            str(point).strip()
+            for point in data.get("knowledge_points") or []
+            if isinstance(point, str)
+            and str(point).strip()
+            and not _is_placeholder_knowledge_point(str(point))
+        ]
 
         bloom_map = {
             "识记": 1, "记忆": 1, "remember": 1, "remembering": 1,
@@ -139,7 +279,11 @@ class QuestionAnalyzer:
         difficulty_map = {
             "easy": 3.0, "simple": 3.0, "low": 3.0, "简单": 3.0, "低": 3.0,
             "medium": 5.5, "middle": 5.5, "中等": 5.5, "中": 5.5,
+            "moderate": 5.5, "一般": 5.5, "适中": 5.5,
+            "中等偏易": 4.8, "较易": 4.2, "偏易": 4.5,
             "hard": 8.0, "difficult": 8.0, "困难": 8.0, "高": 8.0,
+            "high": 8.0, "较难": 7.5, "偏难": 7.2,
+            "中等偏难": 6.8, "很难": 8.8, "高难": 8.8, "难": 8.0,
         }
         confidence_map = {
             "high": 0.85, "medium": 0.65, "low": 0.45,
@@ -147,9 +291,48 @@ class QuestionAnalyzer:
         }
 
         scoring_units = data.get("scoring_units") or []
-        for seu in scoring_units:
+        for index, seu in enumerate(scoring_units, 1):
             if not isinstance(seu, dict):
                 continue
+            if not seu.get("seu_id"):
+                for alt_key in ("id", "unit_id", "score_id", "label", "name"):
+                    if seu.get(alt_key):
+                        seu["seu_id"] = str(seu[alt_key])
+                        notes.append(f"{alt_key}_to_seu_id")
+                        break
+                else:
+                    seu["seu_id"] = f"seu_{index}"
+                    notes.append("seu_id_defaulted")
+            if not seu.get("label"):
+                label = _first_text(
+                    seu,
+                    (
+                        "knowledge_point",
+                        "point",
+                        "kp",
+                        "name",
+                        "reasoning_brief",
+                        "description",
+                        "seu_id",
+                    ),
+                )
+                seu["label"] = label[:30] if label else f"采分点{index}"
+                notes.append("seu_label_defaulted")
+            if not isinstance(seu.get("knowledge_links"), list) or not seu.get("knowledge_links"):
+                kp = _first_text(
+                    seu,
+                    ("knowledge_point", "point", "kp", "knowledge", "name", "label"),
+                )
+                if kp:
+                    seu["knowledge_links"] = [{"knowledge_point": kp, "share": 1.0}]
+                    notes.append("seu_knowledge_point_to_links")
+            elif any(not isinstance(link, dict) for link in seu.get("knowledge_links") or []):
+                seu["knowledge_links"] = [
+                    {"knowledge_point": str(link), "share": 1.0}
+                    if not isinstance(link, dict) else link
+                    for link in seu.get("knowledge_links") or []
+                ]
+                notes.append("knowledge_links_strings_to_dicts")
             original = seu.get("score_share")
             coerced = cls._coerce_float(original)
             if coerced != original:
@@ -195,11 +378,50 @@ class QuestionAnalyzer:
                         elif link.get("k_id") or link.get("id"):
                             link["knowledge_point"] = str(link.get("k_id") or link.get("id"))
                             notes.append("id_to_knowledge_point")
+                if _is_placeholder_knowledge_point(link.get("knowledge_point")):
+                    placeholder = str(link.get("knowledge_point")).strip().upper()
+                    replacement = knowledge_point_aliases.get(placeholder)
+                    if not replacement:
+                        replacement = _first_non_placeholder_text(
+                            seu,
+                            (
+                                "knowledge_point",
+                                "point",
+                                "kp",
+                                "knowledge",
+                                "name",
+                                "label",
+                                "reasoning_brief",
+                                "description",
+                            ),
+                        )
+                    if not replacement and top_level_knowledge_fallbacks:
+                        replacement = top_level_knowledge_fallbacks[
+                            (index - 1) % len(top_level_knowledge_fallbacks)
+                        ]
+                    if replacement:
+                        link["knowledge_point"] = replacement[:30]
+                        notes.append("placeholder_knowledge_point_replaced")
                 original = link.get("share")
                 coerced = cls._coerce_float(original)
                 if coerced != original:
                     link["share"] = coerced
                     notes.append("knowledge_link_share_to_float")
+
+        if isinstance(data.get("knowledge_points"), list):
+            replacement_points = []
+            for seu in scoring_units:
+                if not isinstance(seu, dict):
+                    continue
+                for link in seu.get("knowledge_links") or []:
+                    if not isinstance(link, dict):
+                        continue
+                    point = str(link.get("knowledge_point") or "").strip()
+                    if point and not _is_placeholder_knowledge_point(point) and point not in replacement_points:
+                        replacement_points.append(point)
+            if replacement_points and any(_is_placeholder_knowledge_point(point) for point in data["knowledge_points"]):
+                data["knowledge_points"] = replacement_points[: max(3, len(data["knowledge_points"]))]
+                notes.append("placeholder_knowledge_points_from_scoring_units")
 
         if isinstance(scoring_units, list) and scoring_units:
             shares = []
@@ -218,11 +440,47 @@ class QuestionAnalyzer:
                 metadata["score_share_sum_normalized_to"] = 1.0
                 notes.append("score_share_sum_normalized")
 
+        if isinstance(data.get("diagnostic_units"), str):
+            data["diagnostic_units"] = [data["diagnostic_units"]]
+            notes.append("diagnostic_units_string_to_list")
+        if isinstance(data.get("diagnostic_units"), list):
+            normalized_diagnostic_units = []
+            changed = False
+            for index, unit in enumerate(data.get("diagnostic_units") or [], 1):
+                if isinstance(unit, dict):
+                    normalized_diagnostic_units.append(unit)
+                    continue
+                text = _first_text(unit)
+                if text:
+                    normalized_diagnostic_units.append({
+                        "du_id": f"du_{index}",
+                        "option_or_trap": text[:24],
+                        "distractor_type": "reasoning_trap",
+                        "misconception": text[:30],
+                        "trap_strength": 2,
+                        "if_selected_means": [text[:30]],
+                    })
+                    changed = True
+                else:
+                    normalized_diagnostic_units.append(unit)
+            if changed:
+                data["diagnostic_units"] = normalized_diagnostic_units
+                notes.append("diagnostic_units_strings_to_dicts")
+
         for index, unit in enumerate(data.get("diagnostic_units") or [], 1):
             if not isinstance(unit, dict):
                 continue
+            if not unit.get("du_id"):
+                for alt_key in ("diagnostic_id", "id", "unit_id", "trap_id", "du", "d", "label", "name"):
+                    if unit.get(alt_key):
+                        unit["du_id"] = str(unit[alt_key])
+                        notes.append(f"{alt_key}_to_du_id")
+                        break
+                else:
+                    unit["du_id"] = f"du_{index}"
+                    notes.append("du_id_defaulted")
             if not unit.get("option_or_trap"):
-                for alt_key in ("option", "trap", "label", "name", "du_id"):
+                for alt_key in ("option", "trap", "option_label", "label", "name", "title", "t", "text", "du_id"):
                     if unit.get(alt_key):
                         unit["option_or_trap"] = str(unit[alt_key])
                         notes.append(f"{alt_key}_to_option_or_trap")
@@ -230,28 +488,101 @@ class QuestionAnalyzer:
                 else:
                     unit["option_or_trap"] = f"trap_{index}"
                     notes.append("option_or_trap_defaulted")
+            if not unit.get("distractor_type"):
+                for alt_key in ("type", "category", "trap_type", "kind"):
+                    if unit.get(alt_key):
+                        unit["distractor_type"] = str(unit[alt_key])
+                        notes.append(f"{alt_key}_to_distractor_type")
+                        break
             if not unit.get("misconception"):
-                for alt_key in ("label", "description", "mistake", "error"):
+                for alt_key in ("misunderstanding", "label", "description", "mistake", "error", "m", "reason", "issue", "pitfall", "text", "trap"):
                     if unit.get(alt_key):
                         unit["misconception"] = str(unit[alt_key])
                         notes.append(f"{alt_key}_to_misconception")
                         break
             if not unit.get("knowledge_boundary"):
-                for alt_key in ("boundary", "analysis", "explanation"):
+                for alt_key in ("boundary", "knowledge_point", "knowledge", "kp", "analysis", "explanation"):
                     if unit.get(alt_key):
                         unit["knowledge_boundary"] = str(unit[alt_key])
                         notes.append(f"{alt_key}_to_knowledge_boundary")
+                        break
+            if not unit.get("if_selected_means"):
+                for alt_key in ("means", "meaning", "effect", "if_selected", "diagnosis"):
+                    if unit.get(alt_key):
+                        unit["if_selected_means"] = unit[alt_key]
+                        notes.append(f"{alt_key}_to_if_selected_means")
                         break
             means = unit.get("if_selected_means")
             if isinstance(means, str):
                 unit["if_selected_means"] = [means]
                 notes.append("if_selected_means_to_list")
+            original = unit.get("trap_strength")
+            coerced = cls._coerce_float(
+                original,
+                {
+                    "low": 1, "weak": 1, "medium": 2, "middle": 2, "high": 3, "strong": 3,
+                    "低": 1, "弱": 1, "较弱": 1,
+                    "中": 2, "中等": 2, "一般": 2, "中等强度": 2,
+                    "高": 3, "强": 3, "较强": 3, "很强": 3, "高强度": 3,
+                },
+            )
+            if isinstance(coerced, (int, float)):
+                value = float(coerced)
+                if 0 < value <= 1:
+                    if value >= 0.67:
+                        value = 3
+                    elif value >= 0.34:
+                        value = 2
+                    else:
+                        value = 1
+                else:
+                    value = round(value)
+                coerced = max(1, min(3, int(value)))
+            if coerced != original and coerced in (1, 2, 3):
+                unit["trap_strength"] = coerced
+                notes.append("trap_strength_to_int")
+
+        if isinstance(data.get("stimulus_units"), str):
+            data["stimulus_units"] = [data["stimulus_units"]]
+            notes.append("stimulus_units_string_to_list")
+        if isinstance(data.get("stimulus_units"), list):
+            normalized_stimulus_units = []
+            changed = False
+            for index, unit in enumerate(data.get("stimulus_units") or [], 1):
+                if isinstance(unit, dict):
+                    normalized_stimulus_units.append(unit)
+                    continue
+                text = _first_text(unit)
+                if text:
+                    normalized_stimulus_units.append({
+                        "su_id": f"su_{index}",
+                        "stimulus_type": "text",
+                        "complexity": 2,
+                        "is_core": True,
+                        "description": text[:30],
+                    })
+                    changed = True
+                else:
+                    normalized_stimulus_units.append(unit)
+            if changed:
+                data["stimulus_units"] = normalized_stimulus_units
+                notes.append("stimulus_units_strings_to_dicts")
+
+        stimulus_type_aliases = {
+            "image": "chart", "figure": "chart", "fig": "chart", "graph": "chart",
+            "图": "chart", "图片": "chart", "图像": "chart", "图示": "chart",
+            "表": "table", "表格": "table",
+            "流程": "flowchart", "流程图": "flowchart", "实验流程": "flowchart",
+            "系谱": "pedigree", "系谱图": "pedigree",
+            "装置": "device", "实验装置": "device",
+            "多材料": "multi", "综合材料": "multi",
+        }
 
         for index, unit in enumerate(data.get("stimulus_units") or [], 1):
             if not isinstance(unit, dict):
                 continue
             if not unit.get("su_id"):
-                for alt_key in ("stu_id", "id", "label", "name"):
+                for alt_key in ("stu_id", "id", "su", "s", "label", "name"):
                     if unit.get(alt_key):
                         unit["su_id"] = str(unit[alt_key])
                         notes.append(f"{alt_key}_to_su_id")
@@ -260,7 +591,7 @@ class QuestionAnalyzer:
                     unit["su_id"] = f"su_{index}"
                     notes.append("su_id_defaulted")
             if not unit.get("description"):
-                for alt_key in ("label", "name", "content", "summary", "su_id"):
+                for alt_key in ("label", "name", "content", "summary", "text", "s", "stem", "material", "source", "su_id"):
                     if unit.get(alt_key):
                         unit["description"] = str(unit[alt_key])[:30]
                         notes.append(f"{alt_key}_to_stimulus_description")
@@ -273,11 +604,22 @@ class QuestionAnalyzer:
                 if raw in {"text", "chart", "table", "pedigree", "device", "flowchart", "multi"}:
                     unit["stimulus_type"] = raw
                     notes.append("type_to_stimulus_type")
+                elif raw in stimulus_type_aliases:
+                    unit["stimulus_type"] = stimulus_type_aliases[raw]
+                    notes.append("type_to_stimulus_type")
                 else:
                     unit["stimulus_type"] = "text"
                     notes.append("stimulus_type_defaulted")
             original = unit.get("complexity")
-            coerced = cls._coerce_float(original, {"low": 1, "medium": 2, "high": 3, "低": 1, "中": 2, "高": 3})
+            coerced = cls._coerce_float(
+                original,
+                {
+                    "low": 1, "medium": 2, "high": 3,
+                    "简单": 1, "低": 1,
+                    "中": 2, "中等": 2,
+                    "困难": 3, "高": 3,
+                },
+            )
             if isinstance(coerced, float):
                 coerced = int(round(coerced))
             if coerced != original and coerced in (1, 2, 3):
@@ -517,6 +859,8 @@ class QuestionAnalyzer:
                 validation_errors,
                 **call_kwargs,
             ))
+            if evidence_context_meta:
+                payload["_discovery_evidence_context"] = evidence_context_meta
             payload["_llm_calls"] = calls
             return payload
 
@@ -530,20 +874,51 @@ class QuestionAnalyzer:
             QuestionEvidenceContextBuilder,
             evidence_ranking_enabled as _evidence_ranking_enabled,
         )
+        def _is_transient_evidence_context_error(exc: Exception) -> bool:
+            text = str(exc).lower()
+            transient_markers = (
+                "access token failed",
+                "transporterror",
+                "proxyerror",
+                "remote end closed connection",
+                "connectionpool",
+                "read timed out",
+                "connect timeout",
+                "temporarily unavailable",
+                "connection reset",
+            )
+            return any(marker in text for marker in transient_markers)
+
         if _evidence_ranking_enabled(evidence_ranking_enabled):
             provider = evidence_context_provider or QuestionEvidenceContextBuilder()
-            try:
-                evidence_context = await provider.build_question_context(
-                    question_text=question_text,
-                    question_id=question_id,
-                    question_type=question_type,
-                    section_header=section_header,
-                    agent_search_enabled=agent_search_enabled,
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"题目{question_id}证据重排失败（证据排序服务）: {exc}"
-                ) from exc
+            evidence_context = None
+            evidence_context_errors = []
+            for attempt in range(3):
+                try:
+                    evidence_context = await provider.build_question_context(
+                        question_text=question_text,
+                        question_id=question_id,
+                        question_type=question_type,
+                        section_header=section_header,
+                        agent_search_enabled=agent_search_enabled,
+                    )
+                    break
+                except Exception as exc:
+                    evidence_context_errors.append(str(exc))
+                    if attempt < 2 and _is_transient_evidence_context_error(exc):
+                        wait_seconds = 2 ** attempt
+                        logger.warning(
+                            "[证据重排] 题目%s transient error，%ss 后重试 %s/2: %s",
+                            question_id,
+                            wait_seconds,
+                            attempt + 1,
+                            str(exc)[:160],
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    raise RuntimeError(
+                        f"题目{question_id}证据重排失败（证据排序服务）: {exc}"
+                    ) from exc
             evidence_context_text = str(evidence_context.get("context_text") or "").strip()
             if not evidence_context_text:
                 raise RuntimeError(
@@ -551,6 +926,8 @@ class QuestionAnalyzer:
                 )
             prompt_sections.append(evidence_context_text)
             evidence_context_meta = evidence_context.get("metadata") or {}
+            if evidence_context_errors:
+                evidence_context_meta["retry_errors"] = evidence_context_errors
 
         if question_media_items:
             visual_context_text, visual_call_record = await extract_visual_context(
@@ -584,6 +961,83 @@ class QuestionAnalyzer:
             error_text = " ".join(error_messages).lower()
             return "finish_reason=length" in error_text
 
+        def _infer_fallback_total_score() -> float:
+            question_match = re.search(r"[（(]\s*(\d+(?:\.\d+)?)\s*分\s*[）)]", question_text or "")
+            if question_match:
+                return float(question_match.group(1))
+            header = section_header or ""
+            english_match = re.search(
+                r"(\d+(?:\.\d+)?)\s*points?",
+                f"{question_text or ''} {header}",
+                flags=re.IGNORECASE,
+            )
+            if english_match:
+                return float(english_match.group(1))
+            header_match = re.search(r"每(?:小)?题\s*(\d+(?:\.\d+)?)\s*分|每小题\s*(\d+(?:\.\d+)?)\s*分", header)
+            if header_match:
+                return float(next(group for group in header_match.groups() if group))
+            if question_type in ("single_choice", "multiple_choice"):
+                return 2.0
+            return 0.0
+
+        def _fallback_knowledge_points() -> list[str]:
+            text = question_text or ""
+            if any(marker in text for marker in ("CGG", "三核苷酸", "动态突变", "脆性X")):
+                return ["基因突变"]
+            if any(marker in text for marker in ("基因", "遗传", "杂交", "配子")):
+                return ["遗传的基本规律"]
+            if any(marker in text for marker in ("生态", "食物链", "营养级", "群落")):
+                return ["生态系统"]
+            if any(marker in text for marker in ("蛋白", "转录", "翻译")):
+                return ["基因表达"]
+            return []
+
+        async def _deterministic_length_recovery(initial_reason: str, retry_count: int = 3) -> dict:
+            fallback_prompt_hash = sha256(
+                f"deterministic_length_recovery:{question_type}:{section_header or ''}".encode("utf-8")
+            ).hexdigest()
+            result = {
+                "knowledge_points": _fallback_knowledge_points(),
+                "detailed_analysis": "DeepSeek连续截断，已生成保底分析并标记为需人工复核。",
+                "difficulty": "中等",
+                "common_mistakes": ["模型输出连续截断导致细粒度审题缺失"],
+                "answer": "",
+                "total_score": _infer_fallback_total_score(),
+                "bloom_level": 3,
+                "_extraction_confidence": 0.2,
+                "_analysis_version": "v1_length_recovery_deterministic",
+                "_fine_grained": {
+                    "scoring_units": [],
+                    "diagnostic_units": [],
+                    "stimulus_units": [],
+                },
+                "_validation_errors": [
+                    "llm_length_recovery_deterministic_fallback",
+                    f"initial_error: {initial_reason}",
+                ],
+            }
+            logger.error(
+                f"[分析] 题目{question_id} DeepSeek连续截断，启用确定性保底分析: {initial_reason}"
+            )
+            return attach_call_record(
+                result,
+                "AnalysisResult",
+                0.2,
+                result["_validation_errors"],
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v1.length_recovery.deterministic",
+                prompt_hash_value=fallback_prompt_hash,
+                response_len=0,
+                call_suffix="analysis-length-recovery-deterministic",
+                retry_count=retry_count,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_provider_errors": _last_provider_error_messages(),
+                    "recovery_mode": "deterministic_length_fallback",
+                    "recovery_status": "degraded",
+                },
+            )
+
         async def _compact_analysis_retry(initial_reason: str, initial_response_length: int = 0) -> dict:
             logger.warning(f"[分析] 题目{question_id} 触发 compact v2 重试: {initial_reason}")
             compact_prompt = self._get_compact_analysis_retry_prompt(
@@ -592,27 +1046,37 @@ class QuestionAnalyzer:
             )
             compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
             compact_prompt_id = "biology.question_analysis.v2.compact_retry"
+            compact_timeout = min(max(analysis_timeout, 180.0), 220.0)
+            compact_max_tokens = min(analysis_max_tokens, 8192)
             try:
-                compact_response = await llm_call(
-                    messages=_question_messages(
-                        "\n\n".join(
-                            part for part in [
-                                compact_prompt,
-                                visual_context_text[:1500],
-                                f"Question content:\n{question_text[:3500]}",
-                            ]
-                            if part
+                compact_response = await asyncio.wait_for(
+                    llm_call(
+                        messages=_question_messages(
+                            "\n\n".join(
+                                part for part in [
+                                    compact_prompt,
+                                    visual_context_text[:1500],
+                                    f"Question content:\n{question_text[:3500]}",
+                                ]
+                                if part
+                            ),
+                            [],
                         ),
-                        [],
+                        max_tokens=compact_max_tokens,
+                        temperature=0,
+                        timeout=compact_timeout,
+                        purpose="question_analysis_retry",
                     ),
-                    max_tokens=analysis_max_tokens,
-                    temperature=0,
-                    timeout=analysis_timeout,
-                    purpose="question_analysis_retry",
+                    timeout=compact_timeout + 5.0,
+                )
+            except asyncio.TimeoutError as compact_exc:
+                return await _ultra_compact_analysis_retry(
+                    f"{initial_reason}; compact_retry_timeout: {compact_exc}",
+                    retry_count=2,
                 )
             except Exception as compact_exc:
                 if _is_length_provider_failure(compact_exc):
-                    return await _minimal_analysis_retry(
+                    return await _ultra_compact_analysis_retry(
                         f"{initial_reason}; compact_retry_failed: {compact_exc}",
                         retry_count=2,
                     )
@@ -639,7 +1103,7 @@ class QuestionAnalyzer:
                 )
                 fg = FineGrainedResult(**validated)
             except Exception as compact_parse_exc:
-                return await _minimal_analysis_retry(
+                return await _ultra_compact_analysis_retry(
                     f"{initial_reason}; compact_retry_parse_failed: {compact_parse_exc}",
                     retry_count=2,
                 )
@@ -679,6 +1143,8 @@ class QuestionAnalyzer:
                     "initial_response_length": initial_response_length,
                     "initial_provider_errors": _last_provider_error_messages(),
                     "normalization_notes": normalization_notes,
+                    "recovery_mode": "compact_v2",
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
                 },
             )
             logger.info(f"[分析] 题目{question_id} compact v2 重试完成 (confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)})")
@@ -691,6 +1157,512 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+            )
+
+        async def _ultra_compact_analysis_retry(initial_reason: str, retry_count: int = 2) -> dict:
+            logger.warning(f"[分析] 题目{question_id} 触发 ultra-compact v2 重试: {initial_reason}")
+            provider_errors_before = _last_provider_error_messages()
+            ultra_prompt = self._get_ultra_compact_analysis_retry_prompt(
+                question_type=question_type,
+                section_header=section_header,
+            )
+            ultra_prompt_hash = sha256(ultra_prompt.encode("utf-8")).hexdigest()
+            ultra_timeout = min(max(analysis_timeout, 140.0), 180.0)
+            try:
+                ultra_response = await asyncio.wait_for(
+                    llm_call(
+                        messages=_question_messages(
+                            "\n\n".join(
+                                part for part in [
+                                    ultra_prompt,
+                                    visual_context_text[:600],
+                                    f"Question content:\n{question_text[:2200]}",
+                                ]
+                                if part
+                            ),
+                            [],
+                        ),
+                        max_tokens=4096,
+                        temperature=0,
+                        timeout=ultra_timeout,
+                        purpose="question_analysis_retry",
+                    ),
+                    timeout=ultra_timeout + 5.0,
+                )
+            except Exception as ultra_exc:
+                return await _micro_compact_analysis_retry(
+                    f"{initial_reason}; ultra_compact_retry_failed: {ultra_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            ultra_response_length = len(ultra_response) if ultra_response else 0
+            ultra_json = self.extract_json(ultra_response)
+            if not ultra_json.startswith('{'):
+                start = ultra_json.find('{')
+                if start != -1:
+                    ultra_json = ultra_json[start:]
+            if not ultra_json.endswith('}'):
+                end = ultra_json.rfind('}')
+                if end != -1:
+                    ultra_json = ultra_json[:end + 1]
+            try:
+                ultra_result = json.loads(ultra_json)
+                ultra_result, normalization_notes = self._normalize_fine_grained_result(ultra_result)
+                from llm_schemas import (FineGrainedResult, validate_llm_output,
+                                         compute_summary_from_units, validate_score_conservation)
+                validated, ext_conf, val_errors = validate_llm_output(
+                    ultra_result,
+                    FineGrainedResult,
+                    f"题目{question_id} ultra compact v2",
+                )
+                fg = FineGrainedResult(**validated)
+            except Exception as ultra_parse_exc:
+                return await _micro_compact_analysis_retry(
+                    f"{initial_reason}; ultra_compact_retry_parse_failed: {ultra_parse_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            expected_total_score = fg.total_score if isinstance(fg.total_score, (int, float)) and fg.total_score > 0 else None
+            if expected_total_score is None:
+                is_conserved = False
+                conservation_errors = ["fine_grained total_score missing_or_non_positive"]
+            else:
+                is_conserved, conservation_errors = validate_score_conservation(fg, expected_total_score)
+            if not is_conserved:
+                val_errors = (val_errors or []) + conservation_errors
+                ext_conf = min(ext_conf, 0.6)
+            summary = compute_summary_from_units(fg)
+            validated.update(summary)
+            validated["_fine_grained"] = {
+                "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
+                "diagnostic_units": [d.model_dump() if hasattr(d, 'model_dump') else d for d in fg.diagnostic_units],
+                "stimulus_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.stimulus_units],
+            }
+            validated["_extraction_confidence"] = ext_conf
+            validated["_analysis_version"] = "v2_ultra_compact_retry"
+            if val_errors:
+                validated["_validation_errors"] = val_errors
+            validated = attach_call_record(
+                validated,
+                "FineGrainedResult",
+                ext_conf,
+                val_errors,
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v2.ultra_compact_retry",
+                prompt_hash_value=ultra_prompt_hash,
+                response_len=ultra_response_length,
+                call_suffix="analysis-ultra-compact-retry",
+                retry_count=retry_count,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_provider_errors": provider_errors_before,
+                    "normalization_notes": normalization_notes,
+                    "recovery_mode": "ultra_compact_v2",
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
+                    "input_trim": {
+                        "visual_context_chars": min(len(visual_context_text or ""), 600),
+                        "question_text_chars": min(len(question_text or ""), 2200),
+                    },
+                },
+            )
+            logger.info(
+                f"[分析] 题目{question_id} ultra-compact v2 重试完成 "
+                f"(confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)}, "
+                f"DU={len(fg.diagnostic_units)}, SU={len(fg.stimulus_units)})"
+            )
+            return await self._retry_missing_evidence_units(
+                analysis_payload=validated,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header,
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+                timeout=analysis_timeout,
+            )
+
+        async def _micro_compact_analysis_retry(initial_reason: str, retry_count: int = 3) -> dict:
+            logger.warning(f"[分析] 题目{question_id} 触发 micro-compact v2 重试: {initial_reason}")
+            provider_errors_before = _last_provider_error_messages()
+            micro_prompt = self._get_micro_compact_analysis_retry_prompt(
+                question_type=question_type,
+                section_header=section_header,
+                total_score=_infer_fallback_total_score(),
+            )
+            micro_prompt_hash = sha256(micro_prompt.encode("utf-8")).hexdigest()
+            micro_timeout = min(max(analysis_timeout, 100.0), 140.0)
+            try:
+                micro_response = await asyncio.wait_for(
+                    llm_call(
+                        messages=_question_messages(
+                            "\n\n".join(
+                                part for part in [
+                                    micro_prompt,
+                                    visual_context_text[:300],
+                                    f"Question content:\n{question_text[:1200]}",
+                                ]
+                                if part
+                            ),
+                            [],
+                        ),
+                        max_tokens=2048,
+                        temperature=0,
+                        timeout=micro_timeout,
+                        purpose="question_analysis_retry",
+                    ),
+                    timeout=micro_timeout + 5.0,
+                )
+            except Exception as micro_exc:
+                if _should_attempt_skeletal_fine_grained_retry():
+                    return await _skeletal_fine_grained_retry(
+                        f"{initial_reason}; micro_compact_retry_failed: {micro_exc}",
+                        retry_count=retry_count + 1,
+                    )
+                return await _minimal_analysis_retry(
+                    f"{initial_reason}; micro_compact_retry_failed: {micro_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            micro_response_length = len(micro_response) if micro_response else 0
+            micro_json = self.extract_json(micro_response)
+            if not micro_json.startswith('{'):
+                start = micro_json.find('{')
+                if start != -1:
+                    micro_json = micro_json[start:]
+            if not micro_json.endswith('}'):
+                end = micro_json.rfind('}')
+                if end != -1:
+                    micro_json = micro_json[:end + 1]
+            try:
+                micro_result = json.loads(micro_json)
+                micro_result, normalization_notes = self._normalize_fine_grained_result(micro_result)
+                from llm_schemas import (FineGrainedResult, validate_llm_output,
+                                         compute_summary_from_units, validate_score_conservation)
+                validated, ext_conf, val_errors = validate_llm_output(
+                    micro_result,
+                    FineGrainedResult,
+                    f"题目{question_id} micro compact v2",
+                )
+                fg = FineGrainedResult(**validated)
+            except Exception as micro_parse_exc:
+                return await _minimal_analysis_retry(
+                    f"{initial_reason}; micro_compact_retry_parse_failed: {micro_parse_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            expected_total_score = fg.total_score if isinstance(fg.total_score, (int, float)) and fg.total_score > 0 else None
+            if expected_total_score is None:
+                is_conserved = False
+                conservation_errors = ["fine_grained total_score missing_or_non_positive"]
+            else:
+                is_conserved, conservation_errors = validate_score_conservation(fg, expected_total_score)
+            if not is_conserved:
+                val_errors = (val_errors or []) + conservation_errors
+                ext_conf = min(ext_conf, 0.6)
+            summary = compute_summary_from_units(fg)
+            validated.update(summary)
+            validated["_fine_grained"] = {
+                "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
+                "diagnostic_units": [d.model_dump() if hasattr(d, 'model_dump') else d for d in fg.diagnostic_units],
+                "stimulus_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.stimulus_units],
+            }
+            validated["_extraction_confidence"] = ext_conf
+            validated["_analysis_version"] = "v2_micro_compact_retry"
+            if val_errors:
+                validated["_validation_errors"] = val_errors
+            validated = attach_call_record(
+                validated,
+                "FineGrainedResult",
+                ext_conf,
+                val_errors,
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v2.micro_compact_retry",
+                prompt_hash_value=micro_prompt_hash,
+                response_len=micro_response_length,
+                call_suffix="analysis-micro-compact-retry",
+                retry_count=retry_count,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_provider_errors": provider_errors_before,
+                    "normalization_notes": normalization_notes,
+                    "recovery_mode": "micro_compact_v2",
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
+                    "input_trim": {
+                        "visual_context_chars": min(len(visual_context_text or ""), 300),
+                        "question_text_chars": min(len(question_text or ""), 1200),
+                    },
+                },
+            )
+            logger.info(
+                f"[分析] 题目{question_id} micro-compact v2 重试完成 "
+                f"(confidence={ext_conf}, conserved={is_conserved}, SEU={len(fg.scoring_units)}, "
+                f"DU={len(fg.diagnostic_units)}, SU={len(fg.stimulus_units)})"
+            )
+            return await self._retry_missing_evidence_units(
+                analysis_payload=validated,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header,
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+                timeout=analysis_timeout,
+            )
+
+        def _should_attempt_skeletal_fine_grained_retry() -> bool:
+            qtype = str(question_type or "").lower()
+            is_choice = qtype in {"single_choice", "multiple_choice"} or "选择" in str(question_type or "")
+            has_media = bool(question_media_items)
+            total_score = _infer_fallback_total_score()
+            if is_choice:
+                return has_media and (total_score >= 4 or len(question_text or "") >= 240)
+            return total_score >= 8 or len(question_text or "") >= 800
+
+        def _short_text(value, limit: int, default: str = "") -> str:
+            text = " ".join(str(value or "").strip().split())
+            return (text or default)[:limit]
+
+        def _short_list(value, limit: int, fallback: list[str], item_limit: int = 10) -> list[str]:
+            if isinstance(value, str):
+                raw_items = re.split(r"[、,，;；/\n]+", value)
+            elif isinstance(value, list):
+                raw_items = value
+            else:
+                raw_items = []
+            items = []
+            for item in raw_items:
+                text = _short_text(item, item_limit)
+                if text and text not in items:
+                    items.append(text)
+            for item in fallback:
+                text = _short_text(item, item_limit)
+                if len(items) >= limit:
+                    break
+                if text and text not in items:
+                    items.append(text)
+            return items[:limit]
+
+        def _canonical_skeletal_knowledge_points(raw_points: list[str]) -> list[str]:
+            points = raw_points or _fallback_knowledge_points()
+            try:
+                from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
+                from knowledge_mapper import KnowledgeMapper
+
+                mapper = KnowledgeMapper()
+                canonical_points = []
+                for point in points:
+                    if is_non_textbook_skill_point(point):
+                        continue
+                    canonical, _ = canonicalize_knowledge_point(point, knowledge_mapper=mapper)
+                    if canonical and canonical not in canonical_points:
+                        canonical_points.append(canonical)
+                return canonical_points or points
+            except Exception:
+                return points
+
+        def _difficulty_label(value) -> str:
+            text = str(value or "").strip().lower()
+            if "困难" in text or "hard" in text or "difficult" in text or text in {"高", "难"}:
+                return "困难"
+            if "简单" in text or "easy" in text or text in {"低", "simple"}:
+                return "简单"
+            return "中等"
+
+        def _difficulty_estimate(label: str) -> float:
+            if label == "困难":
+                return 8.8
+            if label == "简单":
+                return 4.2
+            return 6.8
+
+        def _bloom_level(value, difficulty_label_value: str) -> int:
+            try:
+                bloom = int(float(value))
+            except (TypeError, ValueError):
+                bloom = 5 if difficulty_label_value == "困难" else 4
+            return max(1, min(6, bloom))
+
+        async def _skeletal_fine_grained_retry(initial_reason: str, retry_count: int = 5) -> dict:
+            logger.warning(f"[分析] 题目{question_id} 触发 skeletal fine-grained 重试: {initial_reason}")
+            provider_errors_before = _last_provider_error_messages()
+            skeletal_prompt = (
+                "你是 DeepSeek V4 Pro。前序输出过长；现在只做极短审题恢复。\n"
+                "只输出一行 JSON，禁止 markdown/解释/完整答案/逐小问展开，总长度必须小于220个汉字。\n"
+                "字段只能是：{\"k\":[\"教材点1\",\"教材点2\",\"教材点3\"],\"d\":\"困难\","
+                "\"b\":5,\"l\":[\"点1\",\"点2\",\"点3\"],\"t\":\"误区\",\"s\":\"材料\","
+                "\"a\":\"\",\"r\":\"短评\"}\n"
+                "k 为教材知识点，l 恰好3个采分标签；所有字符串不超过8个汉字；a 可为空。\n"
+                f"分节：{section_header or '未知'}；题型：{question_type}。\n"
+                f"视觉线索：{visual_context_text[:120]}\n"
+                f"题干：{question_text[:500]}"
+            )
+            skeletal_prompt_hash = sha256(skeletal_prompt.encode("utf-8")).hexdigest()
+            skeletal_timeout = min(max(analysis_timeout, 80.0), 120.0)
+            try:
+                skeletal_response = await asyncio.wait_for(
+                    llm_call(
+                        messages=_question_messages(skeletal_prompt, []),
+                        max_tokens=1536,
+                        temperature=0,
+                        timeout=skeletal_timeout,
+                        purpose="question_analysis_retry",
+                    ),
+                    timeout=skeletal_timeout + 5.0,
+                )
+            except Exception as skeletal_exc:
+                return await _deterministic_length_recovery(
+                    f"{initial_reason}; skeletal_retry_failed: {skeletal_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            skeletal_response_length = len(skeletal_response) if skeletal_response else 0
+            try:
+                skeletal_json = self.extract_json(skeletal_response)
+                if not skeletal_json.startswith('{'):
+                    start = skeletal_json.find('{')
+                    if start != -1:
+                        skeletal_json = skeletal_json[start:]
+                if not skeletal_json.endswith('}'):
+                    end = skeletal_json.rfind('}')
+                    if end != -1:
+                        skeletal_json = skeletal_json[:end + 1]
+                skeletal = json.loads(skeletal_json)
+            except Exception as skeletal_parse_exc:
+                return await _deterministic_length_recovery(
+                    f"{initial_reason}; skeletal_retry_parse_failed: {skeletal_parse_exc}",
+                    retry_count=retry_count + 1,
+                )
+
+            diff_label = _difficulty_label(skeletal.get("d") or skeletal.get("diff") or skeletal.get("difficulty"))
+            bloom = _bloom_level(skeletal.get("b") or skeletal.get("bloom") or skeletal.get("bloom_level"), diff_label)
+            knowledge_points = _canonical_skeletal_knowledge_points(
+                _short_list(
+                    skeletal.get("k") or skeletal.get("kp") or skeletal.get("knowledge_points"),
+                    3,
+                    _fallback_knowledge_points() or ["遗传的基本规律", "基因突变", "基因表达与性状的关系"],
+                    item_limit=18,
+                )
+            )
+            labels = _short_list(
+                skeletal.get("l") or skeletal.get("labels") or skeletal.get("scoring_labels"),
+                3,
+                knowledge_points + ["证据定位", "机制分析", "综合评价"],
+                item_limit=8,
+            )
+            trap = _short_text(skeletal.get("t") or skeletal.get("trap") or skeletal.get("mistake"), 12, "证据混淆")
+            stimulus = _short_text(skeletal.get("s") or skeletal.get("stimulus"), 14, "题干材料")
+            answer = _short_text(skeletal.get("a") or skeletal.get("answer"), 20, "")
+            analysis_brief = _short_text(skeletal.get("r") or skeletal.get("analysis"), 28, "长题压缩审题恢复")
+            total_score = int(round(_infer_fallback_total_score()))
+            diff_estimate = _difficulty_estimate(diff_label)
+            shares = [0.34, 0.33, 0.33]
+            scoring_units = []
+            for index, share in enumerate(shares):
+                kp = knowledge_points[min(index, len(knowledge_points) - 1)]
+                scoring_units.append(
+                    {
+                        "seu_id": f"seu_{index + 1}",
+                        "label": labels[index],
+                        "score_share": share,
+                        "allocation_source": "inferred",
+                        "allocation_confidence": 0.65,
+                        "knowledge_links": [{"knowledge_point": kp, "share": 1.0}],
+                        "bloom_level": bloom,
+                        "competency_weights": {
+                            "生命观念": 0.15,
+                            "科学思维": 0.55,
+                            "科学探究": 0.25,
+                            "社会责任": 0.05,
+                        },
+                        "difficulty_estimate": min(10.0, diff_estimate + (0.2 if index == 2 else 0.0)),
+                        "reasoning_brief": labels[index],
+                    }
+                )
+            skeletal_result = {
+                "scoring_units": scoring_units,
+                "diagnostic_units": [
+                    {
+                        "du_id": "du_1",
+                        "option_or_trap": "trap_1",
+                        "distractor_type": "reading_trap",
+                        "misconception": trap,
+                        "trap_strength": 3 if diff_label == "困难" else 2,
+                        "knowledge_boundary": knowledge_points[0],
+                        "if_selected_means": [trap],
+                    }
+                ],
+                "stimulus_units": [
+                    {
+                        "su_id": "su_1",
+                        "stimulus_type": "multi" if question_media_items else "text",
+                        "complexity": 3 if diff_label == "困难" else 2,
+                        "is_core": True,
+                        "description": stimulus,
+                    }
+                ],
+                "answer": answer,
+                "total_score": total_score,
+                "detailed_analysis": analysis_brief,
+                "difficulty": diff_label,
+                "knowledge_points": knowledge_points,
+                "common_mistakes": [trap],
+            }
+
+            from llm_schemas import (
+                FineGrainedResult,
+                compute_summary_from_units,
+                validate_llm_output,
+                validate_score_conservation,
+            )
+
+            skeletal_result, normalization_notes = self._normalize_fine_grained_result(skeletal_result)
+            validated, ext_conf, val_errors = validate_llm_output(
+                skeletal_result,
+                FineGrainedResult,
+                f"题目{question_id} skeletal fine-grained retry",
+            )
+            fg = FineGrainedResult(**validated)
+            is_conserved, conservation_errors = validate_score_conservation(fg, fg.total_score)
+            if not is_conserved:
+                val_errors = (val_errors or []) + conservation_errors
+                ext_conf = min(ext_conf, 0.6)
+            summary = compute_summary_from_units(fg)
+            validated.update(summary)
+            validated["_fine_grained"] = {
+                "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
+                "diagnostic_units": [d.model_dump() if hasattr(d, 'model_dump') else d for d in fg.diagnostic_units],
+                "stimulus_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.stimulus_units],
+            }
+            validated["_extraction_confidence"] = min(ext_conf, 0.85)
+            validated["_analysis_version"] = "v2_skeletal_fine_grained_retry"
+            if val_errors:
+                validated["_validation_errors"] = val_errors
+            logger.info(
+                f"[分析] 题目{question_id} skeletal fine-grained 重试完成 "
+                f"(confidence={validated['_extraction_confidence']}, SEU={len(fg.scoring_units)})"
+            )
+            return attach_call_record(
+                validated,
+                "FineGrainedResult",
+                validated["_extraction_confidence"],
+                val_errors,
+                existing_calls=initial_calls,
+                prompt_id="biology.question_analysis.v2.skeletal_fine_grained_retry",
+                prompt_hash_value=skeletal_prompt_hash,
+                response_len=skeletal_response_length,
+                call_suffix="analysis-skeletal-fine-grained-retry",
+                retry_count=retry_count,
+                metadata_extra={
+                    "initial_error": initial_reason,
+                    "initial_provider_errors": provider_errors_before,
+                    "normalization_notes": normalization_notes,
+                    "recovery_mode": "llm_guided_skeletal_fine_grained",
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
+                    "input_trim": {
+                        "visual_context_chars": min(len(visual_context_text or ""), 240),
+                        "question_text_chars": min(len(question_text or ""), 900),
+                    },
+                },
             )
 
         async def _minimal_analysis_retry(initial_reason: str, retry_count: int = 1) -> dict:
@@ -711,13 +1683,28 @@ class QuestionAnalyzer:
                 f"Question content:\n{question_text[:3500]}"
             )
             minimal_prompt_hash = sha256(minimal_prompt.encode("utf-8")).hexdigest()
-            minimal_response = await llm_call(
-                messages=_question_messages(minimal_prompt, []),
-                max_tokens=8192,
-                temperature=0,
-                timeout=analysis_timeout,
-                purpose="question_analysis_retry",
-            )
+            minimal_timeout = min(max(analysis_timeout, 150.0), 180.0)
+            try:
+                minimal_response = await asyncio.wait_for(
+                    llm_call(
+                        messages=_question_messages(minimal_prompt, []),
+                        max_tokens=3072,
+                        temperature=0,
+                        timeout=minimal_timeout,
+                        purpose="question_analysis_retry",
+                    ),
+                    timeout=minimal_timeout + 5.0,
+                )
+            except Exception as minimal_exc:
+                if _should_attempt_skeletal_fine_grained_retry():
+                    return await _skeletal_fine_grained_retry(
+                        f"{initial_reason}; minimal_retry_failed: {minimal_exc}",
+                        retry_count=retry_count + 1,
+                    )
+                return await _deterministic_length_recovery(
+                    f"{initial_reason}; minimal_retry_failed: {minimal_exc}",
+                    retry_count=retry_count + 1,
+                )
             minimal_response_length = len(minimal_response) if minimal_response else 0
             minimal_json = self.extract_json(minimal_response)
             if not minimal_json.startswith('{'):
@@ -737,10 +1724,15 @@ class QuestionAnalyzer:
             )
             result["_extraction_confidence"] = ext_conf
             result["_analysis_version"] = "v1_length_recovery"
+            result["_fine_grained"] = {
+                "scoring_units": [],
+                "diagnostic_units": [],
+                "stimulus_units": [],
+            }
             if val_errors:
                 result["_validation_errors"] = val_errors
             logger.info(f"[分析] 题目{question_id} minimal JSON 重试完成 (confidence={ext_conf})")
-            return attach_call_record(
+            result = attach_call_record(
                 result,
                 "AnalysisResult",
                 ext_conf,
@@ -755,7 +1747,18 @@ class QuestionAnalyzer:
                     "initial_error": initial_reason,
                     "initial_provider_errors": provider_errors_before,
                     "recovery_mode": "minimal_json",
+                    "recovery_status": "ok" if not val_errors else "validation_warnings",
                 },
+            )
+            return await self._retry_missing_evidence_units(
+                analysis_payload=result,
+                question_id=question_id,
+                question_type=question_type,
+                section_header=section_header,
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+                timeout=analysis_timeout,
             )
 
         try:
@@ -765,12 +1768,15 @@ class QuestionAnalyzer:
                 total_img_size = sum(len(img) for img in question_images if img)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
-            response_text = await llm_call(
-                messages=_question_messages(full_prompt, []),
-                max_tokens=analysis_max_tokens,
-                temperature=0,
-                timeout=analysis_timeout,
-                purpose="question_analysis",
+            response_text = await asyncio.wait_for(
+                llm_call(
+                    messages=_question_messages(full_prompt, []),
+                    max_tokens=analysis_max_tokens,
+                    temperature=0,
+                    timeout=analysis_timeout,
+                    purpose="question_analysis",
+                ),
+                timeout=analysis_timeout + 10.0,
             )
             finish_reason = "stop"  # fallback 客户端已处理截断重试
 
@@ -936,22 +1942,27 @@ class QuestionAnalyzer:
                     )
                     compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
                     compact_prompt_id = "biology.question_analysis.v2.json_repair"
-                    compact_response = await llm_call(
-                        messages=_question_messages(
-                            "\n\n".join(
-                                part for part in [
-                                    compact_prompt,
-                                    visual_context_text,
-                                    f"题目内容：\n{question_text}",
-                                ]
-                                if part
+                    json_repair_timeout = min(max(analysis_timeout, 150.0), 180.0)
+                    json_repair_max_tokens = min(analysis_max_tokens, 4096)
+                    compact_response = await asyncio.wait_for(
+                        llm_call(
+                            messages=_question_messages(
+                                "\n\n".join(
+                                    part for part in [
+                                        compact_prompt,
+                                        visual_context_text[:1500],
+                                        f"题目内容：\n{question_text[:3500]}",
+                                    ]
+                                    if part
+                                ),
+                                [],
                             ),
-                            [],
+                            max_tokens=json_repair_max_tokens,
+                            temperature=0,
+                            timeout=json_repair_timeout,
+                            purpose="question_analysis_retry",
                         ),
-                        max_tokens=analysis_max_tokens,
-                        temperature=0,
-                        timeout=analysis_timeout,
-                        purpose="question_analysis_retry",
+                        timeout=json_repair_timeout + 5.0,
                     )
                     compact_response_length = len(compact_response) if compact_response else 0
                     compact_json = self.extract_json(compact_response)
@@ -1031,7 +2042,7 @@ class QuestionAnalyzer:
             logger.error(f"[分析] 题目{question_id} JSON解析失败（外层捕获）: {e}")
             raise
         except Exception as e:
-            if use_v2 and _is_length_provider_failure(e):
+            if use_v2 and (isinstance(e, asyncio.TimeoutError) or _is_length_provider_failure(e)):
                 return await _compact_analysis_retry(str(e))
             logger.error(f"[分析] 题目{question_id} API调用失败: {str(e)}", exc_info=True)
             raise
@@ -1049,7 +2060,59 @@ class QuestionAnalyzer:
         is_big_question = total_score >= 8 or question_type in ("short_answer", "non_choice", "experiment")
         if not is_big_question:
             return False
-        return not fine_grained.get("diagnostic_units") or not fine_grained.get("stimulus_units")
+        stimulus_units = fine_grained.get("stimulus_units") or []
+        return (
+            not fine_grained.get("diagnostic_units")
+            or not stimulus_units
+            or QuestionAnalyzer._stimulus_units_blank(stimulus_units)
+        )
+
+    @staticmethod
+    def _stimulus_units_blank(units: list) -> bool:
+        if not units:
+            return False
+        for unit in units:
+            if not isinstance(unit, dict):
+                return True
+            description = str(unit.get("description") or "").strip()
+            try:
+                complexity = float(unit.get("complexity") or 0)
+            except (TypeError, ValueError):
+                complexity = 0.0
+            if description and (bool(unit.get("is_core")) or complexity > 1):
+                return False
+        return True
+
+    @staticmethod
+    def _fallback_stimulus_units(
+        question_text: str,
+        question_media_items: list | None = None,
+        visual_context_text: str = "",
+    ) -> list[dict]:
+        source = " ".join(str(visual_context_text or "").split())
+        if not source:
+            source = " ".join(str(question_text or "").split())
+        description = source[:30] if source else "题干材料"
+        media_types = {
+            str(item.get("type") or item.get("media_type") or "").lower()
+            for item in (question_media_items or [])
+            if isinstance(item, dict)
+        }
+        if "table" in media_types:
+            stimulus_type = "table"
+        elif "image" in media_types or question_media_items:
+            stimulus_type = "multi"
+        else:
+            stimulus_type = "text"
+        return [
+            {
+                "su_id": "su_1",
+                "stimulus_type": stimulus_type,
+                "complexity": 3 if question_media_items else 2,
+                "is_core": True,
+                "description": description,
+            }
+        ]
 
     async def _retry_missing_evidence_units(
         self,
@@ -1150,6 +2213,18 @@ class QuestionAnalyzer:
             validation_errors.append(str(exc))
             logger.warning(f"[分析] 题目{question_id} evidence units 补充失败: {exc}")
 
+        current_sus = fine_grained.get("stimulus_units") or []
+        if not current_sus or self._stimulus_units_blank(current_sus):
+            fallback_sus = self._fallback_stimulus_units(
+                question_text=question_text,
+                question_media_items=question_media_items,
+                visual_context_text=visual_context_text,
+            )
+            fine_grained["stimulus_units"] = fallback_sus
+            analysis_payload["stimulus_units"] = fallback_sus
+            validation_errors.append("stimulus_units_deterministic_repair")
+            logger.info(f"[分析] 题目{question_id} stimulus units 确定性补齐完成")
+
         retry_metadata = {
             "response_length": len(response_text or ""),
             "validation_errors": validation_errors,
@@ -1196,15 +2271,61 @@ class QuestionAnalyzer:
             "只返回一个合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
-            "scoring_units 输出 3-5 个，按小问或采分点合并，score_share 总和必须等于 1.0。\n"
+            "scoring_units 输出 3-4 个，按小问或采分点合并，score_share 总和必须等于 1.0。\n"
             "每个 scoring_unit 必须包含：seu_id, label, score_share, allocation_source, "
             "allocation_confidence, knowledge_links, bloom_level, competency_weights, "
             "difficulty_estimate, reasoning_brief。\n"
-            "knowledge_links 每个单元 1-2 个，share 总和等于 1.0。\n"
+            "knowledge_links 每个单元只输出 1 个，share=1.0。\n"
             "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
-            "knowledge_points 最多 5 个；common_mistakes 最多 3 个；detailed_analysis 不超过 120 个汉字。\n"
-            "大题必须输出 2 个 diagnostic_units 和 1-2 个 stimulus_units；"
-            "只有选择题且确无材料时才允许 stimulus_units=[]。所有 label/reason 字段不超过 40 个汉字。"
+            "knowledge_points 最多 4 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 80 个汉字。\n"
+            "大题只输出 2 个 diagnostic_units 和 1 个 stimulus_units；"
+            "只有选择题且确无材料时才允许 stimulus_units=[]。所有 label/reason 字段不超过 24 个汉字。"
+        )
+
+    @staticmethod
+    def _get_ultra_compact_analysis_retry_prompt(question_type: str, section_header: str = None) -> str:
+        section = section_header or "未提供"
+        return (
+            f"分节信息：{section}\n"
+            f"题型：{question_type}\n"
+            "你是高中生物试题元数据分析器。前两次输出过长，现在只做超短结构化恢复。\n"
+            "只返回一个 minified JSON 对象，不要 markdown，不要解释，整体不超过 1500 个汉字。\n"
+            "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
+            "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
+            "scoring_units 必须恰好 3 个，score_share 分别接近 0.34,0.33,0.33 且总和为 1.0；"
+            "每个对象含 seu_id,label,score_share,allocation_source,allocation_confidence,"
+            "knowledge_links,bloom_level,competency_weights,difficulty_estimate,reasoning_brief。\n"
+            "knowledge_links 每个 SEU 只给 1 个，share=1.0；label 和 reasoning_brief 不超过 12 个汉字。\n"
+            "diagnostic_units 必须恰好 2 个，每个含 du_id,option_or_trap,distractor_type,"
+            "misconception,trap_strength,knowledge_boundary,if_selected_means；字符串不超过 12 个汉字。\n"
+            "stimulus_units 必须恰好 1 个，含 su_id,stimulus_type,complexity,is_core,description；"
+            "description 不超过 14 个汉字。\n"
+            "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
+            "knowledge_points 最多 3 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 40 个汉字；"
+            "difficulty 只能是 简单、中等、困难。"
+        )
+
+    @staticmethod
+    def _get_micro_compact_analysis_retry_prompt(
+        question_type: str,
+        section_header: str = None,
+        total_score: float = 0,
+    ) -> str:
+        section = section_header or "未提供"
+        score = int(total_score) if isinstance(total_score, (int, float)) and total_score > 0 else 0
+        return (
+            f"分节信息：{section}\n"
+            f"题型：{question_type}\n"
+            f"total_score 必须填 {score}。\n"
+            "前序输出太长。现在只返回一个极小 JSON，不要解释，不要 markdown，不要逐小问作答。\n"
+            "整体限 900 个汉字以内；answer 可为空字符串；detailed_analysis 固定为一句短语。\n"
+            "严格使用这些顶层字段：scoring_units,diagnostic_units,stimulus_units,answer,total_score,"
+            "detailed_analysis,difficulty,knowledge_points,common_mistakes。\n"
+            "scoring_units 恰好3个，score_share 固定为0.34,0.33,0.33；"
+            "每个 SEU 只保留一个 knowledge_link，share=1.0；所有字符串不超过8个汉字。\n"
+            "diagnostic_units 恰好1个；stimulus_units 恰好1个；common_mistakes 恰好1个；"
+            "knowledge_points 最多3个。\n"
+            "必须用数字：bloom_level=4或5，trap_strength=2或3，complexity=2或3，difficulty_estimate=7或8。"
         )
 
     @staticmethod

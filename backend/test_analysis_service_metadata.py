@@ -775,6 +775,47 @@ def test_successful_evidence_repair_call_is_not_a_retry_warning():
     )
 
 
+def test_successful_feature_compact_retry_is_not_a_retry_warning():
+    service = _service_without_dependencies()
+    feature_call = _call("question-13-feature", "feature_extraction", "FeatureResult")
+    feature_call["retry_count"] = 1
+    feature_call["metadata"] = {
+        "provider_errors": [],
+        "feature_status": "ok",
+        "recovery_mode": "api_failure_compact_retry",
+        "recovery_status": "ok",
+    }
+    question = {
+        "id": 13,
+        "content": "stem",
+        "total_score": 4,
+        "analysis_confidence": 0.9,
+        "analysis": {
+            "knowledge_points": ["蛋白质的定向转运"],
+            "_extraction_confidence": 0.9,
+            "_llm_calls": [_call("question-13-analysis", "question_analysis", "AnalysisResult")],
+        },
+        "difficulty": {
+            "final_difficulty": 5.9,
+            "features": {
+                "_feature_status": "ok",
+                "_extraction_confidence": 1.0,
+                "_llm_calls": [feature_call],
+            },
+        },
+        "competency": {
+            "primary_competency": "科学思维",
+            "_llm_calls": [_call("question-13-competency", "competency_analysis", "CompetencyResult")],
+        },
+    }
+
+    service._attach_metadata_envelope(question)
+
+    warnings = question["_metadata_envelope"]["warnings"]
+    assert "llm_retry:feature_extraction" not in warnings
+    assert "llm_parse_failure:feature_extraction" not in warnings
+
+
 def test_internal_analysis_warnings_enter_metadata_and_block_pipeline():
     service = _service_without_dependencies()
     question = {
@@ -824,6 +865,23 @@ def test_metadata_retry_on_parse_or_evidence_gap_warnings(warning):
     question = _ready_question_with_envelope(warnings=[warning])
 
     assert AnalysisService._metadata_retry_needed(question) is True
+
+
+def test_seu_competency_supplement_failure_is_soft_when_weights_exist():
+    audit = AnalysisService.build_pipeline_audit({
+        "warning_questions": [
+            {
+                "id": 19,
+                "warnings": ["competency_supplement_soft_failed:empty response"],
+            }
+        ],
+    })
+
+    assert audit["status"] == "ok"
+    assert audit["blockers"] == []
+    assert audit["warnings"] == [
+        {"id": 19, "warning": "competency_supplement_soft_failed:empty response"}
+    ]
 
 
 def test_split_integrity_rejects_missing_tail_question_from_source_text():

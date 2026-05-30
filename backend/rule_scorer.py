@@ -263,26 +263,41 @@ def aggregate_big_question(subquestions: list, dependencies: list,
     has_strong_dependency = any(strength == "strong" for _, _, strength in valid_edges)
     has_weak_dependency = any(strength == "weak" for _, _, strength in valid_edges)
     has_dependency = bool(valid_edges)
-    branch_cap = 2.2 if has_dependency else 1.4
-    branch_load = min(branch_cap, 0.42 * (max(0, off_path) ** 0.5))
-
-    path_length = len(path_nodes)
     shared_ctx = _bounded_int(global_features.get("shared_context_load", 1), 1, 3, 1)
     method_novelty = _bounded_int(global_features.get("global_method_novelty", 1), 1, 3, 1)
-    context_load = 0.25 * max(0, shared_ctx - 1) + 0.35 * max(0, method_novelty - 1)
-    effective_steps = _dependent_path_load(path_nodes, dependencies) + branch_load + context_load
-
     total_points = sum(sq["points"] for sq in subquestions)
     substantial_nodes = [
         sq for sq in subquestions
         if total_points > 0 and sq["points"] / total_points >= 0.15
     ] or list(path_nodes)
+    independent_multi_part = (
+        not has_dependency
+        and total_points >= 10
+        and len(substantial_nodes) >= 3
+        and (shared_ctx >= 2 or method_novelty >= 2)
+    )
+    branch_cap = 2.2 if has_dependency or independent_multi_part else 1.4
+    branch_factor = 0.50 if independent_multi_part else 0.42
+    branch_load = min(branch_cap, branch_factor * (max(0, off_path) ** 0.5))
+
+    path_length = len(path_nodes)
+    context_load = 0.25 * max(0, shared_ctx - 1) + 0.35 * max(0, method_novelty - 1)
+    if independent_multi_part:
+        context_load += min(0.35, 0.15 * (len(substantial_nodes) - 2))
+    effective_steps = _dependent_path_load(path_nodes, dependencies) + branch_load + context_load
+
     structural_nodes = list(path_nodes)
     for sq in substantial_nodes:
         if sq not in structural_nodes:
             structural_nodes.append(sq)
 
-    wm_raw = max(sq["working_memory"] for sq in structural_nodes) + 0.25 * (path_length - 1) + 0.25 * shared_ctx
+    wm_raw = (
+        max(sq["working_memory"] for sq in structural_nodes)
+        + 0.25 * (path_length - 1)
+        + 0.25 * shared_ctx
+    )
+    if independent_multi_part:
+        wm_raw += min(0.45, 0.15 * (len(substantial_nodes) - 1))
     wm = min(5, max(1, round(wm_raw)))
 
     novelty = max(
@@ -319,6 +334,11 @@ def aggregate_big_question(subquestions: list, dependencies: list,
         has_strong_dependency
         or has_weak_dependency
         or path_length >= 2
+        or (
+            independent_multi_part
+            and shared_ctx >= 2
+            and method_novelty >= 2
+        )
         or (shared_ctx >= 2 and method_novelty >= 3 and total_points >= 10 and len(subquestions) >= 3)
     ):
         chain_coupling = 2

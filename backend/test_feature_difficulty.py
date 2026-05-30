@@ -220,10 +220,10 @@ class TestPipelineRepresentation:
         f.update(overrides)
         return f
 
-    def test_primary_repr_merged_via_kwarg(self):
-        """主模型的 representation_complexity 通过 analysis_result 传入。"""
+    def test_gemini_repr_merged_via_kwarg(self):
+        """Gemini 的 representation_complexity 通过 analysis_result 传入。"""
         mock_features = self._mock_v3_features(representation_complexity=1)
-        primary_analysis = {
+        gemini_analysis = {
             "representation_complexity": 3,
             "representation_is_core_to_solving": True,
         }
@@ -233,14 +233,14 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "观察系谱图...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=primary_analysis,
+                    analysis_result=gemini_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] == 3
 
-    def test_primary_repr_ignored_when_not_core(self):
+    def test_gemini_repr_ignored_when_not_core(self):
         mock_features = self._mock_v3_features(representation_complexity=2)
-        primary_analysis = {
+        gemini_analysis = {
             "representation_complexity": 1,
             "representation_is_core_to_solving": False,
         }
@@ -250,7 +250,7 @@ class TestPipelineRepresentation:
                 pipeline.evaluate_with_refinement(
                     question={"content": "某题...", "question_type": "选择题",
                               "correct_answer": "A", "total_score": 2},
-                    analysis_result=primary_analysis,
+                    analysis_result=gemini_analysis,
                 )
             )
         assert result["features"]["representation_complexity"] <= 2
@@ -971,6 +971,189 @@ class TestFineGrainedDifficultyEvidence:
         assert 7.4 <= adjusted <= 7.8
         assert "fragmented_medium_big_item_moderation" in flags
 
+    def test_evidence_rich_big_question_restores_understated_structural_load(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.10, "difficulty_estimate": 3.0, "bloom_level": 3,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.10, "difficulty_estimate": 4.0, "bloom_level": 3,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.12, "difficulty_estimate": 5.0, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.12, "difficulty_estimate": 5.5, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.12, "difficulty_estimate": 6.0, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.12, "difficulty_estimate": 6.3, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.12, "difficulty_estimate": 6.6, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.10, "difficulty_estimate": 7.0, "bloom_level": 5,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.10, "difficulty_estimate": 7.2, "bloom_level": 5,
+                 "allocation_confidence": 0.75},
+            ],
+            "diagnostic_units": [
+                {"description": "food-web level misconception", "trap_strength": 3},
+                {"description": "species relationship misconception", "trap_strength": 2},
+                {"description": "ecosystem stability misconception", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            5.6,
+            {
+                "working_memory": 3,
+                "reasoning_steps": 4,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 2,
+                "representation_complexity": 2,
+                "info_density": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted >= 7.4
+        assert "evidence_rich_big_question_floor" in flags
+
+    def test_dense_diagnostic_big_question_floor_handles_coarser_seu_splits(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.16, "difficulty_estimate": 4.0, "bloom_level": 3,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.16, "difficulty_estimate": 5.0, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.17, "difficulty_estimate": 5.8, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.17, "difficulty_estimate": 6.2, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.17, "difficulty_estimate": 6.8, "bloom_level": 4,
+                 "allocation_confidence": 0.75},
+                {"score_share": 0.17, "difficulty_estimate": 7.0, "bloom_level": 5,
+                 "allocation_confidence": 0.75},
+            ],
+            "diagnostic_units": [
+                {"description": "table reconstruction trap", "trap_strength": 3},
+                {"description": "food-web relation trap", "trap_strength": 2},
+                {"description": "stability inference trap", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            7.1,
+            {
+                "working_memory": 3,
+                "reasoning_steps": 4,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 2,
+                "representation_complexity": 2,
+                "info_density": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted >= 7.4
+        assert "evidence_rich_big_question_floor" in flags
+
+    def test_evidence_rich_big_question_can_reach_gemini_baseline_floor(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.14, "difficulty_estimate": 4.0, "bloom_level": 3,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.14, "difficulty_estimate": 5.0, "bloom_level": 4,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.14, "difficulty_estimate": 5.8, "bloom_level": 4,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.14, "difficulty_estimate": 6.5, "bloom_level": 4,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.14, "difficulty_estimate": 7.0, "bloom_level": 5,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.15, "difficulty_estimate": 7.4, "bloom_level": 5,
+                 "allocation_confidence": 0.8},
+                {"score_share": 0.15, "difficulty_estimate": 7.6, "bloom_level": 5,
+                 "allocation_confidence": 0.8},
+            ],
+            "diagnostic_units": [
+                {"description": "novel system misconception", "trap_strength": 3},
+                {"description": "pathway interpretation misconception", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            7.1,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 5,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 2,
+                "representation_complexity": 2,
+                "info_density": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted >= 8.0
+        assert "evidence_rich_big_question_floor" in flags
+
+    def test_high_value_method_rich_big_question_keeps_upper_load_floor(self):
+        pipeline = DifficultyPipeline()
+        analysis = {"_fine_grained": {
+            "scoring_units": [
+                {"score_share": 0.10, "difficulty_estimate": 4.0, "bloom_level": 3,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.12, "difficulty_estimate": 5.0, "bloom_level": 3,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.12, "difficulty_estimate": 6.0, "bloom_level": 4,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.12, "difficulty_estimate": 6.5, "bloom_level": 4,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.12, "difficulty_estimate": 7.0, "bloom_level": 5,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.14, "difficulty_estimate": 7.5, "bloom_level": 5,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.14, "difficulty_estimate": 8.0, "bloom_level": 5,
+                 "allocation_confidence": 0.65},
+                {"score_share": 0.14, "difficulty_estimate": 8.2, "bloom_level": 5,
+                 "allocation_confidence": 0.65},
+            ],
+            "diagnostic_units": [
+                {"description": "primer design trap", "trap_strength": 3},
+                {"description": "insert orientation trap", "trap_strength": 2},
+                {"description": "expression-system inference trap", "trap_strength": 2},
+            ],
+        }}
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            7.3,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 6,
+                "trap_density": 2,
+                "novelty": 3,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+                "info_density": 3,
+            },
+            analysis,
+            is_big_question=True,
+            total_score=14,
+        )
+
+        assert adjusted >= 8.6
+        assert "evidence_rich_big_question_floor" in flags
+
 
 class TestParseBigQuestion:
     """大题结构化 JSON 解析测试。"""
@@ -1434,6 +1617,59 @@ class TestBigQuestionPipeline:
         assert call["input_refs"]["media_count"] == 1
         assert call["input_refs"]["media_types"] == ["image"]
         assert call["metadata"]["visual_context_source"] == "qwen_vision"
+
+    def test_feature_extraction_retries_compact_after_empty_provider_response(self):
+        raw_json = json.dumps({
+            "working_memory": 3,
+            "working_memory_reason": "compare conditions",
+            "reasoning_steps": 4,
+            "steps_detail": "read stem then infer",
+            "chain_coupling": 1,
+            "coupling_reason": "independent choices",
+            "trap_density": 2,
+            "trap_reason": "absolute wording",
+            "novelty": 2,
+            "novelty_reason": "variant",
+            "knowledge_breadth": 2,
+            "breadth_reason": "two concepts",
+            "bloom": 4,
+            "bloom_reason": "analysis",
+            "info_density": 2,
+            "density_reason": "moderate",
+            "representation_complexity": 1,
+            "representation_reason": "text",
+            "quality_score": 4,
+            "quality_scientific": "ok",
+            "quality_normative": "ok",
+            "quality_language": "ok",
+            "quality_context": "ok",
+            "quality_sensitivity": "ok",
+            "teacher_comment": "retry recovered",
+        })
+        calls = []
+
+        async def fake_send_message(prompt, **kwargs):
+            calls.append(prompt)
+            if len(calls) == 1:
+                raise RuntimeError("LLM 返回空内容，视为失败触发 fallback")
+            return raw_json
+
+        with patch("feature_extractor.send_message_gpt", new=AsyncMock(side_effect=fake_send_message)):
+            from feature_extractor import extract_features
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_features(
+                    "question with an occasional empty provider response",
+                    subject="biology",
+                    question_type="single_choice",
+                )
+            )
+
+        assert result["_feature_status"] == "ok"
+        assert result.get("_feature_failed") is not True
+        assert len(calls) == 2
+        call = result["_llm_calls"][0]
+        assert call["retry_count"] == 1
+        assert call["metadata"]["recovery_mode"] == "api_failure_compact_retry"
 
     def test_full_chain_with_raw_json(self):
         """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""
@@ -2277,6 +2513,53 @@ class TestDifficultyFacetAdjustments:
         assert low >= 7.8
         assert high - low <= 1.0
 
+    def test_general_visual_big_question_ceiling_prevents_q17_top_score(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        analysis_result = {
+            "knowledge_points": ["光合作用的光反应", "碳固定", "人工光合"],
+            "detailed_analysis": "比较人工光合细胞器和自然光反应，分析pH影响与人工系统优势。",
+            "_fine_grained": {
+                "scoring_units": [
+                    {"score_share": 0.27, "difficulty_estimate": 6.0, "bloom_level": 4, "allocation_confidence": 0.8,
+                     "label": "比较人工与自然光反应", "knowledge_links": [{"knowledge_point": "光合作用的光反应", "share": 1.0}]},
+                    {"score_share": 0.09, "difficulty_estimate": 2.0, "bloom_level": 2, "allocation_confidence": 0.9,
+                     "label": "识记ATP合成条件", "knowledge_links": [{"knowledge_point": "ATP", "share": 1.0}]},
+                    {"score_share": 0.09, "difficulty_estimate": 4.0, "bloom_level": 3, "allocation_confidence": 0.9,
+                     "label": "应用碳固定途径", "knowledge_links": [{"knowledge_point": "碳固定", "share": 1.0}]},
+                    {"score_share": 0.27, "difficulty_estimate": 6.5, "bloom_level": 4, "allocation_confidence": 0.8,
+                     "label": "分析pH影响机制", "knowledge_links": [{"knowledge_point": "光合作用的光反应", "share": 1.0}]},
+                    {"score_share": 0.28, "difficulty_estimate": 7.5, "bloom_level": 5, "allocation_confidence": 0.7,
+                     "label": "评价人工系统优势", "knowledge_links": [{"knowledge_point": "人工光合", "share": 1.0}]},
+                ],
+                "diagnostic_units": [{"trap_strength": 3}, {"trap_strength": 2}],
+                "stimulus_units": [
+                    {"complexity": 3, "is_core": True, "description": "人工光合细胞器示意图"}
+                ],
+            },
+        }
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            10.0,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 8,
+                "chain_coupling": 2,
+                "trap_density": 2,
+                "novelty": 3,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+                "info_density": 3,
+            },
+            analysis_result,
+            is_big_question=True,
+            total_score=11,
+        )
+
+        assert adjusted == 8.6
+        assert "general_visual_big_question_ceiling" in flags
+
     def test_fragmented_medium_big_item_is_capped_without_decisive_high_order_path(self):
         from difficulty_pipeline import DifficultyPipeline
 
@@ -2314,6 +2597,266 @@ class TestDifficultyFacetAdjustments:
 
         assert adjusted <= 7.8
         assert "fragmented_medium_big_item_moderation" in flags
+
+    def test_high_value_biotech_synthesis_floor_restores_top_difficulty(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        analysis_result = {
+            "knowledge_points": ["PCR引物设计", "基因表达载体构建", "代谢工程"],
+            "_fine_grained": {
+                "scoring_units": [
+                    {
+                        "score_share": 0.34,
+                        "difficulty_estimate": 8.8,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.75,
+                        "label": "分析PCR引物序列",
+                        "knowledge_links": [
+                            {"knowledge_point": "PCR技术扩增目的基因", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.33,
+                        "difficulty_estimate": 9.0,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.75,
+                        "label": "构建基因表达载体",
+                        "knowledge_links": [
+                            {"knowledge_point": "基因表达载体构建", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.33,
+                        "difficulty_estimate": 8.5,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.7,
+                        "label": "分析In-Fusion重组和表达结果",
+                        "knowledge_links": [
+                            {"knowledge_point": "In-Fusion克隆", "share": 0.5},
+                            {"knowledge_point": "基因表达分析", "share": 0.5},
+                        ],
+                    },
+                ],
+                "diagnostic_units": [{"trap_strength": 2}, {"trap_strength": 2}],
+                "stimulus_units": [
+                    {"complexity": 3, "is_core": True, "description": "引物载体表达数据"}
+                ],
+            },
+        }
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            9.1,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 6,
+                "chain_coupling": 2,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+                "info_density": 3,
+            },
+            analysis_result,
+            is_big_question=True,
+            total_score=14,
+        )
+
+        assert adjusted == 10.0
+        assert "high_value_biotech_synthesis_floor" in flags
+
+    def test_high_value_biotech_synthesis_floor_catches_q21_evidence_rich_score(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        analysis_result = {
+            "knowledge_points": ["PCR技术扩增目的基因", "In-Fusion克隆", "番茄红素代谢工程"],
+            "detailed_analysis": "结合PSY融合蛋白、引物方向、In-Fusion重组和表达分析判断番茄红素合成。",
+            "_fine_grained": {
+                "scoring_units": [
+                    {
+                        "score_share": 0.14,
+                        "difficulty_estimate": 8.4,
+                        "bloom_level": 3,
+                        "allocation_confidence": 0.8,
+                        "label": "阅读序列图并判断引物方向",
+                        "knowledge_links": [
+                            {"knowledge_point": "序列分析（阅读序列图）", "share": 0.5},
+                            {"knowledge_point": "引物方向与扩增", "share": 0.5},
+                        ],
+                    },
+                    {
+                        "score_share": 0.14,
+                        "difficulty_estimate": 8.8,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.8,
+                        "label": "分析In-Fusion重组同源臂",
+                        "knowledge_links": [
+                            {"knowledge_point": "In-Fusion克隆", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.14,
+                        "difficulty_estimate": 8.8,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.8,
+                        "label": "评价表达载体构建与PSY表达结果",
+                        "knowledge_links": [
+                            {"knowledge_point": "基因表达载体构建", "share": 0.5},
+                            {"knowledge_point": "基因表达分析", "share": 0.5},
+                        ],
+                    },
+                    {
+                        "score_share": 0.58,
+                        "difficulty_estimate": 8.6,
+                        "bloom_level": 4,
+                        "allocation_confidence": 0.75,
+                        "label": "综合番茄红素代谢工程结果",
+                        "knowledge_links": [
+                            {"knowledge_point": "番茄红素与PSY", "share": 1.0}
+                        ],
+                    },
+                ],
+                "diagnostic_units": [{"trap_strength": 2}, {"trap_strength": 2}],
+                "stimulus_units": [
+                    {"complexity": 3, "is_core": True, "description": "序列图、引物、表达结果"}
+                ],
+            },
+        }
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.6,
+            {
+                "working_memory": 5,
+                "reasoning_steps": 6,
+                "chain_coupling": 2,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 3,
+                "info_density": 3,
+            },
+            analysis_result,
+            is_big_question=True,
+            total_score=14,
+        )
+
+        assert adjusted == 10.0
+        assert "high_value_biotech_synthesis_floor" in flags
+
+    def test_high_value_breeding_engineering_floor_restores_q20_difficulty(self):
+        from difficulty_pipeline import DifficultyPipeline
+
+        pipeline = DifficultyPipeline()
+        analysis_result = {
+            "knowledge_points": [
+                "智能保持系",
+                "杂交水稻的繁育体系",
+                "配子类型与比例",
+            ],
+            "detailed_analysis": "结合智能保持系、花粉致死、育性恢复和基因工程构建分析杂交水稻繁育体系。",
+            "_fine_grained": {
+                "scoring_units": [
+                    {
+                        "score_share": 0.16,
+                        "difficulty_estimate": 7.6,
+                        "bloom_level": 4,
+                        "allocation_confidence": 0.75,
+                        "label": "识别智能保持系",
+                        "reasoning_brief": "分析雄性不育系与保持系关系",
+                        "knowledge_links": [
+                            {"knowledge_point": "雄性不育系与杂交育种", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.16,
+                        "difficulty_estimate": 7.8,
+                        "bloom_level": 4,
+                        "allocation_confidence": 0.75,
+                        "label": "解释花粉致死",
+                        "reasoning_brief": "推断可育花粉与育性恢复",
+                        "knowledge_links": [
+                            {"knowledge_point": "花粉致死与育性恢复", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.17,
+                        "difficulty_estimate": 8.0,
+                        "bloom_level": 4,
+                        "allocation_confidence": 0.75,
+                        "label": "分析配子分离",
+                        "reasoning_brief": "依据配子类型和自交结果判断",
+                        "knowledge_links": [
+                            {"knowledge_point": "基因的分离定律", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.17,
+                        "difficulty_estimate": 8.2,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.7,
+                        "label": "评价杂种优势",
+                        "reasoning_brief": "说明优势退化与繁育体系设计",
+                        "knowledge_links": [
+                            {"knowledge_point": "杂种优势", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.17,
+                        "difficulty_estimate": 8.4,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.7,
+                        "label": "判断基因工程构建",
+                        "reasoning_brief": "结合转基因构建策略分析",
+                        "knowledge_links": [
+                            {"knowledge_point": "基因工程的基本操作程序", "share": 1.0}
+                        ],
+                    },
+                    {
+                        "score_share": 0.17,
+                        "difficulty_estimate": 8.2,
+                        "bloom_level": 5,
+                        "allocation_confidence": 0.7,
+                        "label": "整合繁育流程",
+                        "reasoning_brief": "综合杂交水稻繁育体系",
+                        "knowledge_links": [
+                            {"knowledge_point": "杂交水稻育种原理", "share": 1.0}
+                        ],
+                    },
+                ],
+                "diagnostic_units": [
+                    {"trap_strength": 3},
+                    {"trap_strength": 2},
+                ],
+                "stimulus_units": [
+                    {
+                        "complexity": 3,
+                        "is_core": True,
+                        "description": "杂交水稻智能保持系和花粉育性材料",
+                    }
+                ],
+            },
+        }
+
+        adjusted, flags = pipeline._apply_fine_grained_adjustments(
+            8.1,
+            {
+                "working_memory": 4,
+                "reasoning_steps": 5,
+                "chain_coupling": 2,
+                "trap_density": 2,
+                "novelty": 2,
+                "knowledge_breadth": 3,
+                "representation_complexity": 1,
+                "info_density": 2,
+            },
+            analysis_result,
+            is_big_question=True,
+            total_score=12,
+        )
+
+        assert adjusted == 9.2
+        assert "high_value_breeding_engineering_floor" in flags
 
 
 class TestQualityScoreGate:
@@ -2512,6 +3055,30 @@ class TestCriticalPathWeighted:
         )
 
         assert result["novelty"] == 3
+
+    def test_independent_substantial_big_question_keeps_shared_context_load(self):
+        from rule_scorer import aggregate_big_question
+
+        subquestions = [
+            {"id": 1, "points": 3, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 2, "points": 3, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 3, "points": 3, "reasoning_steps": 3, "working_memory": 3,
+             "trap_density": 2, "novelty": 2, "knowledge_breadth": 2},
+            {"id": 4, "points": 2, "reasoning_steps": 2, "working_memory": 2,
+             "trap_density": 1, "novelty": 1, "knowledge_breadth": 1},
+        ]
+
+        result = aggregate_big_question(
+            subquestions,
+            [],
+            {"shared_context_load": 2, "global_method_novelty": 2},
+        )
+
+        assert result["effective_steps"] >= 5.2
+        assert result["working_memory"] >= 4
+        assert result["chain_coupling"] == 2
 
 
 class TestBiologyMethodFloors:

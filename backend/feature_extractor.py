@@ -490,9 +490,10 @@ async def extract_features(question_text: str, options: str = "",
                             question_block=question_block, qtype_hint=qtype_hint)
     else:
         prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
+    visual_call_record = None
+    visual_context_text = ""
+    prompt_for_llm = prompt
     try:
-        visual_call_record = None
-        prompt_for_llm = prompt
         if media_input_refs(media_items):
             visual_context_text, visual_call_record = await extract_visual_context(
                 media_items,
@@ -604,12 +605,87 @@ async def extract_features(question_text: str, options: str = "",
         )
     except Exception as e:
         logger.error(f"特征提取 API 调用失败: {e}")
+        try:
+            retry_prompt = build_compact_feature_retry_prompt(
+                question_text,
+                options,
+                correct_answer,
+                question_type,
+                visual_context_text if visual_call_record else "",
+            )
+            raw_retry = await _send_prompt(
+                retry_prompt,
+                max_tokens=4096,
+                temperature=0,
+                purpose="feature_extraction",
+                media_items=None,
+            )
+            result = parse_features(raw_retry, include_status=True)
+
+            from llm_schemas import validate_llm_output, FeatureResult, check_consistency
+            validated, ext_conf, val_errors = validate_llm_output(result, FeatureResult, "特征提取API失败重试")
+            for k, v in validated.items():
+                if k in result or k in FEATURE_RANGES:
+                    result[k] = v
+
+            consistency_score, consistency_flags = check_consistency(result)
+            result["_extraction_confidence"] = ext_conf
+            result["_consistency_confidence"] = consistency_score
+            if val_errors:
+                result["_validation_errors"] = val_errors
+            if consistency_flags:
+                result["_consistency_flags"] = consistency_flags
+
+            completeness = len([k for k in FEATURE_RANGES if k in result])
+            completeness += len([k for k in _REASON_KEYS if k in result])
+            completeness += len([k for k in _QUALITY_KEYS if k in result])
+            completeness += (1 if "bloom_distribution" in result else 0)
+            completeness += (1 if "quality_score" in result else 0)
+            raw_core_count = result.get("_raw_core_count", 0)
+            if raw_core_count >= 6 and completeness >= 18:
+                result["_feature_status"] = "ok"
+                logger.info(f"[特征提取] API失败后紧凑重试成功 raw_core={raw_core_count}")
+            elif raw_core_count >= 4:
+                result["_feature_status"] = "partial"
+                logger.warning(f"[特征提取] API失败后紧凑重试部分可用 raw_core={raw_core_count}/6")
+            else:
+                raise RuntimeError(f"compact retry incomplete raw_core={raw_core_count}")
+
+            return _attach_llm_call(
+                result,
+                call_id=f"{subject}-feature-extraction",
+                purpose="feature_extraction",
+                prompt_id=f"{subject}.feature_extraction",
+                prompt=retry_prompt,
+                input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
+                parsed_schema="FeatureResult",
+                confidence=ext_conf,
+                validation_errors=val_errors,
+                retry_count=1,
+                existing_calls=[visual_call_record] if visual_call_record else None,
+                metadata={
+                    "response_length": len(raw_retry),
+                    "feature_status": result.get("_feature_status"),
+                    "raw_core_count": raw_core_count,
+                    "parse_recovery": result.get("_parse_recovery"),
+                    "recovery_mode": "api_failure_compact_retry",
+                    "recovery_status": "ok" if result.get("_feature_status") == "ok" else "partial",
+                    "original_error": str(e)[:200],
+                    **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
+                },
+            )
+        except Exception as retry_err:
+            retry_error_text = str(retry_err)
+            logger.warning(f"[特征提取] API失败后的紧凑重试失败: {retry_error_text}")
         result = dict(DEFAULT_FEATURES)
         result["_feature_failed"] = True
         result["_feature_status"] = "failed"
         result["_extraction_confidence"] = 0.0
         result["_consistency_confidence"] = 0.0
-        result["_validation_errors"] = [f"API失败: {str(e)}"]
+        result["_validation_errors"] = [
+            f"API失败: {str(e)}",
+            f"compact_retry_failed: {retry_error_text}",
+        ]
         return _attach_llm_call(
             result,
             call_id=f"{subject}-feature-extraction",
@@ -620,7 +696,13 @@ async def extract_features(question_text: str, options: str = "",
             parsed_schema="FeatureResult",
             confidence=0.0,
             validation_errors=result["_validation_errors"],
-            metadata={"feature_status": "failed"},
+            retry_count=1,
+            existing_calls=[visual_call_record] if visual_call_record else None,
+            metadata={
+                "feature_status": "failed",
+                "recovery_mode": "api_failure_compact_retry_failed",
+                "recovery_status": "failed",
+            },
         )
 
 

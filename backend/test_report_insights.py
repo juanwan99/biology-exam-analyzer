@@ -107,10 +107,79 @@ class TestGenerateInsights:
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_teaching_suggestions_failure_raises(self, mock_gpt, sample_report_data):
         """教学建议失败必须阻断，不能用空结构伪装成功。"""
-        mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, RuntimeError("API timeout")]
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("API timeout"),
+            RuntimeError("compact timeout"),
+            RuntimeError("ultra compact timeout"),
+        ]
         from report_insights import generate_insights
         with pytest.raises(RuntimeError, match="LLM .*生成失败"):
             await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_compact_retry_succeeds(self, mock_gpt, sample_report_data):
+        """教学建议长输出失败时可用短格式重试，但仍必须来自 LLM JSON。"""
+        compact_teaching = json.dumps({
+            "error_categories": [
+                {"category": "审题不清", "description": "忽略限定词", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "限定词辨析", "duration_minutes": 10, "key_points": ["圈画关键词"], "related_errors": ["审题不清"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "激素调节", "exercise_type": "选择题", "difficulty": "中等"}
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("finish_reason=length"),
+            compact_teaching,
+        ]
+        from report_insights import generate_insights
+
+        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+        assert mock_gpt.call_count == 3
+        assert result["teaching_suggestions"]["error_categories"][0]["category"] == "审题不清"
+        teaching_call = result["_llm_calls"][-1]
+        assert teaching_call["metadata"]["retry_count"] == 1
+        assert teaching_call["metadata"]["compact_retry"] is True
+        assert teaching_call["metadata"]["retry_strategy"] == "compact"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_ultra_compact_retry_succeeds(self, mock_gpt, sample_report_data):
+        """普通短格式仍超长时，继续用更硬的短 JSON 模板重试。"""
+        ultra_teaching = json.dumps({
+            "error_categories": [
+                {"category": "推理错误", "description": "证据链不完整", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "证据推理", "duration_minutes": 8, "key_points": ["先证后结"], "related_errors": ["推理错误"]},
+                {"topic": "图表判断", "duration_minutes": 10, "key_points": ["读轴看量"], "related_errors": ["推理错误"]},
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "遗传分析", "exercise_type": "选择题", "difficulty": "中等"},
+                {"knowledge_point": "图表分析", "exercise_type": "非选择题", "difficulty": "中等"},
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("finish_reason=length"),
+            RuntimeError("finish_reason=length"),
+            ultra_teaching,
+        ]
+        from report_insights import generate_insights
+
+        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+
+        assert mock_gpt.call_count == 4
+        assert result["teaching_suggestions"]["error_categories"][0]["category"] == "推理错误"
+        teaching_call = result["_llm_calls"][-1]
+        assert teaching_call["metadata"]["retry_count"] == 2
+        assert teaching_call["metadata"]["compact_retry"] is True
+        assert teaching_call["metadata"]["retry_strategy"] == "ultra_compact"
+
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_gpt_failure_raises(self, mock_gpt, sample_report_data):
         """GPT 失败直接抛异常，不降级"""
@@ -357,6 +426,21 @@ class TestGenerateInsights:
 
         assert "知识。\n\n素养。" in answer
         assert "认知。\n\n建议一。" in answer
+
+    async def test_grounding_facts_include_exact_zero_primary_summary(self, sample_report_data):
+        from report_insights import _build_grounding_facts
+
+        sample_report_data["competency"]["primary_distribution"] = {
+            "生命观念": 1,
+            "科学思维": 1,
+            "科学探究": 0,
+            "社会责任": 0,
+        }
+
+        facts = _build_grounding_facts(sample_report_data)
+        joined = "\n".join(fact["factText"] for fact in facts)
+
+        assert "主要素养为0题的维度为科学探究、社会责任" in joined
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_grounding_low_support_marks_report_needs_review(self, mock_gpt, sample_report_data):

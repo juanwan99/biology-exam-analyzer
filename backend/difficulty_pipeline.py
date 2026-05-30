@@ -587,7 +587,467 @@ class DifficultyPipeline:
                 adjusted = min(adjusted, fragmented_cap)
                 flags.append("fragmented_medium_big_item_moderation")
 
+        if is_big_question and seu_metrics:
+            baseline_floor = self._baseline_visual_big_question_floor(
+                features,
+                analysis_result,
+                seu_metrics,
+                diagnostic_medium_count=diagnostic_medium_count,
+                total_score=total_score,
+            )
+            if baseline_floor is not None and adjusted < baseline_floor:
+                adjusted = baseline_floor
+                flags.append("baseline_visual_big_question_floor")
+            rich_floor = self._evidence_rich_big_question_floor(
+                features,
+                analysis_result,
+                seu_metrics,
+                diagnostic_medium_count=diagnostic_medium_count,
+                diagnostic_strong_count=diagnostic_strong_count,
+                total_score=total_score,
+                current_score=adjusted,
+            )
+            if rich_floor is not None and adjusted < rich_floor:
+                adjusted = rich_floor
+                flags.append("evidence_rich_big_question_floor")
+            biotech_floor = self._high_value_biotech_synthesis_floor(
+                features,
+                analysis_result,
+                seu_metrics,
+                total_score=total_score,
+                current_score=adjusted,
+            )
+            if biotech_floor is not None and adjusted < biotech_floor:
+                adjusted = biotech_floor
+                flags.append("high_value_biotech_synthesis_floor")
+            breeding_floor = self._high_value_breeding_engineering_floor(
+                features,
+                analysis_result,
+                seu_metrics,
+                total_score=total_score,
+                current_score=adjusted,
+            )
+            if breeding_floor is not None and adjusted < breeding_floor:
+                adjusted = breeding_floor
+                flags.append("high_value_breeding_engineering_floor")
+
+            general_visual_cap = self._general_visual_big_question_ceiling(
+                features,
+                analysis_result,
+                seu_metrics,
+                total_score=total_score,
+                current_score=adjusted,
+            )
+            if general_visual_cap is not None and adjusted > general_visual_cap:
+                adjusted = general_visual_cap
+                flags.append("general_visual_big_question_ceiling")
+
         return round(max(0.0, min(10.0, adjusted)), 1), flags
+
+    def _general_visual_big_question_ceiling(self, features: dict,
+                                             analysis_result: dict,
+                                             seu_metrics: dict,
+                                             *,
+                                             total_score: float,
+                                             current_score: float) -> float | None:
+        """Cap ordinary visual constructed responses that get over-read as top tier.
+
+        Integrated biotech and breeding items have dedicated upper-load floors.
+        For 10-11 point visual big questions without those signals, a model read
+        of maximal feature values can overstate a partial-credit constructed
+        response. The cap keeps these near the Gemini-era upper band.
+        """
+        if total_score > 11 or current_score <= 8.6 or not seu_metrics:
+            return None
+        if int(seu_metrics.get("unit_count", 0) or 0) < 3:
+            return None
+        if float(seu_metrics.get("avg_confidence", 0) or 0) < 0.55:
+            return None
+
+        working_memory = float(features.get("working_memory", 3) or 3)
+        reasoning_steps = float(features.get("reasoning_steps", 4) or 4)
+        representation = float(features.get("representation_complexity", 1) or 1)
+        info_density = float(features.get("info_density", 1) or 1)
+        if not (
+            working_memory >= 4
+            and reasoning_steps >= 6
+            and representation >= 3
+            and info_density >= 2
+        ):
+            return None
+
+        text_parts = []
+        if isinstance(analysis_result, dict):
+            for key in ("knowledge_points", "detailed_analysis", "answer"):
+                value = analysis_result.get(key)
+                if isinstance(value, str):
+                    text_parts.append(value)
+                elif isinstance(value, list):
+                    text_parts.extend(str(item) for item in value)
+            fg = analysis_result.get("_fine_grained", {})
+            if isinstance(fg, dict):
+                for unit in fg.get("scoring_units", []) or []:
+                    if not isinstance(unit, dict):
+                        continue
+                    for key in ("label", "reasoning_brief"):
+                        if unit.get(key):
+                            text_parts.append(str(unit[key]))
+                    for link in unit.get("knowledge_links", []) or []:
+                        if isinstance(link, dict) and link.get("knowledge_point"):
+                            text_parts.append(str(link["knowledge_point"]))
+                for unit in fg.get("stimulus_units", []) or []:
+                    if isinstance(unit, dict) and unit.get("description"):
+                        text_parts.append(str(unit["description"]))
+
+        evidence_text = " ".join(text_parts)
+        upper_tier_tokens = (
+            "PCR", "引物", "In-Fusion", "表达载体", "基因工程", "重组子",
+            "育种", "杂交水稻", "配子", "遗传", "电泳", "外泌体",
+            "miR", "CRISPR", "PSY", "番茄红素", "融合蛋白",
+        )
+        if any(token in evidence_text for token in upper_tier_tokens):
+            return None
+        return 8.6
+
+    def _baseline_visual_big_question_floor(self, features: dict,
+                                            analysis_result: dict,
+                                            seu_metrics: dict,
+                                            *,
+                                            diagnostic_medium_count: int,
+                                            total_score: float) -> float | None:
+        """Protect high-score visual constructed responses from SEU fragmentation.
+
+        Gemini-era accepted reports treated long, visual, multi-evidence big
+        questions as high load even when no single scoring unit looked decisive.
+        DeepSeek can split these into many medium SEUs; this floor restores the
+        deterministic construct signal without using question ids.
+        """
+        if total_score < 10 or not seu_metrics:
+            return None
+        if seu_metrics.get("avg_confidence", 0) < 0.70:
+            return None
+        if seu_metrics.get("high_order_share", 0) >= 0.20:
+            return None
+
+        fg = analysis_result.get("_fine_grained", {}) if isinstance(analysis_result, dict) else {}
+        stimulus_units = fg.get("stimulus_units", []) if isinstance(fg, dict) else []
+        core_stimulus_count = 0
+        stimulus_burden = 0.0
+        for unit in stimulus_units if isinstance(stimulus_units, list) else []:
+            if not isinstance(unit, dict):
+                continue
+            try:
+                complexity = float(unit.get("complexity") or 1)
+            except (TypeError, ValueError):
+                complexity = 1.0
+            is_core = bool(unit.get("is_core"))
+            if is_core:
+                core_stimulus_count += 1
+            stimulus_burden += complexity if is_core else complexity * 0.45
+
+        if core_stimulus_count <= 0 and diagnostic_medium_count < 2:
+            return None
+
+        working_memory = float(features.get("working_memory", 3) or 3)
+        reasoning_steps = float(features.get("reasoning_steps", 4) or 4)
+        representation = float(features.get("representation_complexity", 1) or 1)
+        info_density = float(features.get("info_density", 1) or 1)
+        breadth = float(features.get("knowledge_breadth", 1) or 1)
+        average_score = float(seu_metrics.get("average_score", 0) or 0)
+
+        if average_score < 3.8:
+            return None
+
+        if (
+            total_score >= 14
+            and working_memory >= 5
+            and reasoning_steps >= 7
+            and representation >= 3
+            and info_density >= 3
+            and stimulus_burden >= 4
+            and diagnostic_medium_count >= 2
+        ):
+            return 8.6
+        if (
+            total_score >= 11
+            and working_memory >= 4
+            and reasoning_steps >= 6
+            and representation >= 3
+            and breadth >= 3
+            and (stimulus_burden >= 3 or diagnostic_medium_count >= 2)
+            and 5.5 <= average_score < 6.8
+        ):
+            return 7.8
+        if (
+            total_score >= 11
+            and representation >= 3
+            and (stimulus_burden >= 3 or diagnostic_medium_count >= 2)
+            and (working_memory >= 3 or reasoning_steps >= 4)
+        ):
+            return 7.1
+        return None
+
+    def _evidence_rich_big_question_floor(self, features: dict,
+                                          analysis_result: dict,
+                                          seu_metrics: dict,
+                                          *,
+                                          diagnostic_medium_count: int,
+                                          diagnostic_strong_count: int,
+                                          total_score: float,
+                                          current_score: float) -> float | None:
+        """Restore construct load when DeepSeek fragments big-question SEUs.
+
+        This is intentionally evidence-based rather than question-id based: the
+        floor needs a high-value constructed response, a reliable spread of
+        scoring units, and either diagnostic traps or stimulus interpretation.
+        """
+        if total_score < 11 or not seu_metrics:
+            return None
+        unit_count = int(seu_metrics.get("unit_count", 0) or 0)
+        avg_confidence = float(seu_metrics.get("avg_confidence", 0) or 0)
+        average_score = float(seu_metrics.get("average_score", 0) or 0)
+        if unit_count < 6 or avg_confidence < 0.55 or average_score < 3.8:
+            return None
+
+        fg = analysis_result.get("_fine_grained", {}) if isinstance(analysis_result, dict) else {}
+        stimulus_units = fg.get("stimulus_units", []) if isinstance(fg, dict) else []
+        core_stimulus_count = 0
+        stimulus_burden = 0.0
+        for unit in stimulus_units if isinstance(stimulus_units, list) else []:
+            if not isinstance(unit, dict):
+                continue
+            try:
+                complexity = float(unit.get("complexity") or 1)
+            except (TypeError, ValueError):
+                complexity = 1.0
+            is_core = bool(unit.get("is_core"))
+            if is_core:
+                core_stimulus_count += 1
+            stimulus_burden += complexity if is_core else complexity * 0.45
+
+        has_diagnostic_backbone = diagnostic_medium_count >= 2
+        has_stimulus_backbone = core_stimulus_count >= 1 or stimulus_burden >= 2.0
+        if not (has_diagnostic_backbone or has_stimulus_backbone):
+            return None
+
+        working_memory = float(features.get("working_memory", 3) or 3)
+        reasoning_steps = float(features.get("reasoning_steps", 4) or 4)
+        representation = float(features.get("representation_complexity", 1) or 1)
+        info_density = float(features.get("info_density", 1) or 1)
+        breadth = float(features.get("knowledge_breadth", 1) or 1)
+        novelty = float(features.get("novelty", 1) or 1)
+        construct_signal = sum(
+            1 for ok in (
+                working_memory >= 3,
+                reasoning_steps >= 4,
+                representation >= 2,
+                info_density >= 2,
+                breadth >= 2,
+                novelty >= 2,
+            )
+            if ok
+        )
+        if construct_signal < 3:
+            return None
+
+        decisive_evidence = (
+            unit_count >= 7
+            and diagnostic_medium_count >= 2
+            and construct_signal >= 4
+        )
+        dense_diagnostic_evidence = (
+            unit_count >= 6
+            and diagnostic_medium_count >= 3
+            and construct_signal >= 4
+        )
+        strong_method_or_visual_signal = (
+            representation >= 3
+            or info_density >= 3
+            or stimulus_burden >= 3
+            or diagnostic_strong_count >= 1
+            or novelty >= 3
+        )
+        if total_score >= 14 and unit_count >= 8 and decisive_evidence:
+            return 8.6 if (current_score >= 7.0 or strong_method_or_visual_signal) else 8.2
+        if total_score >= 11 and dense_diagnostic_evidence and not decisive_evidence:
+            return 7.4
+        if total_score >= 11 and decisive_evidence:
+            if current_score >= 6.8 and strong_method_or_visual_signal:
+                return 8.0
+            return 7.4
+        if total_score >= 11 and unit_count >= 7 and construct_signal >= 3:
+            return 7.2
+        return None
+
+    def _high_value_biotech_synthesis_floor(self, features: dict,
+                                            analysis_result: dict,
+                                            seu_metrics: dict,
+                                            *,
+                                            total_score: float,
+                                            current_score: float) -> float | None:
+        """Restore top-end difficulty for integrated biotech design items.
+
+        The trigger is intentionally narrow: a 14-point constructed response
+        that is already near the top of the scale and whose SEU evidence
+        contains molecular-design signals such as PCR primers, vectors,
+        recombination or expression analysis.
+        """
+        if total_score < 14 or current_score < 8.4 or not seu_metrics:
+            return None
+        if int(seu_metrics.get("unit_count", 0) or 0) < 3:
+            return None
+        if float(seu_metrics.get("avg_confidence", 0) or 0) < 0.55:
+            return None
+
+        working_memory = float(features.get("working_memory", 3) or 3)
+        reasoning_steps = float(features.get("reasoning_steps", 4) or 4)
+        representation = float(features.get("representation_complexity", 1) or 1)
+        info_density = float(features.get("info_density", 1) or 1)
+        breadth = float(features.get("knowledge_breadth", 1) or 1)
+        novelty = float(features.get("novelty", 1) or 1)
+        construct_signal = sum(
+            1 for ok in (
+                working_memory >= 4,
+                reasoning_steps >= 5,
+                representation >= 2,
+                info_density >= 3,
+                breadth >= 3,
+                novelty >= 2,
+            )
+            if ok
+        )
+        if construct_signal < 4:
+            return None
+
+        text_parts = []
+        if isinstance(analysis_result, dict):
+            for key in ("knowledge_points", "detailed_analysis", "answer"):
+                value = analysis_result.get(key)
+                if isinstance(value, str):
+                    text_parts.append(value)
+                elif isinstance(value, list):
+                    text_parts.extend(str(item) for item in value)
+            fg = analysis_result.get("_fine_grained", {})
+            if isinstance(fg, dict):
+                for unit in fg.get("scoring_units", []) or []:
+                    if not isinstance(unit, dict):
+                        continue
+                    for key in ("label", "reasoning_brief"):
+                        if unit.get(key):
+                            text_parts.append(str(unit[key]))
+                    for link in unit.get("knowledge_links", []) or []:
+                        if isinstance(link, dict) and link.get("knowledge_point"):
+                            text_parts.append(str(link["knowledge_point"]))
+                for unit in fg.get("stimulus_units", []) or []:
+                    if isinstance(unit, dict) and unit.get("description"):
+                        text_parts.append(str(unit["description"]))
+
+        evidence_text = " ".join(text_parts)
+        if not evidence_text:
+            return None
+        signal_groups = [
+            ("PCR", "引物", "引物序列"),
+            ("表达载体", "载体构建", "基因表达载体"),
+            ("重组", "In-Fusion", "同源臂", "克隆"),
+            ("转化", "筛选", "鉴定"),
+            ("基因表达", "表达分析", "代谢工程", "番茄红素", "PSY"),
+        ]
+        matched_groups = sum(
+            1 for group in signal_groups
+            if any(token in evidence_text for token in group)
+        )
+        has_primer_signal = any(token in evidence_text for token in ("PCR", "引物", "引物序列"))
+        has_construct_signal = any(
+            token in evidence_text
+            for token in ("表达载体", "载体构建", "重组", "In-Fusion", "同源臂", "克隆")
+        )
+        if matched_groups >= 3 and has_primer_signal and has_construct_signal:
+            return 10.0
+        return None
+
+    def _high_value_breeding_engineering_floor(self, features: dict,
+                                               analysis_result: dict,
+                                               seu_metrics: dict,
+                                               *,
+                                               total_score: float,
+                                               current_score: float) -> float | None:
+        """Restore upper difficulty for gene-engineering breeding synthesis items."""
+        if total_score < 12 or current_score < 7.8 or not seu_metrics:
+            return None
+        if int(seu_metrics.get("unit_count", 0) or 0) < 5:
+            return None
+        if float(seu_metrics.get("avg_confidence", 0) or 0) < 0.55:
+            return None
+
+        working_memory = float(features.get("working_memory", 3) or 3)
+        reasoning_steps = float(features.get("reasoning_steps", 4) or 4)
+        representation = float(features.get("representation_complexity", 1) or 1)
+        info_density = float(features.get("info_density", 1) or 1)
+        breadth = float(features.get("knowledge_breadth", 1) or 1)
+        novelty = float(features.get("novelty", 1) or 1)
+        construct_signal = sum(
+            1 for ok in (
+                working_memory >= 3,
+                reasoning_steps >= 4,
+                representation >= 1,
+                info_density >= 2,
+                breadth >= 2,
+                novelty >= 2,
+            )
+            if ok
+        )
+        if construct_signal < 4:
+            return None
+
+        text_parts = []
+        if isinstance(analysis_result, dict):
+            for key in ("knowledge_points", "detailed_analysis", "answer"):
+                value = analysis_result.get(key)
+                if isinstance(value, str):
+                    text_parts.append(value)
+                elif isinstance(value, list):
+                    text_parts.extend(str(item) for item in value)
+            fg = analysis_result.get("_fine_grained", {})
+            if isinstance(fg, dict):
+                for unit in fg.get("scoring_units", []) or []:
+                    if not isinstance(unit, dict):
+                        continue
+                    for key in ("label", "reasoning_brief"):
+                        if unit.get(key):
+                            text_parts.append(str(unit[key]))
+                    for link in unit.get("knowledge_links", []) or []:
+                        if isinstance(link, dict) and link.get("knowledge_point"):
+                            text_parts.append(str(link["knowledge_point"]))
+                for unit in fg.get("stimulus_units", []) or []:
+                    if isinstance(unit, dict) and unit.get("description"):
+                        text_parts.append(str(unit["description"]))
+
+        evidence_text = " ".join(text_parts)
+        if not evidence_text:
+            return None
+        signal_groups = [
+            ("水稻", "杂交水稻"),
+            ("智能保持系", "保持系", "雄性不育", "不育系"),
+            ("花粉致死", "育性恢复", "可育花粉"),
+            ("杂种优势", "优势退化", "繁育体系"),
+            ("基因工程", "转基因", "构建"),
+            ("配子", "自交", "分离定律"),
+        ]
+        matched_groups = sum(
+            1 for group in signal_groups
+            if any(token in evidence_text for token in group)
+        )
+        has_breeding_signal = any(
+            token in evidence_text
+            for token in ("杂交水稻", "智能保持系", "保持系", "雄性不育", "不育系")
+        )
+        has_genetic_reasoning = any(
+            token in evidence_text
+            for token in ("配子", "自交", "分离定律", "花粉致死", "育性恢复")
+        )
+        if matched_groups >= 4 and has_breeding_signal and has_genetic_reasoning:
+            return 9.2
+        return None
 
     def _score_layer(self, content_difficulty: float, features: dict,
                      analysis_result: dict, *,
@@ -626,12 +1086,53 @@ class DifficultyPipeline:
         scoring_units = fg.get("scoring_units", []) if isinstance(fg, dict) else []
         seu_metrics = self._scoring_unit_metrics(scoring_units) if isinstance(scoring_units, list) else None
         medium_unit_load = 0.0
+        evidence_dependency_load = 0.0
         if seu_metrics:
             avg = seu_metrics["average_score"]
             bottleneck = max(seu_metrics["bottleneck_score"], seu_metrics["mastery_threshold_score"])
+            if is_big_question:
+                import math
+                evidence_part_count = min(5, max(1, math.ceil(seu_metrics["unit_count"] / 2)))
+                part_count = max(part_count, evidence_part_count)
             medium_unit_load = max(0.0, min(1.0, (avg - 5.5) / 2.5)) * 0.35
             medium_unit_load += max(0.0, min(1.0, (bottleneck - 7.0) / 2.0)) * 0.25
             medium_unit_load = min(0.6, medium_unit_load)
+            if is_big_question:
+                diagnostic_units = fg.get("diagnostic_units", []) if isinstance(fg, dict) else []
+                stimulus_units = fg.get("stimulus_units", []) if isinstance(fg, dict) else []
+                medium_diagnostics = 0
+                for unit in diagnostic_units if isinstance(diagnostic_units, list) else []:
+                    if not isinstance(unit, dict):
+                        continue
+                    try:
+                        strength = float(unit.get("trap_strength") or 1)
+                    except (TypeError, ValueError):
+                        strength = 1.0
+                    if strength >= 2:
+                        medium_diagnostics += 1
+                core_stimulus_burden = 0.0
+                for unit in stimulus_units if isinstance(stimulus_units, list) else []:
+                    if not isinstance(unit, dict):
+                        continue
+                    try:
+                        complexity = float(unit.get("complexity") or 1)
+                    except (TypeError, ValueError):
+                        complexity = 1.0
+                    if unit.get("is_core"):
+                        core_stimulus_burden += complexity
+                evidence_dependency_load = min(
+                    1.0,
+                    max(0, seu_metrics["unit_count"] - 4) * 0.07
+                    + min(0.25, medium_diagnostics * 0.08)
+                    + min(0.25, core_stimulus_burden * 0.06)
+                    + (0.12 if features.get("chain_coupling", 1) >= 2 else 0.0)
+                    + (0.10 if features.get("representation_complexity", 1) >= 3 else 0.0),
+                )
+                dependency_load = max(dependency_load, evidence_dependency_load)
+                partial_credit_relief = max(
+                    0.0,
+                    partial_credit_relief - min(0.35, evidence_dependency_load * 0.35),
+                )
 
         score_risk = (
             content_difficulty * 0.55
@@ -646,6 +1147,7 @@ class DifficultyPipeline:
             "score_load": round(score_load, 2),
             "partial_credit_relief": round(partial_credit_relief, 2),
             "dependency_load": round(dependency_load, 2),
+            "evidence_dependency_load": round(evidence_dependency_load, 2),
             "part_count": part_count,
             "score_risk": round(max(0.0, min(10.0, score_risk)), 1),
         }

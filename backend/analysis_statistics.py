@@ -6,6 +6,7 @@ v4.1: SEU 精确加权聚合（知识点 + Bloom）。
 否则 fallback 到旧的等分逻辑。
 """
 from typing import List, Dict, Any
+from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from deps import get_knowledge_mapper
 from logger import get_logger
 
@@ -121,6 +122,8 @@ def _is_non_textbook_skill_point(kp: str) -> bool:
         return False
     normalized = kp.strip()
     return (
+        is_non_textbook_skill_point(normalized)
+        or
         normalized in _KP_ABILITY_BLACKLIST_EXACT
         or any(pattern in normalized for pattern in _KP_NON_TEXTBOOK_PATTERNS)
     )
@@ -145,14 +148,22 @@ def _safe_positive_float(value: Any, default: float) -> float:
     return parsed if parsed > 0 else default
 
 
-def _normalised_knowledge_links(links: List[Dict[str, Any]]) -> List[tuple[str, float]]:
+def _normalised_knowledge_links(
+    links: List[Dict[str, Any]],
+    knowledge_mapper=None,
+) -> List[tuple[str, float]]:
     valid = []
     for link in links or []:
         kp = link.get("knowledge_point", "")
         if not isinstance(kp, str) or not kp.strip():
             continue
+        kp = kp.strip()
+        if not _is_non_textbook_skill_point(kp):
+            kp, _ = canonicalize_knowledge_point(kp, knowledge_mapper=knowledge_mapper)
+        if not kp:
+            continue
         raw_share = link.get("share", 1.0)
-        valid.append((kp.strip(), _safe_positive_float(raw_share, 1.0)))
+        valid.append((kp, _safe_positive_float(raw_share, 1.0)))
     if not valid:
         return []
     share_total = sum(share for _, share in valid)
@@ -319,7 +330,10 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                 question_non_textbook_points = {}
                 for seu in fg["scoring_units"]:
                     seu_score = total_score_val * seu.get("score_share", 0)
-                    for kp, link_share in _normalised_knowledge_links(seu.get("knowledge_links", [])):
+                    for kp, link_share in _normalised_knowledge_links(
+                        seu.get("knowledge_links", []),
+                        knowledge_mapper,
+                    ):
                         w = seu_score * link_share
                         if _is_non_textbook_skill_point(kp):
                             _add_weighted_point(question_non_textbook_points, kp, w)
@@ -341,9 +355,24 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
             elif "knowledge_points" in analysis:
                 # === fallback: 旧逻辑等分（同样过滤能力词） ===
                 kp_list = analysis["knowledge_points"]
-                kp_list_filtered = [kp for kp in kp_list if not _is_non_textbook_skill_point(kp)]
-                excluded_weight = total_score_val / len(kp_list) if kp_list else 0
+                kp_list_canonical = []
                 for kp in kp_list:
+                    if not isinstance(kp, str) or not kp.strip():
+                        continue
+                    raw_kp = kp.strip()
+                    if _is_non_textbook_skill_point(raw_kp):
+                        kp_list_canonical.append(raw_kp)
+                        continue
+                    kp_list_canonical.append(
+                        canonicalize_knowledge_point(raw_kp, knowledge_mapper=knowledge_mapper)[0]
+                    )
+                kp_list_canonical = [kp for kp in kp_list_canonical if kp]
+                kp_list_filtered = [
+                    kp for kp in kp_list_canonical
+                    if not _is_non_textbook_skill_point(kp)
+                ]
+                excluded_weight = total_score_val / len(kp_list_canonical) if kp_list_canonical else 0
+                for kp in kp_list_canonical:
                     if _is_non_textbook_skill_point(kp):
                         _add_weighted_point(non_textbook_points_weighted, kp, excluded_weight)
                 kp_weight = excluded_weight

@@ -491,6 +491,110 @@ class TestAggregateReportData:
         assert quality["evidence_gap_questions"] == []
         assert quality["llm_call_counts"]["missing_evidence_repair"] == 1
 
+    def test_metadata_quality_allows_successful_question_recovery_without_retry_failure(self):
+        q = _make_question(21, 8.7, 5, 14)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [
+                {"label": "基因工程推理", "score_share": 1.0, "competency_tags": ["科学思维"]}
+            ],
+            "diagnostic_units": [{"du_id": "du_1", "option_or_trap": "trap", "misconception": "忽略调控"}],
+            "stimulus_units": [{"su_id": "su_1", "stimulus_type": "text", "description": "材料题干", "complexity": 3}],
+        }
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {
+                    "purpose": "question_analysis",
+                    "prompt_id": "biology.question_analysis.v2.ultra_compact_retry",
+                    "retry_count": 2,
+                    "fallback_count": 0,
+                    "validation_errors": [],
+                    "metadata": {
+                        "initial_error": "compact_retry_failed",
+                        "initial_provider_errors": ["finish_reason=length"],
+                        "provider_errors": [],
+                        "recovery_mode": "ultra_compact_v2",
+                        "recovery_status": "ok",
+                    },
+                },
+                {"purpose": "big_question_feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(8.7), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert result["metadata_quality"]["retry_questions"] == []
+        assert result["metadata_quality"]["evidence_gap_questions"] == []
+
+    def test_metadata_quality_allows_successful_feature_compact_retry(self):
+        q = _make_question(13, 5.9, 4, 4)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {"purpose": "question_analysis"},
+                {
+                    "purpose": "feature_extraction",
+                    "prompt_id": "biology.feature_extraction",
+                    "retry_count": 1,
+                    "fallback_count": 0,
+                    "validation_errors": [],
+                    "metadata": {
+                        "provider_errors": [],
+                        "feature_status": "ok",
+                        "recovery_mode": "api_failure_compact_retry",
+                        "recovery_status": "ok",
+                    },
+                },
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(5.9), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert result["metadata_quality"]["retry_questions"] == []
+
+    def test_metadata_quality_blocks_degraded_length_recovery(self):
+        q = _make_question(21, 5.0, 3, 14)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["analysis"]["_fine_grained"] = {
+            "scoring_units": [],
+            "diagnostic_units": [],
+            "stimulus_units": [],
+        }
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {
+                    "purpose": "question_analysis",
+                    "prompt_id": "biology.question_analysis.v1.length_recovery.deterministic",
+                    "retry_count": 4,
+                    "fallback_count": 0,
+                    "validation_errors": [],
+                    "metadata": {
+                        "provider_errors": [],
+                        "recovery_mode": "deterministic_length_fallback",
+                        "recovery_status": "degraded",
+                    },
+                },
+                {"purpose": "big_question_feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(5.0), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert {"id": 21, "purpose": "question_analysis"} in result["metadata_quality"]["retry_questions"]
+        assert {"id": 21, "reason": "diagnostic_units_missing"} in result["metadata_quality"]["evidence_gap_questions"]
+
     def test_metadata_quality_blocks_failed_evidence_repair_and_not_score_normalization_notes(self):
         q = _make_question(19, 7.1, 4, 12)
         q["question_text"] = "stem"

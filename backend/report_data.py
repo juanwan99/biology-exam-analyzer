@@ -190,20 +190,35 @@ def _call_has_retry_or_parse_failure(call: Dict) -> bool:
     metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
     fallback_count = int(_first_number(call.get("fallback_count"), metadata.get("fallback_count"), default=0))
     retry_count = int(_first_number(call.get("retry_count"), metadata.get("retry_count"), default=0))
-    has_failure_signal = (
+    status = str(metadata.get("status") or "").lower()
+    recovery_mode = str(metadata.get("recovery_mode") or "").lower()
+    recovery_status = str(metadata.get("recovery_status") or "").lower()
+    has_final_failure_signal = (
         fallback_count > 0
         or bool(metadata.get("provider_errors"))
-        or bool(metadata.get("initial_parse_error"))
         or bool(metadata.get("validation_errors"))
         or bool(call.get("validation_errors"))
-        or str(metadata.get("status") or "").lower() in {"failed", "parse_failed", "provider_failed"}
+        or status in {"failed", "parse_failed", "provider_failed"}
+        or recovery_status in {"degraded", "failed"}
+        or recovery_mode == "deterministic_length_fallback"
     )
-    if call.get("purpose") == "missing_evidence_repair" and not has_failure_signal:
+    if call.get("purpose") == "missing_evidence_repair" and not has_final_failure_signal:
+        return False
+    successful_model_recovery = (
+        retry_count > 0
+        and recovery_status == "ok"
+        and not has_final_failure_signal
+    )
+    if successful_model_recovery:
         return False
     return (
         "compact_retry" in prompt_id
+        or "json_repair" in prompt_id
+        or "ultra_compact_retry" in prompt_id
+        or "length_recovery" in prompt_id
         or retry_count > 0
-        or has_failure_signal
+        or has_final_failure_signal
+        or bool(metadata.get("initial_parse_error"))
     )
 
 
@@ -319,7 +334,7 @@ def _extract_question_detail(q: Dict) -> Dict:
         "density_reason": features.get("density_reason", ""),
         "novelty_reason": features.get("novelty_reason", ""),
         "representation_reason": features.get("representation_reason", ""),
-        # 视觉分析
+        # Gemini 分析
         "knowledge_points": analysis.get("knowledge_points", []),
         "detailed_analysis": analysis.get("detailed_analysis", ""),
         "common_mistakes": analysis.get("common_mistakes", []),

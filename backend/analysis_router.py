@@ -276,29 +276,38 @@ async def analyze_auto(
     - 使用统一的 analyze_question_full 函数
     - 真正的并发处理（分析+难度+素养一次完成）
     """
-    # === 积分校验 ===
+    # === 认证（支持评审旁路）===
+    _review_mode = False
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, detail="请先登录")
     token = authorization[7:]
-    try:
-        user_info = await credits_service.verify_token(token)
-        user_id = user_info["id"]
-        logger.info(f"[积分] 用户 {user_id} ({user_info.get('email')}) 请求分析")
-    except credits_service.InvalidTokenError as e:
-        raise HTTPException(401, detail=str(e))
-    except Exception as e:
-        logger.error(f"[积分] 认证失败: {e}")
-        raise HTTPException(401, detail="认证失败，请重新登录")
 
-    try:
-        balance = await credits_service.get_balance(user_id)
-        if balance < credits_service.ANALYSIS_COST:
-            raise HTTPException(402, detail=f"积分不足：余额 {balance}，需要 {credits_service.ANALYSIS_COST}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[积分] 余额查询失败: {e}")
-        raise HTTPException(500, detail="积分查询失败，请稍后重试")
+    from auth_router import active_tokens as _admin_tokens
+    _rev = _admin_tokens.get(token)
+    if _rev and _rev.get("username") == "reviewer":
+        _review_mode = True
+        user_id = _rev["id"]
+        logger.info(f"[评审] reviewer 评审模式，跳过积分")
+    else:
+        try:
+            user_info = await credits_service.verify_token(token)
+            user_id = user_info["id"]
+            logger.info(f"[积分] 用户 {user_id} ({user_info.get('email')}) 请求分析")
+        except credits_service.InvalidTokenError as e:
+            raise HTTPException(401, detail=str(e))
+        except Exception as e:
+            logger.error(f"[积分] 认证失败: {e}")
+            raise HTTPException(401, detail="认证失败，请重新登录")
+
+        try:
+            balance = await credits_service.get_balance(user_id)
+            if balance < credits_service.ANALYSIS_COST:
+                raise HTTPException(402, detail=f"积分不足：余额 {balance}，需要 {credits_service.ANALYSIS_COST}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"[积分] 余额查询失败: {e}")
+            raise HTTPException(500, detail="积分查询失败，请稍后重试")
 
     effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
 
@@ -355,15 +364,18 @@ async def analyze_auto(
             # PDF的图片已包含在 _media_for_ai 中
             image_bytes = []
 
-        # 3.5 文件拆分成功，扣除积分
-        try:
-            await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题-{file.filename}")
-            logger.info(f"[积分] 文件拆分成功，已扣费 {credits_service.ANALYSIS_COST} 积分")
-        except credits_service.InsufficientCreditsError as e:
-            raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
-        except Exception as e:
-            logger.error(f"[积分] 扣费失败: {e}")
-            raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+        # 3.5 文件拆分成功，扣除积分（评审模式跳过）
+        if not _review_mode:
+            try:
+                await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题-{file.filename}")
+                logger.info(f"[积分] 文件拆分成功，已扣费 {credits_service.ANALYSIS_COST} 积分")
+            except credits_service.InsufficientCreditsError as e:
+                raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+            except Exception as e:
+                logger.error(f"[积分] 扣费失败: {e}")
+                raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+        else:
+            logger.info("[评审] 跳过扣费")
 
         # 4. 并发分析所有题目（分析+难度+素养一次完成）
         logger.info(f"开始并发分析 {len(questions)} 道题（{MAX_WORKERS}线程）...")

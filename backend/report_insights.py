@@ -398,7 +398,9 @@ def _build_comments_prompt(questions: list) -> str:
 
 
 
-def _build_teaching_prompt(data: dict) -> str:
+def _build_teaching_prompt(
+    data: dict, *, compact: bool = False, ultra_compact: bool = False
+) -> str:
     """构建教学建议 prompt（错因归类 + 讲评提纲 + 补救练习）。"""
     questions = data.get("questions", [])
     mistakes = []
@@ -418,7 +420,46 @@ def _build_teaching_prompt(data: dict) -> str:
     gradient_info = diagnostics.get("gradient", {}).get("rating", "未知")
     balance_info = diagnostics.get("competency_balance", {}).get("balance", "未知")
 
-    mistakes_text = chr(10).join(mistakes[:20])
+    if ultra_compact:
+        mistakes_text = "；".join(mistakes[:6]) or "无"
+        return (
+            "你是高中生物试卷讲评助手。只返回一个可解析JSON对象，"
+            "不要Markdown、解释或JSON外文字。\n"
+            f"依据：{mistakes_text}\n"
+            f"诊断：难度梯度{gradient_info}，素养均衡度{balance_info}\n"
+            "硬性限制：error_categories恰好1项，lecture_outline恰好2项，"
+            "remedial_exercises恰好2项；每个字符串不超过12字，"
+            "description不超过20字，related_questions最多3个整数；"
+            "只能替换字段值，保留键名和数组长度。\n"
+            'JSON模板：{"error_categories":[{"category":"审题不清",'
+            '"description":"忽略限定条件","related_questions":[1],'
+            '"frequency":"中"}],"lecture_outline":[{"topic":"限定词辨析",'
+            '"duration_minutes":8,"key_points":["圈画条件"],'
+            '"related_errors":["审题不清"]},{"topic":"证据推理",'
+            '"duration_minutes":10,"key_points":["先证后结"],'
+            '"related_errors":["审题不清"]}],"remedial_exercises":['
+            '{"knowledge_point":"薄弱点","exercise_type":"选择题",'
+            '"difficulty":"中等"},{"knowledge_point":"图表分析",'
+            '"exercise_type":"非选择题","difficulty":"中等"}]}'
+        )
+
+    mistakes_text = chr(10).join(mistakes[:12 if compact else 20])
+
+    if compact:
+        return (
+            "根据易错点生成极简教学建议，只返回JSON，不要解释。\n"
+            f"易错点：\n{mistakes_text}\n"
+            f"诊断：难度梯度{gradient_info}，素养均衡度{balance_info}\n"
+            "JSON格式："
+            '{"error_categories":[{"category":"概念混淆","description":"20字内",'
+            '"related_questions":[1],"frequency":"高"}],'
+            '"lecture_outline":[{"topic":"20字内","duration_minutes":10,'
+            '"key_points":["12字内"],"related_errors":["概念混淆"]}],'
+            '"remedial_exercises":[{"knowledge_point":"知识点",'
+            '"exercise_type":"题型","difficulty":"中等"}]}'
+            "\n限制：error_categories最多3项，lecture_outline最多4项，"
+            "remedial_exercises最多4项，每个字符串尽量短，只输出JSON。"
+        )
 
     return (
         "基于以下试卷易错点和诊断结果，生成教学建议，返回纯JSON：\n\n"
@@ -1002,6 +1043,11 @@ def _build_grounding_facts(data: dict) -> list[dict]:
             )
             + "\u3002",
         )
+    zero_primary_text = "\u3001".join(map(str, zero_primary)) if zero_primary else "\u65e0"
+    add_fact(
+        "report.evidence_card.competency_primary_gap_summary",
+        f"competency_primary_gap_summary: \u4e3b\u8981\u7d20\u517b\u4e3a0\u9898\u7684\u7ef4\u5ea6\u4e3a{zero_primary_text}\u3002",
+    )
 
     feature_profile = data.get("feature_profile") or {}
     avg_dims = feature_profile.get("avg_per_dimension") or {}
@@ -1317,6 +1363,9 @@ async def generate_insights(
 
         # 教学建议（错因归类 + 讲评提纲 + 补救练习）
         teaching_prompt = _build_teaching_prompt(data)
+        teaching_prompt_used = teaching_prompt
+        teaching_retry_count = 0
+        teaching_retry_strategy = "none"
         try:
             teaching_text = await send_message_gpt(
                 prompt=teaching_prompt,
@@ -1325,19 +1374,59 @@ async def generate_insights(
                 purpose="report_teaching_suggestions",
             )
             teaching = _parse_json_response(teaching_text)
-        except Exception as e:
-            raise RuntimeError(
-                f"教学建议生成失败（report_teaching_suggestions）: {e}"
-            ) from e
+        except Exception as first_error:
+            logger.warning(
+                f"[LLM分析] 教学建议生成失败，触发短格式重试: {first_error}"
+            )
+            retry_errors = [("initial", first_error)]
+            for retry_label, retry_prompt, retry_max_tokens in (
+                ("compact", _build_teaching_prompt(data, compact=True), 1536),
+                (
+                    "ultra_compact",
+                    _build_teaching_prompt(data, ultra_compact=True),
+                    768,
+                ),
+            ):
+                teaching_retry_count += 1
+                teaching_retry_strategy = retry_label
+                teaching_prompt_used = retry_prompt
+                try:
+                    teaching_text = await send_message_gpt(
+                        prompt=teaching_prompt_used,
+                        max_tokens=retry_max_tokens,
+                        temperature=0.0,
+                        purpose="report_teaching_suggestions",
+                    )
+                    teaching = _parse_json_response(teaching_text)
+                    break
+                except Exception as retry_error:
+                    retry_errors.append((retry_label, retry_error))
+                    logger.warning(
+                        "[LLM分析] 教学建议短格式重试失败 "
+                        f"({retry_label}): {retry_error}"
+                    )
+            else:
+                error_summary = "; ".join(
+                    f"{label}={error}" for label, error in retry_errors
+                )
+                raise RuntimeError(
+                    "教学建议生成失败（report_teaching_suggestions）: "
+                    f"{error_summary}"
+                ) from retry_errors[-1][1]
         llm_calls.append(_call_record(
             call_id="report-teaching-suggestions",
             purpose="report_teaching_suggestions",
             prompt_id="biology.report_teaching_suggestions",
-            prompt=teaching_prompt,
+            prompt=teaching_prompt_used,
             input_refs=input_refs,
             parsed_schema="TeachingSuggestions",
             confidence=1.0,
-            metadata={"response_length": len(teaching_text)},
+            metadata={
+                "response_length": len(teaching_text),
+                "retry_count": teaching_retry_count,
+                "compact_retry": teaching_retry_count > 0,
+                "retry_strategy": teaching_retry_strategy,
+            },
         ))
         logger.info(f"[LLM分析] 教学建议生成完成")
 

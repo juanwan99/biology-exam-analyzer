@@ -14,9 +14,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
+from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
 
 logger = get_logger()
+
+
+def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper: Any) -> List[str]:
+    standardized: List[str] = []
+    seen = set()
+    for point in raw_points or []:
+        if not isinstance(point, str) or not point.strip():
+            continue
+        raw = point.strip()
+        if is_non_textbook_skill_point(raw):
+            continue
+        canonical, _ = canonicalize_knowledge_point(raw, knowledge_mapper=knowledge_mapper)
+        canonical = canonical.strip() if isinstance(canonical, str) else ""
+        if not canonical or is_non_textbook_skill_point(canonical) or canonical in seen:
+            continue
+        standardized.append(canonical)
+        seen.add(canonical)
+    return standardized
 
 
 def _score_record(question: Dict, analysis: Dict | None = None) -> tuple[float, Dict[str, Any] | None]:
@@ -195,7 +214,7 @@ class AnalysisService:
                 else:
                     reason = supplement.get("error") if isinstance(supplement, dict) else "invalid_competency_supplement"
                     reason_text = str(reason or "unknown")[:80]
-                    add_analysis_warning(f"competency_supplement_failed:{reason_text}")
+                    add_analysis_warning(f"competency_supplement_soft_failed:{reason_text}")
                     logger.info(f"[分析] 题目{q_id} v2素养独立补充失败，仅使用SEU权重；已写入元数据告警")
                 question["competency"] = merged
                 if isinstance(supplement, dict) and supplement.get("_llm_calls"):
@@ -232,7 +251,11 @@ class AnalysisService:
                 question["competency"] = competency_result
             # 知识点标准化映射
             if self.knowledge_mapper and analysis.get("knowledge_points"):
-                standardized = self.knowledge_mapper.map_knowledge_points(analysis["knowledge_points"])
+                report_points = _standardize_report_knowledge_points(
+                    analysis["knowledge_points"],
+                    self.knowledge_mapper,
+                )
+                standardized = self.knowledge_mapper.map_knowledge_points(report_points)
                 question["knowledge_mapping"] = standardized
 
             # 置信度计算（基础 + 质量信号）
