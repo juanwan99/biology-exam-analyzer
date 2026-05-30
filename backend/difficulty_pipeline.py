@@ -181,7 +181,11 @@ class DifficultyPipeline:
                     )
                 features = {
                     "working_memory": aggregated["working_memory"],
+                    # RC3 字段分离：聚合认知负荷有专属字段 aggregated_cognitive_load；
+                    # reasoning_steps 暂仍承载同一聚合值，仅为 SEU floor/cap(RC7)+confidence
+                    # 读取点保持字节级等价，Task4/RC7 重构公式时再解耦下线该重复。
                     "reasoning_steps": round(aggregated["effective_steps"]),
+                    "aggregated_cognitive_load": round(aggregated["effective_steps"]),
                     "chain_coupling": aggregated["chain_coupling"],
                     "trap_density": aggregated["trap_density"],
                     "novelty": aggregated["novelty"],
