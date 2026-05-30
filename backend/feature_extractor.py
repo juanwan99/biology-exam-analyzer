@@ -470,7 +470,7 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
     return result
 
 
-async def extract_features(question_text: str, options: str = "",
+async def _extract_features_uncached(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
                            subject: str = "biology",
@@ -1395,3 +1395,24 @@ async def extract_big_question_features(question_text: str, options: str = "",
                 media_items=media_items,
             )
         return None
+
+
+
+async def extract_features(question_text: str, options: str = "",
+                           correct_answer: str = "",
+                           question_type: str = "",
+                           subject: str = "biology",
+                           media_items: list | None = None) -> dict:
+    """RC1: 同卷特征缓存包装。同题（内容指纹相同）复用首次特征，消除 DeepSeek 跨跑漂移、
+    保证同卷重跑难度可复现；缓存命中零 LLM 调用、零额外 token。
+    实际提取逻辑见 _extract_features_uncached。"""
+    import feature_cache
+    cached = feature_cache.get(question_text, options, correct_answer, question_type, subject)
+    if cached is not None:
+        logger.info(f"[特征缓存] 命中，复用特征（零 LLM 调用）: {question_text[:30]}...")
+        return cached
+    result = await _extract_features_uncached(
+        question_text, options, correct_answer, question_type, subject, media_items)
+    if isinstance(result, dict) and result.get("_feature_status") in ("ok", "partial"):
+        feature_cache.set(question_text, options, correct_answer, question_type, subject, result)
+    return result

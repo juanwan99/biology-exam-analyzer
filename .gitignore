@@ -25,3 +25,7 @@ backend/test_evidence_gateway.py
 backend/test_evidence_context.py
 backend/test_evidence_audit.py
 backend/test_agent_search_corpus.py
+
+# RC1 特征缓存（运行期生成，不入库）
+backend/.feature_cache/
+.feature_cache/
