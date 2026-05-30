@@ -181,6 +181,40 @@ class TestGenerateInsights:
         assert teaching_call["metadata"]["retry_strategy"] == "ultra_compact"
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_budget_adequate_and_non_shrinking(self, mock_gpt, sample_report_data):
+        """RC6: deepseek-v4-pro 推理模型 reasoning 先吃预算，teaching 预算必须充足且重试不缩。
+        防回归到 4096/1536/768 shrink 阶梯（对推理模型必然 finish_reason=length -> 报告崩）。"""
+        valid_teaching = json.dumps({
+            "error_categories": [
+                {"category": "推理错误", "description": "因果倒置", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "证据推理", "duration_minutes": 10, "key_points": ["先证后断"], "related_errors": ["推理错误"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "遗传规律", "exercise_type": "非选择题", "difficulty": "中等"}
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("openai_chat provider_incomplete_response: finish_reason=length"),
+            RuntimeError("openai_chat provider_incomplete_response: finish_reason=length"),
+            valid_teaching,
+        ]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        assert "teaching_suggestions" in result
+        budgets = [
+            c.kwargs["max_tokens"]
+            for c in mock_gpt.call_args_list
+            if c.kwargs.get("purpose") == "report_teaching_suggestions"
+        ]
+        assert budgets, "未捕获到 teaching 调用"
+        assert budgets[0] >= 8192, f"primary 预算不足: {budgets[0]}"
+        assert all(b >= 8192 for b in budgets), f"重试预算饥饿: {budgets}"
+        assert budgets == sorted(budgets), f"重试预算应单调不降(不缩): {budgets}"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_gpt_failure_raises(self, mock_gpt, sample_report_data):
         """GPT 失败直接抛异常，不降级"""
         mock_gpt.side_effect = RuntimeError("API 超时")

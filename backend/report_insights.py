@@ -1369,7 +1369,9 @@ async def generate_insights(
         try:
             teaching_text = await send_message_gpt(
                 prompt=teaching_prompt,
-                max_tokens=4096,
+                # RC6: deepseek-v4-pro 是推理模型，reasoning token 先吃预算；4096 易在
+                # reasoning 阶段就 finish_reason=length（分析阶段用 12000~16000 才稳）。
+                max_tokens=8192,
                 temperature=0.0,
                 purpose="report_teaching_suggestions",
             )
@@ -1379,12 +1381,15 @@ async def generate_insights(
                 f"[LLM分析] 教学建议生成失败，触发短格式重试: {first_error}"
             )
             retry_errors = [("initial", first_error)]
+            # RC6: 失败主因是预算不足触发 finish_reason=length（给推理模型缩预算=必崩）。
+            # 重试改为"升预算"而非原来的"缩预算"阶梯（1536/768 对推理模型必然 length）。
+            # prompt 仍渐次精简以压缩输出量，但预算单调升到 provider 上限 16384。
             for retry_label, retry_prompt, retry_max_tokens in (
-                ("compact", _build_teaching_prompt(data, compact=True), 1536),
+                ("compact", _build_teaching_prompt(data, compact=True), 12288),
                 (
                     "ultra_compact",
                     _build_teaching_prompt(data, ultra_compact=True),
-                    768,
+                    16384,
                 ),
             ):
                 teaching_retry_count += 1
