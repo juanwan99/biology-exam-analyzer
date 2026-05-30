@@ -217,6 +217,12 @@ def find_critical_path(subquestions: list, dependencies: list) -> tuple:
     return path_nodes, path_steps
 
 
+# 链长归一（2026-05-30 链长累加重设）：依赖链上重复同强度强边的几何衰减系数，
+# 第 k 重强边边际贡献 ×decay**k，使难度由最难环/认知深度主导而非强边数量，
+# 长强链几何收敛封顶（治 strong_increment 无界，weak 早已被 min(2.2) 封顶）。
+_STRONG_CHAIN_DECAY = 0.6
+
+
 def _dependent_path_load(path_nodes: list, dependencies: list) -> float:
     """将依赖路径换算为认知负荷。
 
@@ -238,14 +244,22 @@ def _dependent_path_load(path_nodes: list, dependencies: list) -> float:
         for dep in dependencies
         if isinstance(dep, dict) and dep.get("strength") in ("weak", "strong")
     }
-    strong_increment = 0.0
+    strong_contribs = []
     weak_increment = 0.0
     for left, right in zip(path_nodes, path_nodes[1:]):
         strength = edge_strength.get((left["id"], right["id"]), "weak")
         if strength == "strong":
-            strong_increment += 0.58 * right["reasoning_steps"]
+            strong_contribs.append(0.58 * right["reasoning_steps"])
         else:
             weak_increment += 0.40 * right["reasoning_steps"]
+    # 链长累加重设：强边按贡献降序后几何衰减，惩罚重复的同强度边（链长冗余）
+    # 而非单条深边（真难度）。最难环排首位拿满权 decay**0=1，深度信号无损；
+    # 等强简单边几何收敛封顶，长易链不再线性无界压过短难链。
+    strong_contribs.sort(reverse=True)
+    strong_increment = sum(
+        contrib * (_STRONG_CHAIN_DECAY ** k)
+        for k, contrib in enumerate(strong_contribs)
+    )
     return load + strong_increment + min(2.2, weak_increment)
 
 
