@@ -633,3 +633,19 @@ class TestDeterministicSeed:
         provider = {"max_tokens": 8192, "deterministic_seed": 99}
         cfg = _native_generation_config_kwargs(provider, 1000, 0)
         assert cfg.get("seed") == 99
+
+
+
+# ── reasoning_effort 注入(推理 budget 约束, 治 reasoning 烧爆预算根因) ──
+class TestReasoningEffortInjection:
+    def test_openai_chat_injects_reasoning_effort_when_configured(self):
+        from llm_client import _build_request_body
+        provider = {"api_format": "openai_chat", "model": "deepseek-v4-pro", "max_tokens": 16384, "reasoning_effort": "medium"}
+        body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 16000, 0)
+        assert body.get("reasoning_effort") == "medium"
+
+    def test_openai_chat_omits_reasoning_effort_when_absent(self):
+        from llm_client import _build_request_body
+        provider = {"api_format": "openai_chat", "model": "deepseek", "max_tokens": 8192}
+        body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0)
+        assert "reasoning_effort" not in body

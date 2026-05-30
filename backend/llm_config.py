@@ -54,6 +54,7 @@ PROVIDERS = [
         "key_env": "DEEPSEEK_API_KEY",
         "model_role": "analysis_text",
         "model_policy": "exam-review-deepseek-primary",
+        "reasoning_effort": "medium",
         "response_format": "json_object",
         "max_tokens": 16384,
         "semaphore_limit": 10,

@@ -321,6 +321,11 @@ def _build_request_body(provider: dict, messages: list, max_tokens: int,
                 body["seed"] = _deterministic_seed(provider)
         except (TypeError, ValueError):
             pass
+        # 推理模型 reasoning budget 约束: deepseek-v4-pro 不传 reasoning_effort 时
+        # 渠道默认高档推理, reasoning 烧光 max_tokens 致 output 截断
+        # (实测 reasoning_tokens=16000/output=0/finish=length; medium 档 reasoning 5505/output 正常)。
+        if provider.get("reasoning_effort"):
+            body["reasoning_effort"] = provider["reasoning_effort"]
         return body
 
 
