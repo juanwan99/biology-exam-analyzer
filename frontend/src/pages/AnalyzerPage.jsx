@@ -12,19 +12,19 @@ function AnalyzerPage() {
   const [error, setError] = useState(null)
   const [mode, setMode] = useState('deep')
   const [generateReport, setGenerateReport] = useState(false)
-  const [reviewChannel, setReviewChannel] = useState('app_builder')
+  const [reviewChannel, setReviewChannel] = useState('evidence')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef(null)
   const reviewChannelOptions = [
     {
-      id: 'app_builder',
+      id: 'evidence',
       label: '证据增强审题',
-      help: 'Ranking 选证据，Check Grounding 校验结论。',
+      help: '检索相关证据，校验审题结论。',
     },
     {
       id: 'agent_search',
       label: '智能体证据链路',
-      help: 'Ranking 后调用 Search App answer，并把带引用的答案注入逐题审题。',
+      help: '检索证据后获取带引用的答案，注入逐题审题。',
     },
     {
       id: 'model',
