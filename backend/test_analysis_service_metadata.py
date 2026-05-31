@@ -52,7 +52,7 @@ def _ready_question_with_ranked_evidence(question_id=1):
     })
     question["_metadata_envelope"]["llm_calls"][0]["metadata"] = {
         "evidence_context": {
-            "provider": "discovery_engine",
+            "provider": "evidence_service",
             "operation": "rank",
             "question_id": question_id,
             "ranked_count": 5,
@@ -1035,7 +1035,7 @@ async def test_generate_report_app_builder_channel_enables_grounding(monkeypatch
             "_grounding_status": "ok",
             "_grounding_checks": [{
                 "support_score": 0.9,
-                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
+                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
             }],
         }
 
@@ -1098,7 +1098,7 @@ async def test_generate_report_blocks_app_builder_grounding_needs_review(monkeyp
                 "status": "needs_review",
                 "support_score": 0.42,
                 "threshold": 0.6,
-                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
+                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
             }],
             "_llm_calls": [_call("report-grounding", "report_grounding_check", "GroundingCheck")],
         }
@@ -1145,7 +1145,7 @@ async def test_generate_report_grounding_validation_error_is_readable_block(monk
                 "status": "needs_review",
                 "support_score": 0.42,
                 "threshold": 0.6,
-                "metadata": {"provider": "discovery_engine", "operation": "check_grounding"},
+                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
             }],
             "_llm_calls": [grounding_call],
         }

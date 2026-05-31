@@ -1142,7 +1142,7 @@ async def test_analyze_question_injects_ranked_evidence_context_when_enabled(mon
             return {
                 "context_text": "【审题证据上下文】\n1. 评分细则与采分点闭合：检查小问、采分点和分值边界。",
                 "metadata": {
-                    "provider": "discovery_engine",
+                    "provider": "evidence_service",
                     "operation": "rank",
                     "record_ids": ["rubric-closure"],
                     "ranked_count": 1,

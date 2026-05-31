@@ -239,7 +239,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 3,
                     "cited_chunk_count": 2,
-                    "metadata": {"provider": "discovery_engine"},
+                    "metadata": {"provider": "evidence_service"},
                 }
 
         gateway = FakeGateway()
@@ -264,7 +264,7 @@ class TestGenerateInsights:
         assert result["_grounding_checks"][0]["status"] == "ok"
         assert result["_grounding_checks"][0]["support_score"] == 0.84
         assert result["_llm_calls"][1]["purpose"] == "report_grounding_check"
-        assert result["_llm_calls"][1]["provider"] == "discovery_engine"
+        assert result["_llm_calls"][1]["provider"] == "evidence_service"
         assert result["_llm_calls"][1]["model"] == "check_grounding"
         assert result["_llm_calls"][1]["metadata"]["section_count"] == len(gateway.calls)
 
@@ -489,7 +489,7 @@ class TestGenerateInsights:
                     "threshold": 0.6,
                     "claim_count": 2,
                     "cited_chunk_count": 0,
-                    "metadata": {"provider": "discovery_engine"},
+                    "metadata": {"provider": "evidence_service"},
                 }
 
         from report_insights import generate_insights

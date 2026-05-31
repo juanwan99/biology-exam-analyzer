@@ -874,7 +874,7 @@ class AnalysisService:
         ):
             raise RuntimeError(
                 "agent_search channel requested but no Search App answer_query evidence "
-                "was recorded; verify DISCOVERY_ENGINE_ENGINE_ID and the question evidence context"
+                "was recorded; verify the evidence service configuration and the question evidence context"
             )
         if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
             raise RuntimeError(
@@ -882,12 +882,12 @@ class AnalysisService:
                 "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
             )
         rank_count = int(
-            channel_usage.get("discovery_rank_count")
+            channel_usage.get("evidence_rank_count")
             or channel_usage.get("evidence_rank_count")
             or 0
         )
         grounding_count = int(
-            channel_usage.get("discovery_grounding_check_count")
+            channel_usage.get("evidence_grounding_check_count")
             or channel_usage.get("evidence_grounding_check_count")
             or 0
         )

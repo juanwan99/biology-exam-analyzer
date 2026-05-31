@@ -860,7 +860,7 @@ class QuestionAnalyzer:
                 **call_kwargs,
             ))
             if evidence_context_meta:
-                payload["_discovery_evidence_context"] = evidence_context_meta
+                payload["_evidence_context"] = evidence_context_meta
             payload["_llm_calls"] = calls
             return payload
 

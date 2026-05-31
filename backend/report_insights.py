@@ -34,7 +34,7 @@ def _call_record(*, call_id: str, purpose: str, prompt_id: str, prompt: str,
                  input_refs: dict, parsed_schema: str, confidence: float,
                  validation_errors: list = None, metadata: dict = None) -> dict:
     metadata = dict(metadata or {})
-    if metadata.get("provider") in {"discovery_engine", "evidence_service"}:
+    if metadata.get("provider") in {"evidence_service"}:
         provider = metadata.get("provider")
         model = metadata.get("operation") or "check_grounding"
         fallback_count = 0
@@ -1247,7 +1247,7 @@ async def _run_grounding_check(
         "section_count": len(checks),
         "checks": checks,
         "metadata": {
-            "provider": "discovery_engine",
+            "provider": "evidence_service",
             "operation": "check_grounding",
             "fact_count": len(facts),
             "citation_threshold": citation_threshold,

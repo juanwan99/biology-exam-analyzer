@@ -1,6 +1,6 @@
 """Calibration helpers for model-produced exam analysis structures.
 
-The functions here are deliberately deterministic. Discovery Engine supplies
+The functions here are deliberately deterministic. An evidence service supplies
 the textbook/rubric anchors in the prompt and metadata; this module then keeps
 the downstream score math stable by normalizing noisy model labels before they
 are aggregated.
@@ -657,7 +657,7 @@ def calibrate_fine_grained_analysis(
         calibration = analysis.setdefault("_calibration", {})
         calibration["knowledge_standardization"] = {
             "status": "applied",
-            "method": "discovery_textbook_anchor_and_deterministic_merge",
+            "method": "textbook_anchor_and_deterministic_merge",
             "changed_scoring_units": changed_units,
             "unmapped_links_after": unmapped_links,
             "max_links_per_seu": max_links_per_seu,
