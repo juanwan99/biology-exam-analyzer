@@ -1101,8 +1101,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
         question_analyzer,
         "get_last_call_metadata",
         lambda: {
-            "provider": "google_genai",
-            "model": "gemini-3-pro",
+            "provider": "qwen_text",
+            "model": "qwen-plus",
             "fallback_count": 1,
             "provider_errors": [{"provider": "deepseek", "error": "timeout"}],
         },
@@ -1118,8 +1118,8 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
     )
 
     call = result["_llm_calls"][0]
-    assert call["provider"] == "google_genai"
-    assert call["model"] == "gemini-3-pro"
+    assert call["provider"] == "qwen_text"
+    assert call["model"] == "qwen-plus"
     assert call["fallback_count"] == 1
     assert call["metadata"]["provider_errors"][0]["provider"] == "deepseek"
 

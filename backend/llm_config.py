@@ -4,15 +4,11 @@
 支持多 provider fallback 链，按优先级自动切换。
 """
 import os
-from llm_policy import resolve_model_profile
 
-LEGACY_NATIVE_MODEL_OVERRIDE_ENV = "LLM_ALLOW_NATIVE_MODEL_OVERRIDE"
-NATIVE_TEXT_FALLBACK_ENV = "LLM_ENABLE_NATIVE_TEXT_FALLBACK"
 VISION_PROVIDER_ENV = "LLM_VISION_PROVIDER"
 QWEN_TEXT_FALLBACK_ENV = "LLM_ENABLE_QWEN_TEXT_FALLBACK"
 
 QWEN_VISION_PROVIDER_NAMES = {"qwen", "qwen_vision", "dashscope"}
-NATIVE_VISION_PROVIDER_NAMES = {"native", "primary"}
 TEXT_REVIEW_PURPOSES = {
     "big_question_feature_extraction",
     "competency_analysis",
@@ -78,22 +74,6 @@ PROVIDERS = [
         "retry_count": 1,
         "no_proxy": True,
     },
-    {
-        "name": "primary",
-        "model_env": "LLM_NATIVE_MODEL",
-        "model_default": "",
-        "api_format": "native_sdk",
-        "sdk_module_env": "LLM_SDK_MODULE",
-        "cloud_mode": os.environ.get("LLM_CLOUD_MODE", "false").lower() == "true",
-        "sa_file_env": "LLM_SA_CREDENTIALS",
-        "project_env": "LLM_PROJECT",
-        "location_env": "LLM_LOCATION",
-        "supports_images": True,
-        "max_tokens": 16384,
-        "thinking_overhead": 3,
-        "semaphore_limit": 10,
-        "retry_count": 2,
-    },
 ]
 
 
@@ -114,7 +94,7 @@ def _select_configured_key_env(provider: dict) -> str | None:
 
 def _apply_non_native_model_env(provider: dict) -> None:
     env_name = provider.get("model_env")
-    if not env_name or provider.get("api_format") == "native_sdk":
+    if not env_name:
         return
     provider["model"] = (
         os.environ.get(env_name, "").strip()
@@ -130,8 +110,6 @@ def _filter_vision_providers(providers: list[dict], requires_images: bool) -> li
     configured = os.environ.get(VISION_PROVIDER_ENV, "auto").strip().lower() or "auto"
     if configured in QWEN_VISION_PROVIDER_NAMES:
         return [p for p in providers if p.get("name") == "qwen_vision"]
-    if configured in NATIVE_VISION_PROVIDER_NAMES:
-        return [p for p in providers if p.get("api_format") == "native_sdk"]
 
     qwen = [p for p in providers if p.get("name") == "qwen_vision"]
     if qwen:
@@ -151,10 +129,6 @@ def _env_truthy(env_name: str) -> bool:
     return os.environ.get(env_name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _native_text_fallback_enabled() -> bool:
-    return _env_truthy(NATIVE_TEXT_FALLBACK_ENV)
-
-
 def _qwen_text_fallback_enabled() -> bool:
     return _env_truthy(QWEN_TEXT_FALLBACK_ENV)
 
@@ -166,8 +140,6 @@ def _skip_by_vision_preference(provider: dict, requires_images: bool) -> bool:
     configured = os.environ.get(VISION_PROVIDER_ENV, "auto").strip().lower() or "auto"
     if configured in QWEN_VISION_PROVIDER_NAMES:
         return provider.get("name") != "qwen_vision"
-    if configured in NATIVE_VISION_PROVIDER_NAMES:
-        return provider.get("api_format") != "native_sdk"
     if _qwen_key_configured():
         return provider.get("name") != "qwen_vision"
     return False
@@ -188,7 +160,7 @@ def _apply_purpose_preference(
             if provider.get("name") != "qwen_text"
         ]
     if normalized in TEXT_REVIEW_PURPOSES:
-        priority = {"deepseek": 0, "qwen_text": 1, "primary": 2}
+        priority = {"deepseek": 0, "qwen_text": 1}
         return sorted(
             providers,
             key=lambda provider: priority.get(provider.get("name"), 50),
@@ -203,13 +175,6 @@ def get_providers(
 ) -> list:
     """返回已配置 API key/credentials 的 provider 列表。"""
     result = []
-    profile = None
-
-    def native_profile():
-        nonlocal profile
-        if profile is None:
-            profile = resolve_model_profile(purpose=purpose, model_override=model_override)
-        return profile
 
     for template in PROVIDERS:
         p = dict(template)
@@ -217,50 +182,16 @@ def get_providers(
             p["max_tokens"] = p["subq_max_tokens"]
         if p.get("vision_only") and not requires_images:
             continue
-        if (
-            p.get("api_format") == "native_sdk"
-            and not requires_images
-            and not _native_text_fallback_enabled()
-        ):
-            continue
         if requires_images and not p.get("supports_images", False):
             continue
         if _skip_by_vision_preference(p, requires_images):
             continue
 
         _apply_non_native_model_env(p)
-        if p.get("model_env"):
-            legacy_env_model = os.environ.get(p["model_env"], "").strip()
-            legacy_override_enabled = (
-                os.environ.get(LEGACY_NATIVE_MODEL_OVERRIDE_ENV, "").lower()
-                in {"1", "true", "yes", "on"}
-            )
-            if p.get("api_format") == "native_sdk":
-                resolved_profile = native_profile()
-                configured_model = legacy_env_model if legacy_override_enabled else ""
-                p["model"] = configured_model or resolved_profile.model or p.get("model_default", "")
-                p["model_role"] = "custom" if configured_model else resolved_profile.role
-                p["model_policy"] = resolved_profile.policy_id
-                p["purpose"] = resolved_profile.purpose
-                if legacy_env_model and not legacy_override_enabled:
-                    p["legacy_model_env_ignored"] = p["model_env"]
-        if p.get("sdk_module_env"):
-            p["sdk_module"] = os.environ.get(p["sdk_module_env"], "")
-        if p.get("api_format") == "native_sdk":
-            p["cloud_mode"] = os.environ.get("LLM_CLOUD_MODE", "false").lower() == "true"
 
         configured_key_env = _select_configured_key_env(p)
         if configured_key_env:
             p["key_env"] = configured_key_env
             result.append(p)
-        elif p.get("sa_file_env"):
-            sa_path = os.environ.get(p["sa_file_env"], "")
-            if (
-                sa_path
-                and os.path.exists(sa_path)
-                and p.get("sdk_module")
-                and p.get("model")
-            ):
-                result.append(p)
     result = _filter_vision_providers(result, requires_images)
     return _apply_purpose_preference(result, purpose, requires_images)

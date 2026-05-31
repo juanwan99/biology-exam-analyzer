@@ -659,7 +659,7 @@ class DifficultyPipeline:
         Integrated biotech and breeding items have dedicated upper-load floors.
         For 10-11 point visual big questions without those signals, a model read
         of maximal feature values can overstate a partial-credit constructed
-        response. The cap keeps these near the Gemini-era upper band.
+        response. The cap keeps these near the established upper band.
         """
         if total_score > 11 or current_score <= 8.6 or not seu_metrics:
             return None
@@ -721,7 +721,7 @@ class DifficultyPipeline:
                                             total_score: float) -> float | None:
         """Protect high-score visual constructed responses from SEU fragmentation.
 
-        Gemini-era accepted reports treated long, visual, multi-evidence big
+        Earlier accepted reports treated long, visual, multi-evidence big
         questions as high load even when no single scoring unit looked decisive.
         DeepSeek can split these into many medium SEUs; this floor restores the
         deterministic construct signal without using question ids.

@@ -115,87 +115,8 @@ class TestLlmConfig:
         finally:
             os.unlink(sa_path)
 
-    def test_native_provider_accepts_explicit_model_override_and_supports_images(self):
-        import os
-        import tempfile
-        from llm_config import get_providers
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            f.write(b"{}")
-            sa_path = f.name
-        env = {
-            "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "test.sdk",
-            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-            "DEEPSEEK_API_KEY": "",
-            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        }
-        try:
-            with patch.dict(os.environ, env, clear=False):
-                result = get_providers(
-                    model_override="flash-model-preview"
-                )
-                native = [p for p in result if p.get("api_format") == "native_sdk"]
-                assert len(native) == 1
-                assert native[0]["model"] == "flash-model-preview"
-                assert native[0]["model_role"] == "custom"
-                assert native[0]["supports_images"] is True
-        finally:
-            os.unlink(sa_path)
 
-    def test_native_provider_defaults_to_pro_model(self):
-        import os
-        import tempfile
-        from llm_config import get_providers
-
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            f.write(b"{}")
-            sa_path = f.name
-        env = {
-            "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "test.sdk",
-            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-            "LLM_CLOUD_MODE": "true",
-            "DEEPSEEK_API_KEY": "",
-            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        }
-        try:
-            with patch.dict(os.environ, env, clear=True):
-                result = get_providers()
-                native = [p for p in result if p.get("api_format") == "native_sdk"]
-                assert len(native) == 1
-                assert native[0]["model"] == "pro-model-preview"
-        finally:
-            os.unlink(sa_path)
-
-    def test_blank_legacy_native_model_uses_policy_default(self):
-        import os
-        import tempfile
-        from llm_config import get_providers
-
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            f.write(b"{}")
-            sa_path = f.name
-        env = {
-            "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "test.sdk",
-            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-            "LLM_NATIVE_MODEL": "",
-            "DEEPSEEK_API_KEY": "",
-            "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        }
-        try:
-            with patch.dict(os.environ, env, clear=False):
-                result = get_providers()
-                native = [p for p in result if p.get("api_format") == "native_sdk"]
-                assert len(native) == 1
-                assert native[0]["model"] == "pro-model-preview"
-                assert native[0]["model_role"] == "pro"
-        finally:
-            os.unlink(sa_path)
 
 
 # ── Fallback 测试 ─────────────────────────────────────────────────
@@ -441,23 +362,6 @@ class TestFallback:
 # ── 格式转换测试 ──────────────────────────────────────────────────
 
 class TestFormatConversion:
-    def test_native_zero_temperature_uses_deterministic_generation_controls(self):
-        from llm_client import _native_generation_config_kwargs
-
-        provider = {
-            "max_tokens": 8192,
-            "thinking_overhead": 2,
-            "deterministic_seed": 20260526,
-        }
-
-        config = _native_generation_config_kwargs(provider, max_tokens=1000, temperature=0)
-
-        assert config["max_output_tokens"] == 2000
-        assert config["temperature"] == 0
-        assert config["candidate_count"] == 1
-        assert config["seed"] == 20260526
-        assert config["top_p"] == 1.0
-        assert config["top_k"] == 1
 
     def test_anthropic_text_only(self):
         from llm_client import _build_request_body
@@ -541,31 +445,7 @@ class TestFormatConversion:
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         )
 
-    def test_native_data_image_converts_to_inline_data(self):
-        from llm_client import _convert_messages_to_native
 
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "describe"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abcd"}},
-        ]}]
-
-        contents, system_instruction = _convert_messages_to_native(messages)
-
-        assert system_instruction is None
-        assert contents[0]["parts"][0] == {"text": "describe"}
-        assert contents[0]["parts"][1] == {
-            "inline_data": {"mime_type": "image/png", "data": "abcd"}
-        }
-
-    def test_native_remote_image_url_fails_closed(self):
-        from llm_client import _convert_messages_to_native
-
-        messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
-        ]}]
-
-        with pytest.raises(RuntimeError, match="image_url must be a data URL"):
-            _convert_messages_to_native(messages)
 
 
 class TestResponseExtraction:
@@ -628,11 +508,6 @@ class TestDeterministicSeed:
         body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0)
         assert body.get("seed") == 42
 
-    def test_native_seed_uses_shared_helper(self):
-        from llm_client import _native_generation_config_kwargs
-        provider = {"max_tokens": 8192, "deterministic_seed": 99}
-        cfg = _native_generation_config_kwargs(provider, 1000, 0)
-        assert cfg.get("seed") == 99
 
 
 

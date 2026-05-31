@@ -3,8 +3,8 @@
 The main exam-review LLM chain is purpose-aware: Qwen text is first for
 structured long-form analysis paths that must not truncate, DeepSeek remains in
 the text chain for general/report analysis, and Qwen vision handles image
-inputs. This module only controls the native model split when native text
-fallback or grounded generation is explicitly enabled.
+inputs. This module resolves the flash/pro model profile for grounded
+generation and explicit model-split paths.
 Business modules should still pass a purpose string to llm_call/send_message_gpt
 instead of hard-coding provider model ids.
 """
@@ -19,7 +19,6 @@ DISCONTINUED_MODELS: dict[str, str] = {}
 
 FLASH_MODEL_ENV = "LLM_EXAM_REVIEW_FLASH_MODEL"
 PRO_MODEL_ENV = "LLM_EXAM_REVIEW_PRO_MODEL"
-LEGACY_MODEL_ENV = "LLM_NATIVE_MODEL"
 
 _FLASH_PURPOSES = {
     "question_split",

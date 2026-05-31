@@ -334,7 +334,7 @@ def _extract_question_detail(q: Dict) -> Dict:
         "density_reason": features.get("density_reason", ""),
         "novelty_reason": features.get("novelty_reason", ""),
         "representation_reason": features.get("representation_reason", ""),
-        # Gemini 分析
+        # 模型分析结果
         "knowledge_points": analysis.get("knowledge_points", []),
         "detailed_analysis": analysis.get("detailed_analysis", ""),
         "common_mistakes": analysis.get("common_mistakes", []),

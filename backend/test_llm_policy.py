@@ -83,31 +83,6 @@ def test_discontinued_model_fails_closed(monkeypatch):
         resolve_model_profile("difficulty_review")
 
 
-def test_get_providers_applies_policy_to_native_provider():
-    from llm_config import get_providers
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        f.write(b"{}")
-        sa_path = f.name
-    env = {
-        "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "test.sdk",
-        "LLM_CLOUD_MODE": "true",
-        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        "DEEPSEEK_API_KEY": "",
-        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-    }
-    try:
-        with patch.dict(os.environ, env, clear=True):
-            providers = get_providers(purpose="question_split")
-            native = [p for p in providers if p.get("api_format") == "native_sdk"]
-            assert len(native) == 1
-            assert native[0]["model"] == "flash-model-preview"
-            assert native[0]["model_role"] == "flash"
-            assert native[0]["model_policy"] == "exam-review-global"
-    finally:
-        os.unlink(sa_path)
 
 
 def test_qwen_key_enables_vision_provider_only_by_default(monkeypatch):
@@ -195,35 +170,6 @@ def test_general_text_requests_prefer_deepseek_then_qwen_without_native_by_defau
         os.unlink(sa_path)
 
 
-def test_text_requests_can_enable_native_as_explicit_fallback():
-    from llm_config import get_providers
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        f.write(b"{}")
-        sa_path = f.name
-    env = {
-        "DEEPSEEK_API_KEY": "test-deepseek",
-        "QWEN_API_KEY": "test-qwen",
-        "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "test.sdk",
-        "LLM_CLOUD_MODE": "true",
-        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-    }
-    try:
-        with patch.dict(os.environ, env, clear=True):
-            providers = get_providers(purpose="difficulty_review")
-            assert [provider["name"] for provider in providers] == [
-                "deepseek",
-                "primary",
-            ]
-            native = providers[-1]
-            assert native["model"] == "pro-model-preview"
-            assert native["model_role"] == "pro"
-            assert native["model_policy"] == "exam-review-global"
-    finally:
-        os.unlink(sa_path)
 
 
 @pytest.mark.parametrize(
@@ -272,52 +218,5 @@ def test_qwen_text_fallback_requires_explicit_opt_in():
         assert providers[1]["model_policy"] == "exam-review-qwen-text"
 
 
-def test_image_requests_can_force_native_vision_provider():
-    from llm_config import get_providers
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        f.write(b"{}")
-        sa_path = f.name
-    env = {
-        "QWEN_API_KEY": "test-qwen",
-        "LLM_VISION_PROVIDER": "native",
-        "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "test.sdk",
-        "LLM_CLOUD_MODE": "true",
-        "DEEPSEEK_API_KEY": "",
-        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-    }
-    try:
-        with patch.dict(os.environ, env, clear=True):
-            providers = get_providers(purpose="question_split", requires_images=True)
-            assert [provider["name"] for provider in providers] == ["primary"]
-    finally:
-        os.unlink(sa_path)
 
 
-def test_legacy_native_model_env_does_not_override_policy_by_default():
-    from llm_config import get_providers
-
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        f.write(b"{}")
-        sa_path = f.name
-    env = {
-        "LLM_SA_CREDENTIALS": sa_path,
-        "LLM_SDK_MODULE": "test.sdk",
-        "LLM_CLOUD_MODE": "true",
-        "LLM_NATIVE_MODEL": "legacy-pro-model",
-        "LLM_ENABLE_NATIVE_TEXT_FALLBACK": "true",
-        "DEEPSEEK_API_KEY": "",
-        "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-        "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-    }
-    try:
-        with patch.dict(os.environ, env, clear=True):
-            providers = get_providers(purpose="difficulty_review")
-            native = [p for p in providers if p.get("api_format") == "native_sdk"]
-            assert len(native) == 1
-            assert native[0]["model"] == "pro-model-preview"
-            assert native[0]["model_role"] == "pro"
-    finally:
-        os.unlink(sa_path)

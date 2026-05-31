@@ -532,8 +532,8 @@ class TestGenerateInsights:
             report_insights,
             "get_last_call_metadata",
             lambda: {
-                "provider": "native_sdk",
-                "model": "primary-pro",
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
                 "fallback_count": 0,
                 "provider_errors": [],
             },
@@ -548,8 +548,8 @@ class TestGenerateInsights:
 
         calls = result["_llm_calls"]
         assert calls[0]["purpose"] == "report_insights"
-        assert calls[0]["provider"] == "native_sdk"
-        assert calls[0]["model"] == "primary-pro"
+        assert calls[0]["provider"] == "deepseek"
+        assert calls[0]["model"] == "deepseek-v4-pro"
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_report_llm_uses_deterministic_temperature(self, mock_gpt, sample_report_data):

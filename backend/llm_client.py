@@ -14,7 +14,6 @@ logger = get_logger()
 
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
-_native_client = None
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
 _review_channel: ContextVar[str | None] = ContextVar("llm_review_channel", default=None)
 _evidence_gateway = None
@@ -232,8 +231,8 @@ def _raise_if_incomplete_finish(provider_name: str, finish_reason):
 
 
 def _deterministic_seed(provider: dict) -> int:
-    """确定性复现 seed（temperature<=0 时使用）。统一 native 与 openai_chat 两条路径，
-    消除 'seed 只接 Gemini、DeepSeek 没接' 的分叉（RC2 根因修复）。"""
+    """确定性复现 seed（temperature<=0 时使用）。统一各 provider 的 seed 注入路径，
+    确保可复现性（RC2 根因修复）。"""
     seed = provider.get("deterministic_seed")
     if seed is None:
         seed = os.environ.get("LLM_DETERMINISTIC_SEED", "20260526")
@@ -241,29 +240,6 @@ def _deterministic_seed(provider: dict) -> int:
         return int(seed)
     except (TypeError, ValueError):
         return 20260526
-
-
-def _native_generation_config_kwargs(provider: dict, max_tokens: int,
-                                     temperature: float) -> dict:
-    thinking_mult = provider.get("thinking_overhead", 1)
-    capped_tokens = min(max_tokens * thinking_mult, provider["max_tokens"])
-    config_kwargs = {
-        "max_output_tokens": capped_tokens,
-        "temperature": temperature,
-    }
-
-    try:
-        is_zero_temperature = float(temperature) <= 0
-    except (TypeError, ValueError):
-        is_zero_temperature = False
-    if is_zero_temperature:
-        config_kwargs.update({
-            "candidate_count": 1,
-            "seed": _deterministic_seed(provider),
-            "top_p": float(provider.get("deterministic_top_p", 1.0)),
-            "top_k": int(provider.get("deterministic_top_k", 1)),
-        })
-    return config_kwargs
 
 
 def _build_request_body(provider: dict, messages: list, max_tokens: int,
@@ -491,137 +467,6 @@ async def _call_app_builder_grounded_generation(
     return result["text"]
 
 
-# ── Native SDK provider ────────────────────────────────────────────────
-
-def _get_native_client(provider: dict):
-    global _native_client
-    if _native_client is None:
-        import importlib
-        sdk_module = provider["sdk_module"]
-        sdk = importlib.import_module(sdk_module)
-        project = os.environ.get(provider.get("project_env", ""), "")
-        location = os.environ.get(provider.get("location_env", ""), "us-central1")
-        client_kwargs = {
-            "vertexai": provider.get("cloud_mode", False),
-            "project": project,
-            "location": location,
-        }
-        sa_path = os.environ.get(provider.get("sa_file_env", ""), "")
-        if sa_path:
-            os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", sa_path)
-            try:
-                from google.oauth2 import service_account
-
-                client_kwargs["credentials"] = (
-                    service_account.Credentials.from_service_account_file(
-                        sa_path,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"{provider['name']} provider_credentials_failed: {type(exc).__name__}: {exc}"
-                ) from exc
-        _native_client = sdk.Client(**client_kwargs)
-    return _native_client
-
-
-def _convert_messages_to_native(messages: list) -> tuple:
-    """OpenAI Chat messages → native SDK (contents, system_instruction)。"""
-    contents = []
-    system_instruction = None
-    for msg in messages:
-        role = msg["role"]
-        if role == "system":
-            if isinstance(msg["content"], str):
-                system_instruction = msg["content"]
-            continue
-        native_role = "model" if role == "assistant" else "user"
-        parts = []
-        content = msg["content"]
-        if isinstance(content, str):
-            parts.append({"text": content})
-        else:
-            for item in content:
-                if item.get("type") == "text":
-                    parts.append({"text": item["text"]})
-                elif item.get("type") == "image_url":
-                    url = item["image_url"]["url"]
-                    if url.startswith("data:"):
-                        header, b64data = url.split(",", 1)
-                        mime_type = header.split(";")[0].split(":")[1]
-                        parts.append({"inline_data": {"mime_type": mime_type, "data": b64data}})
-                    else:
-                        raise RuntimeError(
-                            "native provider unsupported_media: image_url must be a data URL"
-                        )
-                else:
-                    raise RuntimeError(
-                        f"native provider unsupported_content_type: {item.get('type')}"
-                    )
-        if not parts:
-            raise RuntimeError("native provider empty_message_parts")
-        contents.append({"role": native_role, "parts": parts})
-    return contents, system_instruction
-
-
-async def _call_native_provider(provider: dict, messages: list, max_tokens: int,
-                                temperature: float, timeout: float = 120.0) -> str:
-    """调用 native SDK provider，含超时和重试。"""
-    import importlib
-    sdk_module = provider["sdk_module"]
-    types = importlib.import_module(f"{sdk_module}.types")
-
-    client = _get_native_client(provider)
-    contents, system_instruction = _convert_messages_to_native(messages)
-    config_kwargs = _native_generation_config_kwargs(provider, max_tokens, temperature)
-    if system_instruction:
-        config_kwargs["system_instruction"] = system_instruction
-
-    config = types.GenerateContentConfig(**config_kwargs)
-    sem = _get_semaphore(provider)
-    retries = provider.get("retry_count", 2)
-
-    async with sem:
-        last_err = None
-        for attempt in range(retries + 1):
-            try:
-                response = await asyncio.wait_for(
-                    client.aio.models.generate_content(
-                        model=provider["model"],
-                        contents=contents,
-                        config=config,
-                    ),
-                    timeout=timeout,
-                )
-                if response.candidates:
-                    _raise_if_incomplete_finish(
-                        provider["name"],
-                        response.candidates[0].finish_reason,
-                    )
-                text = response.text
-                if text is None:
-                    raise RuntimeError(f"Provider returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'})")
-                return text
-            except asyncio.TimeoutError:
-                last_err = TimeoutError(f"Provider timeout after {timeout}s")
-                if attempt < retries:
-                    wait = 2 ** attempt
-                    logger.warning(f"[LLM] provider timeout, retry {attempt+1}/{retries} in {wait}s")
-                    await asyncio.sleep(wait)
-                    continue
-                raise last_err
-            except Exception as e:
-                last_err = e
-                if attempt < retries and "500" in str(e):
-                    wait = 2 ** attempt
-                    logger.warning(f"[LLM] provider error, retry {attempt+1}/{retries} in {wait}s: {str(e)[:80]}")
-                    await asyncio.sleep(wait)
-                    continue
-                raise
-        raise last_err
-
-
 # ── HTTP 调用 ─────────────────────────────────────────────────────
 
 async def _http_post(url: str, headers: dict, json: dict,
@@ -639,8 +484,6 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
         raise RuntimeError(
             f"{provider['name']} provider_unsupported_media: image_url is not supported"
         )
-    if provider["api_format"] == "native_sdk":
-        return await _call_native_provider(provider, messages, max_tokens, temperature, timeout)
 
     url = _get_url(provider)
     headers = _get_headers(provider)
