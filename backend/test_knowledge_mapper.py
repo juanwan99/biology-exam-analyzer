@@ -60,7 +60,7 @@ def test_deepseek_fragmented_biotech_terms_are_merged_before_score_aggregation()
     assert mapper.map_knowledge_point(links[0]["knowledge_point"])["mapped"] is True
 
 
-def test_discovery_calibration_maps_deepseek_yimo_unmapped_terms():
+def test_calibration_maps_deepseek_yimo_unmapped_terms():
     mapper = KnowledgeMapper()
     terms = [
         "基因连锁与配子类型",
@@ -218,7 +218,7 @@ def test_canonicalization_does_not_narrow_broad_textbook_terms():
     assert canonicalize_knowledge_point("光合作用的光反应", knowledge_mapper=mapper)[0] == "光合作用的光反应"
 
 
-def test_discovery_calibration_maps_gamete_fusion_condition_terms():
+def test_calibration_maps_gamete_fusion_condition_terms():
     mapper = KnowledgeMapper()
 
     for term in ["配子结合的条件限制", "配子结合限制的应用", "配子的形成与受精", "配子类型与受精"]:
@@ -228,7 +228,7 @@ def test_discovery_calibration_maps_gamete_fusion_condition_terms():
         assert mapper.map_knowledge_point(canonical)["mapped"] is True
 
 
-def test_discovery_calibration_maps_current_deepseek_generation_leaks():
+def test_calibration_maps_current_deepseek_generation_leaks():
     mapper = KnowledgeMapper()
 
     cases = {
@@ -361,7 +361,7 @@ def test_discovery_calibration_maps_current_deepseek_generation_leaks():
         assert mapper.map_knowledge_point(canonical)["mapped"] is True
 
 
-def test_discovery_calibration_maps_ecology_context_labels_to_textbook_terms():
+def test_calibration_maps_ecology_context_labels_to_textbook_terms():
     mapper = KnowledgeMapper()
 
     cases = {
@@ -375,7 +375,7 @@ def test_discovery_calibration_maps_ecology_context_labels_to_textbook_terms():
         assert mapper.map_knowledge_point(canonical)["mapped"] is True
 
 
-def test_discovery_calibration_filters_context_and_method_terms_from_textbook_scores():
+def test_calibration_filters_context_and_method_terms_from_textbook_scores():
     mapper = KnowledgeMapper()
     links, diagnostics = normalize_knowledge_links(
         [
