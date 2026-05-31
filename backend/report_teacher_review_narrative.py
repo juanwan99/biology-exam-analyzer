@@ -44,17 +44,24 @@ def classify_overall_verdict(
     }
 
 
-def summarize_teacher_priorities(*, risk_question_ids: list[int], weak_dimensions: list[str], use_case: str) -> list[dict]:
+def summarize_teacher_priorities(*, risk_question_ids: list[int], weak_dimensions: list[str], use_case: str, attention_question_ids: list[int] | None = None) -> list[dict]:
     weak_text = "、".join(weak_dimensions[:3]) if weak_dimensions else "知识迁移和题干信息处理"
     if risk_question_ids:
         review_summary = f"建议先复核{_range_text(risk_question_ids)}的设问边界、评分标准和干扰项合理性。"
     else:
         review_summary = "暂未标出必须优先复核的高风险题；建议抽样复核高分值题、材料复杂题和表述较长题。"
-    return [
+    items = [
         {
             "title": "优先复核题",
             "summary": review_summary,
         },
+    ]
+    if attention_question_ids:
+        items.append({
+            "title": "建议关注题",
+            "summary": f"{_range_text(attention_question_ids)}为中等风险或待优化，建议抽样关注表述与区分度，不强制先复核。",
+        })
+    items.extend([
         {
             "title": "优先讲评点",
             "summary": f"讲评重点应放在{weak_text}，避免只讲答案不讲审题路径。",
@@ -63,7 +70,8 @@ def summarize_teacher_priorities(*, risk_question_ids: list[int], weak_dimension
             "title": "使用建议",
             "summary": f"本卷更适合作为{use_case}；若用于基础较弱班级，建议拆题讲评后再整卷训练。",
         },
-    ]
+    ])
+    return items
 
 
 def summarize_student_fit(*, avg_difficulty: float, high_pressure_count: int, target_group: str = "高三学生") -> dict:

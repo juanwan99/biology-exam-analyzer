@@ -99,6 +99,16 @@ SAFE_DESIGN_QUALITY_TERMS = (
     "有效考查",
 )
 
+SAFE_DISTRACTOR_QUALITY_PATTERNS = (
+    "错误典型",
+    "错误明确",
+    "绝对化错误典型",
+    "干扰项有效",
+    "选项平行",
+    "干扰项设置合理",
+    "错误说法典型",
+)
+
 HARD_RISK_PATTERNS = (
     "科学性错误",
     "答案与事实不符",
@@ -170,6 +180,9 @@ def _is_safe_distractor_clause(clause: str) -> bool:
     has_option_context = any(term in clause for term in SAFE_OPTION_TERMS)
     has_distractor_context = any(term in clause for term in SAFE_DISTRACTOR_TERMS)
     has_design_quality = any(term in clause for term in SAFE_DESIGN_QUALITY_TERMS)
+    has_distractor_quality = any(p in clause for p in SAFE_DISTRACTOR_QUALITY_PATTERNS)
+    if has_distractor_quality and (has_option_context or has_distractor_context):
+        return True
     return (has_option_context or has_distractor_context) and has_design_quality
 
 
@@ -190,17 +203,78 @@ def _only_safe_distractor_risks(text: str) -> bool:
     return all(_is_safe_distractor_clause(clause) for clause in clauses) or _is_safe_option_design_text(text)
 
 
+NEGATION_MARKERS = ("无", "没有", "未", "暂无", "缺乏", "不存在")
+ACTION_NEGATION_VERBS = ("说明", "解释", "给出", "指出", "明确", "标注", "标明", "提供", "涉及")
+ALWAYS_RISK_TERMS = ("无法", "需复核", "需要复核")
+DOUBLE_NEGATION_RISK = (
+    "不是没有", "并非没有", "不能说没有", "并非无", "不无",
+    "无法排除", "不能排除", "难以排除",
+    "无法确认", "不能确认", "难以确认",
+    "无法保证", "不能保证",
+)
+
+
+def _has_double_negation_or_uncertainty(clause: str) -> bool:
+    return any(p in clause for p in DOUBLE_NEGATION_RISK)
+
+
+def _split_by_contrast_connectors(clause: str) -> list:
+    import re
+    parts = re.split(r"但是|但|然而|不过|尽管如此|仍然|仍|却", clause)
+    return [p for p in parts if p.strip()] or [clause]
+
+
+def _risk_term_positions(segment: str) -> list:
+    out = []
+    for term in RISK_TERMS:
+        start = 0
+        while True:
+            pos = segment.find(term, start)
+            if pos < 0:
+                break
+            out.append((pos, term))
+            start = pos + len(term)
+    return out
+
+
+def _risk_term_is_negated(segment: str, idx: int, term: str) -> bool:
+    if term in ALWAYS_RISK_TERMS:
+        return False
+    window = segment[max(0, idx - 12):idx]
+    for neg in NEGATION_MARKERS:
+        npos = window.rfind(neg)
+        if npos < 0:
+            continue
+        after = window[npos + len(neg):]
+        if any(after.startswith(verb) for verb in ACTION_NEGATION_VERBS):
+            continue
+        return True
+    return False
+
+
 def contains_risk_text(value: Any) -> bool:
-    """Return True only when the text carries an actionable review risk."""
+    """Return True only when the text carries an actionable review risk.
+
+    通用否定识别：正面评价(无X错误/无歧义)不算风险；双重否定/不确定(不能排除/
+    无法确认)与转折后的真风险仍算风险。只判断文本语义，不改难度/质量计算。
+    """
     text = str(value or "").strip()
     review_text = _review_text(text)
     if not review_text or not any(term in review_text for term in RISK_TERMS):
         return False
     if _only_safe_distractor_risks(review_text):
         return False
-    if text.startswith(RISK_NEGATION_PREFIXES) and not any(term in review_text for term in RISK_CONTRAST_TERMS):
+    clauses = _risk_clauses(review_text)
+    if not clauses:
         return False
-    return True
+    for clause in clauses:
+        if _has_double_negation_or_uncertainty(clause):
+            return True
+        for segment in _split_by_contrast_connectors(clause):
+            for idx, term in _risk_term_positions(segment):
+                if not _risk_term_is_negated(segment, idx, term):
+                    return True
+    return False
 
 
 _contains_risk_text = contains_risk_text

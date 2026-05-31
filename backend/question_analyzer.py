@@ -1182,8 +1182,8 @@ class QuestionAnalyzer:
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
-            sub_timeout = min(analysis_timeout, 150.0)
-            for sub_budget in (4096, 2048):
+            sub_timeout = max(analysis_timeout, 480.0)
+            for sub_budget in (64000,):
                 _transient_left = 1
                 while True:
                     try:
@@ -1227,8 +1227,6 @@ class QuestionAnalyzer:
                             sub_obj, FineGrainedResult, f"题目{question_id} 第{sub_idx}问")
                         sub_fg = FineGrainedResult(**sub_validated)
                     except Exception as sub_parse_exc:
-                        if sub_budget > 2048:
-                            break
                         if _transient_left > 0:
                             _transient_left -= 1
                             logger.warning(f"[分析] 题目{question_id} 第{sub_idx}问解析失败重试: {sub_parse_exc}")
@@ -1247,7 +1245,7 @@ class QuestionAnalyzer:
 
         async def _split_merge_analysis(initial_reason: str):
             """RC7 方案A：大题按子问拆分→定向输出→合并。复用 extractor(缓存近免费)拿子问分段+权重。
-            子问调用【串行】（E2E 实证并行会把 DeepSeek 打挂 All providers failed）。
+            子问调用【并行】（DeepSeek 500 并发，子问并行安全；旧串行前提是 16384 cap 下的误判）。
             extract 失败 / 子问<2 / 任一子问失败 → 返回 None，调用方回退现有整题阶梯（安全网保留）。"""
             big_total = _infer_fallback_total_score()
             if not big_total or big_total < 8:
@@ -1264,15 +1262,19 @@ class QuestionAnalyzer:
             sub_metas = bigq["subquestions"]
             if len(sub_metas) < 2:
                 return None
-            logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分（串行）({initial_reason})")
+            logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分（并行）({initial_reason})")
+            _sub_tasks = [
+                _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+                for _i, _sm in enumerate(sub_metas, start=1)
+            ]
+            _sub_raw = await asyncio.gather(*_sub_tasks, return_exceptions=True)
             results = []
-            for _i, _sm in enumerate(sub_metas, start=1):
-                try:
-                    _one = await _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
-                except Exception as _one_exc:
-                    logger.warning(f"[分析] 题目{question_id} 第{_i}问 split 异常: {_one_exc}")
-                    _one = None
-                results.append(_one)
+            for _i, _r in enumerate(_sub_raw, start=1):
+                if isinstance(_r, Exception):
+                    logger.warning(f"[分析] 题目{question_id} 第{_i}问 split 异常: {_r}")
+                    results.append(None)
+                else:
+                    results.append(_r)
             ok_results, ok_metas = [], []
             for _idx, _r in enumerate(results):
                 if isinstance(_r, dict) and _r.get("scoring_units"):

@@ -2,7 +2,7 @@
 
 This module converts the existing ``report_data`` aggregate into a
 Bain-style report contract: judgment first, evidence second, figures and
-actions after that. It does not call LLMs and does not render HTML/PDF.
+actions after that. It does not call AIs and does not render HTML/PDF.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from datetime import datetime
 import re
 from typing import Any, Dict, Iterable, List
 
+from analysis_calibration import canonicalize_knowledge_point
 from report_commercial_narrative import (
     action_for_question,
     contains_risk_text as _contains_risk_text,
@@ -177,7 +178,7 @@ FAIL_CLOSED_DIFFICULTY_FLAGS = {
 }
 
 LIMITATIONS = [
-    "LLM 生成的诊断结论在正式使用前应由学科教师复核。",
+    "AI 生成的诊断结论在正式使用前应由学科教师复核。",
     "低置信度元数据是复核信号，不等同于最终质量判定。",
     "题目风险等级综合模型输出与元数据质量，用于排序人工复核优先级。",
 ]
@@ -304,24 +305,24 @@ FAILURE_COPY = {
         "severity": "warning",
     },
     "missing_llm_calls": {
-        "stage": "LLM 调用追踪",
-        "title": "LLM 调用记录缺失",
+        "stage": "AI 调用追踪",
+        "title": "AI 调用记录缺失",
         "reason": "报告数据中没有可追溯的模型调用记录。",
         "impact": "无法判断该结论来自哪次提示词、哪类解析和哪种校验。",
         "action": "请重跑分析并保留调用元数据。",
         "severity": "warning",
     },
     "llm_parse_failure": {
-        "stage": "LLM 返回解析",
-        "title": "LLM 返回解析失败",
+        "stage": "AI 返回解析",
+        "title": "AI 返回解析失败",
         "reason": "模型返回内容曾无法解析为约定结构。",
         "impact": "相关字段需要复核，不能只看最终摘要。",
         "action": "请查看解析失败的调用目的；必要时调整提示词或重跑该题。",
         "severity": "warning",
     },
     "llm_retry": {
-        "stage": "LLM 调用重试",
-        "title": "LLM 调用发生重试",
+        "stage": "AI 调用重试",
+        "title": "AI 调用发生重试",
         "reason": "系统检测到模型输出或证据链不满足要求后进行了重试。",
         "impact": "最终结果可用性取决于重试后的结构化校验是否通过。",
         "action": "请在单题审查中查看该题是否仍有解析失败或证据缺口。",
@@ -653,7 +654,7 @@ def _warning_to_failure_explanation(warning: str, question: Dict | None = None, 
         return _failure_explanation(value or "difficulty_missing", question, qid, source="metadata_warning")
     if prefix == "llm_parse_failure":
         item = _failure_explanation("llm_parse_failure", question, qid, source="metadata_warning")
-        item["reason"] = f"{value or 'LLM 调用'} 返回内容曾无法解析为约定结构。"
+        item["reason"] = f"{value or 'AI 调用'} 返回内容曾无法解析为约定结构。"
         item["display"] = (
             f"失败阶段：{item['stage']}；原因：{item['reason']}；"
             f"影响：{item['impact']}；处理：{item['action']}"
@@ -661,7 +662,7 @@ def _warning_to_failure_explanation(warning: str, question: Dict | None = None, 
         return item
     if prefix == "llm_retry":
         item = _failure_explanation("llm_retry", question, qid, source="metadata_warning")
-        item["reason"] = f"{value or 'LLM 调用'} 发生过重试。"
+        item["reason"] = f"{value or 'AI 调用'} 发生过重试。"
         item["display"] = (
             f"失败阶段：{item['stage']}；原因：{item['reason']}；"
             f"影响：{item['impact']}；处理：{item['action']}"
@@ -723,7 +724,7 @@ def _difficulty_review_warnings(question: Dict[str, Any]) -> List[str]:
 
     flags = set(str(flag) for flag in _as_list(question.get("difficulty_flags")))
     if "rule_llm_mismatch" in flags:
-        warnings.append("规则特征与 LLM 难度判断不一致")
+        warnings.append("规则特征与 AI 难度判断不一致")
     return warnings
 
 
@@ -1077,7 +1078,7 @@ def _normalize_questions_for_report(exam: Dict[str, Any], questions: List[Dict[s
             question["structure_warnings"] = structure_warnings
             _append_metadata_warnings(
                 question,
-                [f"question_structure:{warning}" for warning in structure_warnings],
+                [f"题目结构：{warning}" for warning in structure_warnings],
             )
         scoring_units = _question_scoring_units(question)
         diagnostic_units = _question_diagnostic_units(question)
@@ -1089,7 +1090,7 @@ def _normalize_questions_for_report(exam: Dict[str, Any], questions: List[Dict[s
             question["difficulty_review_warnings"] = difficulty_warnings
             _append_metadata_warnings(
                 question,
-                [f"difficulty_review:{warning}" for warning in difficulty_warnings],
+                [f"难度复核：{warning}" for warning in difficulty_warnings],
             )
     return normalized
 
@@ -1411,18 +1412,29 @@ def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List
         return aggregate.setdefault(name, {
             "name": name,
             "weighted_score": 0.0,
-            "seu_count": 0,
+            "seu_ids": set(),
             "question_ids": set(),
             "risk_question_ids": set(),
             "bloom_total": 0.0,
             "bloom_count": 0,
+            "aliases": set(),
         })
 
+    def _canon(raw_value: Any) -> tuple[str, str]:
+        raw_name = str(raw_value or "未标注知识点")
+        label, _diag = canonicalize_knowledge_point(raw_name)
+        return (label or raw_name), raw_name
+
+    # 源1：采分点贡献（per-link）。归一知识点名作分组 key，seu_id 去重计数。
     for row in seu_rows:
-        name = str(row.get("knowledge_point") or "未标注知识点")
+        name, raw_name = _canon(row.get("knowledge_point"))
         item = bucket(name)
+        if raw_name and raw_name != name:
+            item["aliases"].add(raw_name)
         item["weighted_score"] += _num(row.get("score_contribution"), _num(row.get("weighted_score")))
-        item["seu_count"] += 1
+        seu_id = row.get("seu_id")
+        if seu_id is not None:
+            item["seu_ids"].add(seu_id)
         qid = row.get("question_id")
         if qid is not None:
             item["question_ids"].add(qid)
@@ -1433,22 +1445,35 @@ def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List
             item["bloom_total"] += bloom
             item["bloom_count"] += 1
 
+    has_seu_data = bool(aggregate)
+
+    # 源2：题目级先验 top_points（已 canonical）。同样归一，只抬升 weighted_score 上界。
     for point in _as_list(knowledge.get("top_points")):
         point = _as_dict(point)
-        name = str(point.get("name") or point.get("label") or "未标注知识点")
+        name, raw_name = _canon(point.get("name") or point.get("label"))
         item = bucket(name)
-        item["weighted_score"] = max(item["weighted_score"], _num(point.get("weighted_score", point.get("value", point.get("count")))))
+        if raw_name and raw_name != name:
+            item["aliases"].add(raw_name)
+        item["weighted_score"] = max(
+            item["weighted_score"],
+            _num(point.get("weighted_score", point.get("value", point.get("count")))),
+        )
 
     rows = []
     for item in aggregate.values():
+        seu_count = len(item["seu_ids"])
+        # 有采分点数据时，纯先验空壳（无任何 seu 支撑）不排进 Top
+        if has_seu_data and seu_count == 0:
+            continue
         bloom_count = item["bloom_count"] or 1
         rows.append({
             "name": item["name"],
             "weighted_score": round(item["weighted_score"], 2),
-            "seu_count": item["seu_count"],
+            "seu_count": seu_count,
             "question_count": len(item["question_ids"]),
             "risk_count": len(item["risk_question_ids"]),
             "avg_bloom": round(item["bloom_total"] / bloom_count, 2) if item["bloom_count"] else 0,
+            "aliases": sorted(item["aliases"]),
         })
     return sorted(rows, key=lambda row: (-row["weighted_score"], -row["risk_count"], row["name"]))[:10]
 
@@ -1758,22 +1783,37 @@ def _build_review_positioning() -> Dict[str, str]:
     }
 
 
-def _row_needs_priority_review(row: Dict[str, Any]) -> bool:
+def _row_review_tier(row: Dict[str, Any]) -> str:
+    # 复核分层: must=必须先复核 / watch=建议关注 / none=无需
+    # 对齐系统风险语义: medium 本就是 watch(关注)不等于必须复核; 硬伤=must, 待优化=watch
+    # 只改展示分层, 不改 risk_level/quality_level 的计算
     if row.get("needs_priority_review") is True:
-        return True
+        return "must"
     if row.get("risk_level") == "data_gap":
-        return False
-    if row.get("risk_level") in {"high", "medium"}:
-        return True
-    if row.get("quality_level") in {"硬伤", "待优化"}:
-        return True
+        return "none"
+    if row.get("risk_level") == "high":
+        return "must"
+    if row.get("quality_level") == "硬伤":
+        return "must"
+    if row.get("risk_level") == "medium":
+        return "watch"
+    if row.get("quality_level") == "待优化":
+        return "watch"
     if _contains_risk_text(row.get("primary_issue")):
-        return True
-    return False
+        return "watch"
+    return "none"
+
+
+def _row_needs_priority_review(row: Dict[str, Any]) -> bool:
+    return _row_review_tier(row) == "must"
 
 
 def _priority_review_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [row for row in rows if _row_needs_priority_review(row)]
+    return [row for row in rows if _row_review_tier(row) == "must"]
+
+
+def _attention_review_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [row for row in rows if _row_review_tier(row) == "watch"]
 
 
 def _question_range_text(ids: Iterable[Any]) -> str:
@@ -2075,6 +2115,8 @@ def _build_executive_summary(
     blocking_id_set = set(blocking_question_ids)
     priority_rows = [row for row in priority_rows if row.get("question_id") not in blocking_id_set]
     risk_question_ids = [int(row["question_id"]) for row in priority_rows if isinstance(row.get("question_id"), int)]
+    attention_rows = [row for row in _attention_review_rows(rows) if row.get("question_id") not in blocking_id_set]
+    attention_question_ids = [int(row["question_id"]) for row in attention_rows if isinstance(row.get("question_id"), int)]
     fine_summary = _as_dict(_as_dict(fine_exhibits).get("summary"))
     if blocking_rows:
         lead = (
@@ -2119,6 +2161,7 @@ def _build_executive_summary(
         })
     teacher_priorities.extend(summarize_teacher_priorities(
         risk_question_ids=risk_question_ids,
+        attention_question_ids=attention_question_ids,
         weak_dimensions=_teacher_weak_dimensions(rows),
         use_case="阶段诊断卷",
     ))
@@ -2183,7 +2226,7 @@ def _build_at_a_glance(
             "evidence_ref": "fine_grained_summary",
         },
         {
-            "metric": "LLM 调用",
+            "metric": "AI 调用",
             "value": str(_llm_total(llm_counts)),
             "interpretation": "统计题目分析、特征抽取和素养分析的调用覆盖。",
             "evidence_ref": "metadata:llm_call_counts",
@@ -2318,7 +2361,7 @@ def _build_chapters(
                     "takeaway": "逐题比较难度、质量、置信度、采分点数量和陷阱强度，定位粗粒度均值掩盖的异常题。",
                     "data": fine_exhibits.get("difficulty_factor_rows", []),
                     "source": "fine_grained_exhibits.difficulty_factor_rows",
-                    "notes": "由题目元数据、采分点和误区诊断派生，不新增 LLM 调用。",
+                    "notes": "由题目元数据、采分点和误区诊断派生，不新增 AI 调用。",
                 },
                 {
                     "id": "seu_competency_matrix",
@@ -2515,9 +2558,9 @@ def _build_evidence_integrity(
             "title": "整卷结论证据校验",
             "value": f"{score:.2f}",
             "detail": (
-                f"Grounding 状态 {status}，阈值 {threshold:.2f}；"
-                f"claims={int(_num(first_grounding.get('claim_count'), 0))}，"
-                f"citedChunks={int(_num(first_grounding.get('cited_chunk_count'), 0))}。"
+                f"证据核查状态 {status}，阈值 {threshold:.2f}；"
+                f"声明数={int(_num(first_grounding.get('claim_count'), 0))}，"
+                f"引用证据块={int(_num(first_grounding.get('cited_chunk_count'), 0))}。"
                 "低于阈值时，整卷总结需要人工复核。"
             ),
             "severity": severity,
@@ -2637,7 +2680,7 @@ def _build_evidence_integrity(
         })
     if missing_purpose_questions:
         items.append({
-            "title": "LLM 调用链缺口",
+            "title": "AI 调用链缺口",
             "value": f"{len(missing_purpose_questions)}项",
             "detail": f"涉及 {_q_label_list(missing_purpose_ids)}，需要补齐后再作最终定稿。",
             "severity": "warning",

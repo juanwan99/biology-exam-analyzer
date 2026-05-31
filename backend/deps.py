@@ -12,7 +12,7 @@ from logger import get_logger
 logger = get_logger()
 
 # ============ 环境变量 ============
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "21"))
 
 # ============ 惰性单例 ============
 _analyzer_instance = None

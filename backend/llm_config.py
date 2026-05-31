@@ -57,7 +57,8 @@ PROVIDERS = [
         "reasoning_effort": "medium",
         "response_format": "json_object",
         "max_tokens": 16384,
-        "semaphore_limit": 10,
+        "subq_max_tokens": 65536,
+        "semaphore_limit": 30,
         "retry_count": 2,
         "no_proxy": True,
     },
@@ -212,6 +213,8 @@ def get_providers(
 
     for template in PROVIDERS:
         p = dict(template)
+        if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions", "report_grounding_check") and p.get("subq_max_tokens"):
+            p["max_tokens"] = p["subq_max_tokens"]
         if p.get("vision_only") and not requires_images:
             continue
         if (

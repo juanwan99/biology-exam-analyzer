@@ -116,6 +116,10 @@ def _purpose_label(value: Any) -> str:
         "big_question_feature_extraction": "大题结构特征抽取",
         "competency_analysis": "核心素养分析",
         "split_questions": "题目拆分",
+        "image_inputs": "图像识别",
+        "report_insights": "报告综合分析",
+        "report_teaching_suggestions": "教学建议生成",
+        "report_grounding_check": "证据核查",
     }.get(str(value), str(value))
 
 
@@ -142,6 +146,15 @@ def _risk_label(value: Any) -> str:
 
 def _status_label(value: Any) -> str:
     return {
+        "baseline_visual_big_question_floor": "基础图文大题保底校准",
+        "evidence_rich_big_question_floor": "证据丰富大题保底校准",
+        "general_visual_big_question_ceiling": "图文大题上限校准",
+        "high_value_biotech_synthesis_floor": "高价值生物技术综合保底校准",
+        "high_value_breeding_engineering_floor": "高价值育种工程保底校准",
+        "seu_extreme_rule_moderation": "采分点极端值校准",
+        "seu_low_construct_moderation": "采分点低区分度校准",
+        "seu_many_medium_unit_moderation": "多中等采分点校准",
+        "compact_seu_bottleneck_lift": "采分点瓶颈难度上调校准",
         "ok": "正常",
         "pass": "通过",
         "warning": "需治理",
@@ -244,7 +257,7 @@ def _field_label(value: Any) -> str:
         "teacher_comment": "教师评语",
         "warning_questions": "告警题目",
         "missing_envelope_questions": "缺失元数据包题目",
-        "llm_call_counts": "LLM 调用次数",
+        "llm_call_counts": "AI 调用次数",
         "difficulty_gradient": "逐题难度",
         "bloom_distribution": "认知层级分布",
         "knowledge_top_points": "高频知识点",
@@ -305,7 +318,7 @@ def _localize_text(value: Any) -> str:
     text = str(value)
     replacements = {
         "metadata envelope": "元数据包",
-        "LLM purpose": "LLM 调用目的",
+        "LLM purpose": "AI 调用目的",
         "warning_questions": "告警题目",
         "missing_envelope_questions": "缺失元数据包题目",
         "metadata_quality": "元数据质量",
@@ -348,7 +361,7 @@ def _ref_label(value: Any) -> str:
     mapping = {
         "metadata:warning_questions": "元数据：告警题目",
         "metadata:missing_envelope_questions": "元数据：缺失元数据包题目",
-        "metadata:llm_call_counts": "元数据：LLM 调用次数",
+        "metadata:llm_call_counts": "元数据：AI 调用次数",
         "report_data.difficulty_gradient": "报告数据：难度梯度",
         "report_data.metadata_quality": "报告数据：元数据质量",
         "fine_grained_exhibits.seu_rows + report_data.knowledge.top_points": "审题证据：知识点聚合",
@@ -741,7 +754,7 @@ def _render_hero(model: Dict[str, Any]) -> str:
         ("scope", "题目数", scope.get("questions", "-")),
         ("score", "总分", scope.get("total_score", "-")),
         ("metadata", "元数据状态", _status_label(credibility.get("metadata_status", "-"))),
-        ("llm", "LLM 调用", credibility.get("llm_calls_total", "-")),
+        ("llm", "AI 调用", credibility.get("llm_calls_total", "-")),
     ]
     metric_html = "".join(
         f'<div class="hero-metric">{_icon(icon)}<span>{_e(label)}</span><strong>{_e(value)}</strong></div>'
@@ -1191,7 +1204,7 @@ def _render_methodology(model: Dict[str, Any]) -> str:
         prompt_rows.append('<tr><td colspan="4" class="muted" data-label="状态">暂无提示词清单</td></tr>')
     return (
         '<section class="report-section methodology" id="methodology">'
-        f'{_section_heading("06", "LLM 调用与方法论", "methodology")}'
+        f'{_section_heading("06", "AI 调用与方法论", "methodology")}'
         f'{summary_cards}'
         f'<div class="wide-chart-frame"><div class="chart-kicker">方法论图表</div>{render_methodology_chart(methodology)}</div>'
         '<div class="method-grid">'
@@ -1203,7 +1216,7 @@ def _render_methodology(model: Dict[str, Any]) -> str:
         f'{_render_list(_items(methodology.get("limitations")))}</article>'
         "</div>"
         '<div class="table-wrap"><table class="prompt-table">'
-        '<caption class="sr-only">LLM 调用提示词清单</caption>'
+        '<caption class="sr-only">AI 调用提示词清单</caption>'
         '<thead><tr><th>调用目的</th><th>记录数</th><th>解析字段</th><th>提示词摘要</th></tr></thead>'
         f'<tbody>{"".join(prompt_rows)}</tbody></table></div>'
         "</section>"
@@ -2753,7 +2766,7 @@ def _render_pdf_cover(model: Dict[str, Any]) -> str:
         ("题目数", scope.get("questions", "-")),
         ("总分", scope.get("total_score", "-")),
         ("元数据状态", _status_label(credibility.get("metadata_status", "-"))),
-        ("LLM 调用", credibility.get("llm_calls_total", "-")),
+        ("AI 调用", credibility.get("llm_calls_total", "-")),
     ]
     metric_html = "".join(
         f'<article><span>{_e(label)}</span><strong>{_e(value)}</strong></article>'
@@ -2944,7 +2957,7 @@ def _render_pdf_methodology(model: Dict[str, Any]) -> str:
         )
     return (
         '<section class="pdf-page pdf-content">'
-        f'{_render_pdf_page_header("06", "LLM 调用与方法论", "元数据、提示词和字段解析是报告可信度的根。")}'
+        f'{_render_pdf_page_header("06", "AI 调用与方法论", "元数据、提示词和字段解析是报告可信度的根。")}'
         f'<div class="pdf-wide-chart"><div class="chart-kicker">方法论图表</div>{render_methodology_chart(methodology)}</div>'
         '<table class="pdf-table"><thead><tr><th>调用目的</th><th>记录数</th><th>关键字段</th><th>提示词摘要</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table>'

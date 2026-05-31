@@ -35,7 +35,7 @@ FONT_STACK = '"Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Ping
 CHART_LABELS = {
     "difficulty-gradient": "逐题难度曲线",
     "bloom-distribution": "认知层级堆叠条",
-    "knowledge-top-points": "知识点 Pareto 排名",
+    "knowledge-top-points": "知识点重要性排名",
     "competency-distribution": "核心素养雷达图",
     "question-risk-distribution": "题目风险分布图",
     "metadata-quality": "元数据质量图",
@@ -43,7 +43,7 @@ CHART_LABELS = {
     "seu-competency-matrix": "采分点知识点素养矩阵",
     "du-trap-map": "学生误区负荷图",
     "question-portfolio": "题目组合气泡图",
-    "methodology-llm": "LLM 调用结构图",
+    "methodology-llm": "AI 调用结构图",
 }
 
 BLOOM_HIGH_ORDER_LABELS = {"分析", "评价", "创造"}
@@ -85,6 +85,13 @@ def _status_label(value: Any) -> str:
         "medium": "关注",
         "low": "稳定",
         "question_analysis": "题目结构分析",
+        "image_inputs": "图像识别",
+        "feature_extraction": "难度与质量特征抽取",
+        "big_question_feature_extraction": "大题结构特征抽取",
+        "split_questions": "题目拆分",
+        "report_insights": "报告综合分析",
+        "report_teaching_suggestions": "教学建议生成",
+        "report_grounding_check": "证据核查",
         "feature_extraction": "难度质量抽取",
         "big_question_feature_extraction": "大题特征抽取",
         "competency_analysis": "核心素养分析",
@@ -410,15 +417,16 @@ def render_knowledge_bars(data: Any) -> str:
                 "risk_count": int(_num(item.get("risk_count"))),
                 "seu_count": int(_num(item.get("seu_count"))),
                 "avg_bloom": _num(item.get("avg_bloom")),
+                "aliases": [str(a) for a in (item.get("aliases") or [])],
             })
     if not rows:
-        return _empty_chart("knowledge-top-points", "知识点 Pareto 排名")
+        return _empty_chart("knowledge-top-points", "知识点重要性排名")
     rows = sorted(rows, key=lambda item: (-item["value"], -item["risk_count"], item["label"]))[:8]
     width = 940
     row_h = 44
     height = 140 + row_h * len(rows)
     max_v = max(row["value"] for row in rows) or 1
-    body = [_title("知识点 Pareto 排名", width)]
+    body = [_title("知识点重要性排名", width)]
     body.append(_axis_label("分值权重", 190, 68, "start"))
     body.append(_axis_label("题数", 700, 68, "middle"))
     body.append(_axis_label("风险", 760, 68, "middle"))
@@ -431,7 +439,10 @@ def render_knowledge_bars(data: Any) -> str:
         bar_w = 430 * row["value"] / max_v
         is_top = index == 0 or row["risk_count"] > 0
         color = PALETTE["accent"] if is_top else [PALETTE["platinum"], PALETTE["watch"], PALETTE["blue"], PALETTE["purple"]][index % 4]
-        body.append(_axis_label(_truncate(row["label"], 16), 170, y + 20, "end"))
+        _kn_label = row["label"]
+        if row.get("aliases"):
+            _kn_label = f'{_kn_label}·含{row["aliases"][0]}等'
+        body.append(_axis_label(_truncate(_kn_label, 18), 170, y + 20, "end"))
         body.append(f'<rect data-role="{"highlight" if is_top else "context"}" x="190" y="{y}" width="{bar_w:.1f}" height="24" rx="4" fill="{color}" />')
         body.append(f'<text x="{202 + min(bar_w, 430):.1f}" y="{y + 18}" font-size="14" fill="{PALETTE["ink"]}">{row["value"]:g}</text>')
         body.append(f'<text x="700" y="{y + 18}" text-anchor="middle" font-size="14" fill="{PALETTE["ink"]}">{row["question_count"]}</text>')
@@ -439,9 +450,9 @@ def render_knowledge_bars(data: Any) -> str:
         body.append(f'<text x="820" y="{y + 18}" text-anchor="middle" font-size="14" fill="{PALETTE["ink"]}">{row["seu_count"]}</text>')
         body.append(f'<text x="880" y="{y + 18}" text-anchor="middle" font-size="14" fill="{PALETTE["ink"]}">{row["avg_bloom"]:.1f}</text>')
         if index == 2:
-            body.append(_benchmark_line(190, y + 34, 880, y + 34, "Top 3 截止", 190, y + 54, "start"))
+            body.append(_benchmark_line(190, y + 34, 880, y + 34, "前 3 截止", 190, y + 54, "start"))
     if len(rows) >= 2:
-        body.append(_callout(f"Top 3 合计 {top3_total:g}", 880, 92, "end"))
+        body.append(_callout(f"前 3 合计 {top3_total:g}", 880, 92, "end"))
         body.append(_note("口径：由知识点覆盖题数、风险题数、采分点数和平均能力层级聚合；红色表示最高权重或关联风险题。", 190, height - 14, "start"))
     return _svg("knowledge-top-points", width, height, "".join(body))
 
@@ -775,7 +786,7 @@ def render_metadata_quality(data: Dict[str, Any]) -> str:
     low = len(_items(data.get("low_confidence_questions")))
     missing = len(_items(data.get("missing_envelope_questions")))
     calls = sum(_num(v) for v in _dict(data.get("llm_call_counts")).values())
-    rows = [("题目总数", total, PALETTE["blue"]), ("告警题", warning, PALETTE["watch"]), ("低置信度", low, PALETTE["accent"]), ("缺失元数据包", missing, PALETTE["risk"]), ("LLM 调用", calls, PALETTE["teal"])]
+    rows = [("题目总数", total, PALETTE["blue"]), ("告警题", warning, PALETTE["watch"]), ("低置信度", low, PALETTE["accent"]), ("缺失元数据包", missing, PALETTE["risk"]), ("AI 调用", calls, PALETTE["teal"])]
     width, height = 720, 320
     max_v = max(value for _, value, _ in rows) or 1
     body = [_title("元数据治理仪表图", width)]
@@ -790,7 +801,7 @@ def render_metadata_quality(data: Dict[str, Any]) -> str:
         body.append(f'<rect data-role="{"highlight" if is_governance_gap else "context"}" x="190" y="{y}" width="{420 * value / max_v:.1f}" height="24" rx="4" fill="{fill}" />')
         body.append(f'<text x="628" y="{y + 18}" font-size="15" fill="{PALETTE["ink"]}">{value:g}</text>')
     body.append(_callout(f"治理缺口 {low + missing:g}", 628, 170, "end"))
-    body.append(_note("口径：低置信与缺失元数据包用红色标识；LLM 调用量只作为覆盖校验。", 190, height - 18, "start"))
+    body.append(_note("口径：低置信与缺失元数据包用红色标识；AI 调用量只作为覆盖校验。", 190, height - 18, "start"))
     return _svg("metadata-quality", width, height, "".join(body))
 
 
@@ -815,7 +826,7 @@ def render_fine_grained_heatmap(rows: Any) -> str:
     width, height = 1040, 168 + len(items) * 34
     left, top = 112, 122
     cell_w, cell_h = 98, 27
-    body = [_title("Top 压力题 × 难度因子热力图", width)]
+    body = [_title("重点压力题 × 难度因子热力图", width)]
     body.append(_axis_label("按压力指数排序，保留最能解释风险来源的关键因子", left, 62, "start"))
     metadata_line_x = left + cell_w * 1.5
     body.append(_benchmark_line(metadata_line_x, top - 22, metadata_line_x, top + len(items) * 34 - 4, "元数据缺口阈值", metadata_line_x + 10, top - 34, "start"))
@@ -854,13 +865,9 @@ def render_seu_competency_matrix(rows: Any) -> str:
         matrix.setdefault(knowledge, {})
         matrix[knowledge][competency] = matrix[knowledge].get(competency, 0) + _num(row.get("weighted_score"))
     knowledge_rows = sorted(matrix.items(), key=lambda item: -sum(item[1].values()))[:8]
-    competencies = []
-    for _, values in knowledge_rows:
-        for competency in values:
-            if competency not in competencies:
-                competencies.append(competency)
-    competencies = competencies[:5]
-    max_value = max((value for _, values in knowledge_rows for value in values.values()), default=1)
+    CORE_COMPETENCIES = ("生命观念", "科学思维", "科学探究", "社会责任")
+    competencies = list(CORE_COMPETENCIES)
+    max_value = max((values.get(c, 0) for _, values in knowledge_rows for c in competencies), default=1) or 1
     width, height = 920, 162 + len(knowledge_rows) * 44
     left, top = 210, 122
     cell_w, cell_h = 122, 31
@@ -885,7 +892,7 @@ def render_seu_competency_matrix(rows: Any) -> str:
             if value > 0:
                 body.append(f'<text x="{x + (cell_w - 6) / 2:.1f}" y="{y + 21}" text-anchor="middle" font-size="14" font-weight="700" fill="{PALETTE["ink"]}">{value:.1f}</text>')
     body.append(_callout(f"主承载：{max_cell[0]} × {max_cell[1]}", width - 34, 66, "end"))
-    body.append(_note("口径：采分点分值按知识点与核心素养交叉聚合；红色为最大承载组合。", left, height - 18, "start"))
+    body.append(_note("口径：采分点分值按知识点与核心素养交叉聚合；红色为最大承载组合；空格表示本卷采分点未显性承载该素养。", left, height - 18, "start"))
     return _svg("seu-competency-matrix", width, height, "".join(body))
 
 
@@ -1167,13 +1174,13 @@ def render_methodology_chart(methodology: Dict[str, Any]) -> str:
     counts = _dict(_dict(methodology.get("llm_call_summary")).get("purpose_counts"))
     rows = [(_status_label(key), _num(value)) for key, value in counts.items() if _num(value) > 0]
     if not rows:
-        return _empty_chart("methodology-llm", "LLM 调用结构图")
+        return _empty_chart("methodology-llm", "AI 调用结构图")
     rows = sorted(rows, key=lambda item: -item[1])
     width = 920
     row_h = 44
     height = 116 + len(rows) * row_h
     max_v = max(value for _, value in rows) or 1
-    body = [_title("LLM 调用结构图", width)]
+    body = [_title("AI 调用结构图", width)]
     body.append(_baseline(300, 74, 800, 74))
     body.append(_benchmark_line(300 + 500 * .5, 86, 300 + 500 * .5, height - 42, "覆盖阈值", 300 + 500 * .5 + 10, 88, "start"))
     for index, (label, value) in enumerate(rows):
@@ -1184,7 +1191,7 @@ def render_methodology_chart(methodology: Dict[str, Any]) -> str:
         body.append(f'<rect data-role="{"highlight" if is_primary else "context"}" x="300" y="{y}" width="{500 * value / max_v:.1f}" height="26" rx="5" fill="{fill}" />')
         body.append(f'<text x="828" y="{y + 20}" font-size="15" fill="{PALETTE["ink"]}">{value:g}</text>')
     body.append(_callout(f"主调用：{rows[0][0]}", width - 78, 68, "end"))
-    body.append(_note("口径：按调用目的聚合 LLM 调用；红色为最大调用目的。", 300, height - 18, "start"))
+    body.append(_note("口径：按调用目的聚合 AI 调用；红色为最大调用目的。", 300, height - 18, "start"))
     return _svg("methodology-llm", width, height, "".join(body))
 
 

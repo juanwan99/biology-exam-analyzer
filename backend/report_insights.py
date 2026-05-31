@@ -1293,7 +1293,7 @@ async def generate_insights(
         overall_prompt = _build_overall_prompt(data)
         overall_text = await send_message_gpt(
             prompt=overall_prompt,
-            max_tokens=4096,
+            max_tokens=64000,
             temperature=0.0,
             purpose="report_insights",
         )
@@ -1371,7 +1371,7 @@ async def generate_insights(
                 prompt=teaching_prompt,
                 # RC6: deepseek-v4-pro 是推理模型，reasoning token 先吃预算；4096 易在
                 # reasoning 阶段就 finish_reason=length（分析阶段用 12000~16000 才稳）。
-                max_tokens=8192,
+                max_tokens=64000,
                 temperature=0.0,
                 purpose="report_teaching_suggestions",
             )
@@ -1385,11 +1385,11 @@ async def generate_insights(
             # 重试改为"升预算"而非原来的"缩预算"阶梯（1536/768 对推理模型必然 length）。
             # prompt 仍渐次精简以压缩输出量，但预算单调升到 provider 上限 16384。
             for retry_label, retry_prompt, retry_max_tokens in (
-                ("compact", _build_teaching_prompt(data, compact=True), 12288),
+                ("compact", _build_teaching_prompt(data, compact=True), 64000),
                 (
                     "ultra_compact",
                     _build_teaching_prompt(data, ultra_compact=True),
-                    16384,
+                    64000,
                 ),
             ):
                 teaching_retry_count += 1
