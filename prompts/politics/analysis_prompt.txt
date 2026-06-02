@@ -1,0 +1,192 @@
+# Subject: politics
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请分析这道思想政治题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的政治学术语（如"社会主义市场经济""人民代表大会制度""矛盾的普遍性与特殊性""文化自信""实践与认识的辩证关系"）
+   - 注意标明所属模块（经济生活/政治生活/文化生活/哲学生活）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么原理/知识）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易判断失误的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础概念直接考查（如基本原理的内涵识记）
+   - 中等：需要理解原理并与材料对应（如运用某一原理分析具体案例）
+   - 困难：需要多原理综合分析或辩证评价（如开放性论述、多角度评析）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 政治学科常见：易混概念混淆（如政体vs国体）、原理张冠李戴、材料信息提取不全、答题角度遗漏、绝对化表述误选
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：4分（政治高考标准）
+     * 材料分析题：根据小问合计，通常12-14分
+     * 开放性论述题：通常12分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项，部分组合选择题含①②③④
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接识记/简单提取材料信息
+       - 4-7分：需要原理对应、因果分析
+       - 7-10分：需要多角度综合分析、辩证评价、开放性论述
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（经济生活材料分析题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 5.0, "answer": "材料体现的经济学原理：供给侧结构性改革、市场调节与宏观调控结合"},
+         {"sub_id": 2, "difficulty_score": 7.0, "answer": "企业应对措施：技术创新+品牌建设+结构调整+国际化战略"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "从国家角度分析如何推动经济高质量发展"}
+     ]
+     ```
+
+   - 示例（哲学辨析题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 8.5, "answer": "辨析观点的合理性（用联系的普遍性说明）和局限性（用矛盾的特殊性反驳），综合评价"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、漫画等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图（如经济数据统计图）
+     * `table`：数据表格（如GDP/进出口/财政数据表）
+     * `cartoon`：政治漫画/讽刺画
+     * `diagram`：示意图/结构图（如政府组织架构图/经济循环图）
+     * `image`：新闻图片/政策文件截图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如从经济数据图分析趋势）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂多材料组合/多组数据对比，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
+**示例输出（经济生活选择题）**：
+
+{
+    "knowledge_points": ["供求关系", "价格变动的影响", "互补品与替代品"],
+    "detailed_analysis": "核心考点：价格变动对需求量和相关商品的影响。解题关键：区分互补品和替代品在价格变动时的需求变化方向。思维难点：材料涉及多个商品的价格联动，需厘清传导链条。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字经济学选择题",
+    "common_mistakes": ["混淆互补品和替代品", "价格传导方向判断反向", "忽略需求弹性差异"],
+    "answer": "B",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了互补品和替代品的关系"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "价格传导方向判断错误"},
+        {"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "概念理解有明显偏差"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（材料分析题 - 有子题）**：
+
+{
+    "knowledge_points": ["社会主义市场经济", "宏观调控", "供给侧结构性改革", "新发展理念"],
+    "detailed_analysis": "核心考点：运用经济生活知识分析国家经济政策。解题关键：①从材料提取政策措施并对应经济学原理；②多角度分析政策意义；③从国家和企业双主体提出建议。思维难点：原理与材料精准对接。",
+    "difficulty": "困难",
+    "has_representation": true,
+    "representation_type": "chart",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "经济数据图表是分析经济趋势的重要依据",
+    "common_mistakes": ["原理堆砌不对应材料", "遗漏重要答题角度", "建议空泛缺乏针对性"],
+    "answer": "(1)体现市场调节+宏观调控相结合 (2)意义：优化产业结构+促进创新+保障民生 (3)建议：深化改革+扩大开放+创新驱动",
+    "total_score": 14,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 5.5, "answer": "材料体现的经济学原理：市场调节与宏观调控、供给侧改革"},
+        {"sub_id": 2, "difficulty_score": 7.0, "answer": "分析该政策的经济意义（多角度：产业/创新/民生/绿色发展）"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "从国家和企业角度提出推动高质量发展的具体建议"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记（```json）
+- 可以使用①②③、→等符号使结构清晰
+- 如果题目包含时政材料，要结合材料分析但不要复述材料内容
+- 重点是"思维含量"，不是"步骤完整性"
+- ⚠️ 政治学科特别注意：答案和分析中的政治立场必须正确

@@ -1,0 +1,188 @@
+**分节信息**：{section_header}
+**题型**：{question_type}
+
+请深入分析这道高中数学题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的数学术语（如"导数的应用"而非"求导"、"等差数列"而非"AP"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导计算过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接应用（如公式代入、基本计算）
+   - 中等：需要理解和简单推理（如函数性质综合、数列求和）
+   - 困难：需要综合分析或复杂推理（如导数不等式证明、解析几何综合）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 填空题：写最终结果（如"x∈[1,3]"）
+   - 解答题：写完整答案要点（关键步骤+最终结论）
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围（如"1-8题"），则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 单选题：5分
+     * 多选题：5分
+     * 填空题：5分
+     * 解答题：10-12分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：基础计算、公式代入、直接求解
+       - 4-7分：需要理解推理、方法选择、中等难度证明
+       - 7-10分：需要综合分析、创造性构造、复杂计算或证明
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题和填空题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（导数大题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "f'(x)=3x²-3，单调递增区间(-∞,-1)和(1,+∞)"},
+         {"sub_id": 2, "difficulty_score": 7.5, "answer": "构造g(x)=f(x)-x，证明g(x)≥0，利用极值点判断"},
+         {"sub_id": 3, "difficulty_score": 9.0, "answer": "令h(x)=ln x-(x-1)/a，讨论a的范围使h(x)≤0恒成立"}
+     ]
+     ```
+
+   - 示例（解析几何大题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "椭圆方程 x²/4+y²/3=1"},
+         {"sub_id": 2, "difficulty_score": 8.5, "answer": "设直线l:y=kx+m，联立消元，由韦达定理得面积最大值为3"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图形、图表等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：统计图表（柱状图/折线图/频率分布直方图/茎叶图）
+     * `table`：数据表格
+     * `function_graph`：函数图像/导数图像
+     * `geometry`：平面几何/立体几何图形
+     * `coordinate`：坐标系+曲线/点/向量
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理
+     * `true`：解题必须依赖表征信息（如从函数图像读取单调区间、从几何图形识别空间关系）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图形/单个函数图像，读图即可获取信息
+     * 3：复杂几何图形/多图联读/坐标系+多条曲线组合，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+
+**示例输出（函数与导数选择题）**：
+
+{
+    "knowledge_points": ["导数", "函数单调性", "极值与最值", "不等式"],
+    "detailed_analysis": "核心考点：利用导数判断函数单调性与极值。解题关键：①对f(x)求导并分析f'(x)的符号变化；②结合极值点确定参数范围。思维难点：f'(x)=0的根的讨论与参数分类。",
+    "difficulty": "困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字题，无图形表征",
+    "common_mistakes": ["忘记讨论定义域端点", "导数符号判断错误", "参数讨论遗漏情况"],
+    "answer": "B",
+    "total_score": 5,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆极值与最值的关系"},
+        {"option": "B", "difficulty_score": 7.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "参数讨论遗漏a=0的情况"},
+        {"option": "D", "difficulty_score": 4.5, "is_correct": false, "error_reason": "忽略端点值的比较"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（数列大题 - 有子题）**：
+
+{
+    "knowledge_points": ["等差数列", "等比数列", "数列求和", "裂项求和", "不等式证明"],
+    "detailed_analysis": "核心考点：数列通项与求和的综合应用。解题关键：①由递推关系构造等比数列求通项；②利用裂项消元法求和。思维难点：由Sₙ与aₙ的关系推导通项时需分n=1和n≥2讨论。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字题，无图形表征",
+    "common_mistakes": ["n=1时未单独验证", "裂项方向搞反", "求和时首尾项遗漏"],
+    "answer": "见各小问",
+    "total_score": 12,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "aₙ=2ⁿ（由Sₙ=2aₙ-1递推得{aₙ}为公比为2的等比数列）"},
+        {"sub_id": 2, "difficulty_score": 6.5, "answer": "Tₙ=Σn/2ⁿ，利用错位相减法得Tₙ=2-（n+2）/2ⁿ"},
+        {"sub_id": 3, "difficulty_score": 8.0, "answer": "由(2)知Tₙ<2，结合数学归纳法证明结论成立"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记
+- 可以使用①②③、→等符号使结构清晰
+- 数学公式使用Unicode表示（如x²、√、∞、∈等）
+- 重点是"思维含量"，不是"步骤完整性"

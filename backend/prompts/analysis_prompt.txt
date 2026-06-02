@@ -1,0 +1,262 @@
+**分节信息**：{section_header}
+
+请分析这道生物题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ],
+    "bloom_level": 3,
+    "competency": {
+        "生命观念": {"涉及": true, "权重": 0.3, "具体维度": ["结构与功能观"]},
+        "科学思维": {"涉及": true, "权重": 0.5, "具体维度": ["演绎与推理"]},
+        "科学探究": {"涉及": false, "权重": 0, "具体维度": []},
+        "社会责任": {"涉及": false, "权重": 0, "具体维度": []},
+        "primary_competency": "科学思维",
+        "competency_level": "高"
+    }
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的生物学术语
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导计算过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接应用
+   - 中等：需要理解和简单推理
+   - 困难：需要综合分析或复杂推理
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围（如"1-15题"），则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 单选题：2分
+     * 多选题/不定项：4分
+     * 填空题：根据空数量，每空1-2分
+     * 大题/简答题：6-10分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个填空/多个小问（如(1)(2)(3)、①②③、空1空2、第1小题等），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接记忆、基础概念、简单计算
+       - 4-7分：需要理解推理、中等难度分析
+       - 7-10分：需要综合分析、深度推理、复杂计算
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分（如整体论述题），也返回空列表 []
+
+   - 示例（填空题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "细胞膜"},
+         {"sub_id": 2, "difficulty_score": 5.5, "answer": "主动运输"},
+         {"sub_id": 3, "difficulty_score": 7.0, "answer": "载体蛋白的数量和活性"}
+     ]
+     ```
+
+   - 示例（实验大题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "实验目的：探究温度对酶活性的影响"},
+         {"sub_id": 2, "difficulty_score": 6.5, "answer": "自变量：温度；因变量：产物量；无关变量：pH、酶浓度等"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "设置多组不同温度的实验组，测量各组反应速率，绘制曲线"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、系谱图、装置图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图
+     * `table`：数据表格
+     * `pedigree`：遗传系谱图
+     * `device`：实验装置图
+     * `flowchart`：流程图/概念图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如从系谱图推导基因型）
+     * `false`：表征仅为装饰或辅助说明（如旁边配了一张细胞图但不影响解题）
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂系谱图/多图联读/实验装置图，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
+**示例输出（系谱图遗传题）**：
+
+{
+    "knowledge_points": ["伴性遗传", "多等位基因", "概率计算", "系谱图分析"],
+    "detailed_analysis": "核心考点：X染色体多等位基因的多代遗传推导。解题关键：①识别Ⅱ代个体基因型的不确定性（各有两种可能）；②理解独立事件概率相乘原则；③建立Ⅳ代纯合的所有遗传路径。思维难点：多分支概率的组合计算，需清晰的逻辑框架避免遗漏或重复。",
+    "difficulty": "困难",
+    "has_representation": true,
+    "representation_type": "pedigree",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 3,
+    "representation_reason": "系谱图是推导基因型和计算概率的核心依据",
+    "common_mistakes": ["未穷尽所有遗传路径", "概率相乘时漏算某个分支", "混淆独立事件与互斥事件"],
+    "answer": "D",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 6.0, "is_correct": false, "error_reason": "忽略了Ⅱ代基因型的不确定性"},
+        {"option": "B", "difficulty_score": 7.5, "is_correct": false, "error_reason": "概率计算时遗漏部分路径"},
+        {"option": "C", "difficulty_score": 8.0, "is_correct": false, "error_reason": "混淆了独立事件与互斥事件的概率计算"},
+        {"option": "D", "difficulty_score": 8.5, "is_correct": true, "error_reason": ""}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（光合作用题）**：
+
+{
+    "knowledge_points": ["光合作用过程", "物质转化", "同位素示踪", "有氧呼吸"],
+    "detailed_analysis": "核心考点：光合作用和呼吸作用中的物质追踪。解题关键：①明确H₂O在光反应中的光解产生O₂和[H]；②追踪³H标记从H₂O→葡萄糖→呼吸中间产物的路径；③区分18O在光合和呼吸中的不同去向。思维难点：同位素标记的跨过程追踪，需要准确理解物质在两大代谢中的转化关系。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字选择题，无图表",
+    "common_mistakes": ["混淆光合作用和呼吸作用中H₂O的作用", "忽略18O可能进入CO₂", "³H标记路径追踪不完整"],
+    "answer": "C",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆光合和呼吸中H₂O的作用"},
+        {"option": "B", "difficulty_score": 5.5, "is_correct": false, "error_reason": "忽略18O进入CO₂的可能性"},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 4.5, "is_correct": false, "error_reason": "³H标记路径追踪错误"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（简单题）**：
+
+{
+    "knowledge_points": ["细胞膜结构", "磷脂双分子层", "流动镶嵌模型"],
+    "detailed_analysis": "核心考点：细胞膜的基本结构。解题关键：识别磷脂双分子层是膜结构的基本支架，蛋白质镶嵌其中。思维难点：理解"基本支架"与"主要成分"的区别（蛋白质含量虽高但不是支架）。",
+    "difficulty": "简单",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字概念题",
+    "common_mistakes": ["将蛋白质误认为基本支架", "混淆含量最多与结构作用"],
+    "answer": "A",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 2.5, "is_correct": true, "error_reason": ""},
+        {"option": "B", "difficulty_score": 3.0, "is_correct": false, "error_reason": "将蛋白质误认为基本支架"},
+        {"option": "C", "difficulty_score": 2.0, "is_correct": false, "error_reason": "混淆含量与结构作用"},
+        {"option": "D", "difficulty_score": 2.5, "is_correct": false, "error_reason": "对流动镶嵌模型理解不准确"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（填空题 - 有子题）**：
+
+{
+    "knowledge_points": ["光合作用", "叶绿体结构", "物质转化", "能量转换"],
+    "detailed_analysis": "核心考点：光合作用的场所和物质能量变化。解题关键：①区分光反应和暗反应的场所；②理解[H]和ATP的来源和去向；③掌握CO₂的固定和还原过程。思维难点：光反应和暗反应的物质联系。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "flowchart",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "光合作用流程图辅助理解物质转化",
+    "common_mistakes": ["混淆光反应和暗反应的场所", "不清楚ATP的去向", "对C₃和C₅的转化理解不清"],
+    "answer": "基粒(类囊体薄膜) / [H]和ATP / 叶绿体基质 / C₃ / (CH₂O)",
+    "total_score": 10,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 3.5, "answer": "基粒(类囊体薄膜)"},
+        {"sub_id": 2, "difficulty_score": 5.0, "answer": "[H]和ATP"},
+        {"sub_id": 3, "difficulty_score": 4.0, "answer": "叶绿体基质"},
+        {"sub_id": 4, "difficulty_score": 6.5, "answer": "C₃"},
+        {"sub_id": 5, "difficulty_score": 7.5, "answer": "(CH₂O)"}
+    ]
+}
+
+11. **布鲁姆认知层次（bloom_level）**：
+   - 1=识记：直接回忆事实或概念
+   - 2=理解：解释、比较、归纳
+   - 3=应用：在新情境中运用知识
+   - 4=分析：区分、组织、关联
+   - 5=评价：判断、论证、评估
+   - 6=创造：设计实验、提出方案
+
+12. **核心素养分析（competency）**：
+   - 评估题目考查的四大核心素养（生命观念/科学思维/科学探究/社会责任）
+   - 每个素养标注是否涉及、权重（0-1，总和=1.0）、具体维度
+   - primary_competency：主要考查的素养
+   - competency_level：高/中/低
+   - 权重分配原则：只标注真正涉及的素养，未涉及的权重为0
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记（```json）
+- 可以使用①②③、→等符号使结构清晰
+- 如果题目包含图表，要结合图表内容但不要描述图表细节
+- 重点是"思维含量"，不是"步骤完整性"

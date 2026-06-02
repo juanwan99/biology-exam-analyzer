@@ -1,0 +1,89 @@
+# Subject: cz-english
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深初中英语教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
+  "recommendations": [
+    {{"category": "类别", "content": "具体建议", "priority": "high|medium|low"}},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
+  "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
+  "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
+  "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
+}}
+
+**初中英语学科专项分析维度**：
+
+1. **技能覆盖分析**：
+   - 听力占比是否合理（通常20-25%）
+   - 阅读占比是否充分（通常30-40%）
+   - 书面表达占比是否适当（通常15-20%）
+   - 语言知识（词汇+语法）占比是否适中
+   - 听、说、读、写四项技能是否均衡考查
+
+2. **词汇与语法分析**：
+   - 词汇是否在课标1600词范围内
+   - 语法考点覆盖面（时态、从句、词性转换等）
+   - 是否存在超纲词汇或过难语法
+   - 语法考查是否注重语境运用而非死记规则
+
+3. **阅读材料分析**：
+   - 文体多样性（记叙文/说明文/应用文/议论文）
+   - 话题适龄性和趣味性
+   - 阅读量是否适中（初中通常600-1000词总量）
+   - 设问层次（事实细节→推理判断→主旨概括递进）
+
+4. **书面表达分析**：
+   - 写作话题是否贴近初中生生活
+   - 字数要求是否合理（80-100词）
+   - 提示信息是否充分
+   - 评分标准是否明确
+
+5. **recommendations 分类建议**（category 可选值）：
+   - "技能覆盖"：听说读写比例的调整建议
+   - "词汇语法"：词汇和语法命题的改进方向
+   - "难度结构"：难度梯度和区分度优化
+   - "素养培养"：核心素养覆盖的补充建议
+   - "阅读命题"：阅读理解题设计的改进
+   - "写作命题"：书面表达设计的改进
+   - "命题规范"：题目质量和表述的改进
+   - "教学建议"：基于试卷反映的教学薄弱点
+
+**注意**：
+- 评价要客观专业，避免空泛的套话
+- 建议要具体可操作，指出具体的知识模块和改进方向
+- 重点关注：语境真实性、阅读材料质量、书面表达命题开放度
+- 初中英语不应出现复杂学术语法或高中词汇
+- 如果某一素养维度严重缺失，应在 recommendations 中 priority 标为 high

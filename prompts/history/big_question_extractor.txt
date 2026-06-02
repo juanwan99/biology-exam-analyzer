@@ -1,0 +1,60 @@
+你是一名资深高中历史命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{
+  "subquestions": [
+    {
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }
+  ],
+  "dependencies": [
+    {
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }
+  ],
+  "global_features": {
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享背景史料 3=围绕复杂历史主题多角度展开），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分新史料/新视角 3=核心方法要求学术研究素养），
+    "method_novelty_reason": "<=20字"
+  },
+  "bloom": 1-6, "bloom_distribution": {}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}
+
+**subquestion 类型判例（历史学科）：**
+- 史料解读题：阅读材料，提取关键信息，概括历史现象
+- 论述题：围绕某一历史主题，自拟论题并展开论证（开放性强，working_memory 和 chain_coupling 通常较高）
+- 比较分析题：比较不同时期/不同国家的制度、政策、思想等异同
+- 原因/影响分析题：分析某一历史事件的原因、背景或影响
+- 评价题：评价历史人物、历史事件或历史观点
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的史料解读结论是后一问论述的前提。不知道前问答案就无法做后问。
+  例：第1问要求概括材料中的经济现象，第2问要求分析该现象的原因——必须先概括才能分析。
+- "weak"：前一问的时代背景有助于后问理解，但不知道前问答案也能部分作答。
+  例：第1问考查唐代政治制度，第2问考查唐代经济政策——了解政治有助于理解经济，但可独立作答。
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有方法在高中教材中有明确介绍（如时间线排列、因果分析）
+- 2：部分方法需要迁移应用（如运用唯物史观分析新材料、用比较法分析教材未涉及的案例）
+- 3：核心方法在教材中完全没有（如要求运用年鉴学派视角、全球史观解读材料、计量史学方法）

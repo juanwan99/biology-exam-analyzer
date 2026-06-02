@@ -1,0 +1,135 @@
+# Subject: cz-ethics
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请深入分析这道初中道德与法治题目，返回纯JSON格式（不要markdown代码块）：
+
+{{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
+        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+    ],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+    ]
+}}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准术语（如"公民权利与义务""未成年人保护""依法治国""社会主义核心价值观"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 考查内容（1句话说明考什么知识/能力）
+     ② 解题关键（1-2句话，抓住判断的核心依据）
+     ③ 思维难点（1句话，学生最容易犯的错误）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接考查（法律常识、基本概念识记）
+   - 中等：需要结合情境运用知识（情境分析、概念辨析）
+   - 困难：需要综合分析或评价（多角度分析、观点辨析、建议类开放题）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 本学科常见：权利义务混淆、违法犯罪不分、法律道德界限不清、绝对化表述误判、概念偷换
+
+5. **答案（answer）**：
+   - 选择题：直接写选项
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：
+   - 默认值：选择题2分，非选择题根据小问合计通常8-15分
+
+7. **选项数量（num_options）**：仅选择题提供
+
+8. **选项难度分析（option_difficulty_breakdown）**：仅选择题提供
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 每个子题需要 sub_id、difficulty_score（0-10）、answer
+     - 0-4分：直接运用知识回答
+     - 4-7分：需要结合情境分析
+     - 7-10分：需要综合评价或开放性回答
+   - 选择题返回空列表 []
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：是否包含漫画、图表等
+   - `representation_type`：可选值：`none`/`chart`/`table`/`image`/`multi`
+     * 漫画题选 `image`
+   - `representation_is_core_to_solving`：漫画题通常为 true
+   - `representation_complexity`：1-3
+   - `representation_reason`：一句话说明（≤30字）
+
+**示例输出（选择题 - 法律常识）**：
+{{
+    "knowledge_points": ["未成年人保护法", "家庭保护", "学校保护"],
+    "detailed_analysis": "核心考点：未成年人保护的类型辨别。解题关键：区分家庭保护、学校保护、社会保护、司法保护的主体和内容。思维难点：混淆不同保护类型的边界。",
+    "difficulty": "简单",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字选择题",
+    "common_mistakes": ["保护类型混淆", "主体与行为不匹配"],
+    "answer": "C",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了社会保护与学校保护"}},
+        {{"option": "B", "difficulty_score": 3.5, "is_correct": false, "error_reason": "保护主体判断错误"}},
+        {{"option": "C", "difficulty_score": 5.0, "is_correct": true, "error_reason": ""}},
+        {{"option": "D", "difficulty_score": 4.5, "is_correct": false, "error_reason": "混淆了司法保护的范围"}}
+    ],
+    "sub_questions": []
+}}
+
+**示例输出（情境分析题 - 有子题）**：
+{{
+    "knowledge_points": ["公民权利与义务", "宪法意识", "依法维权"],
+    "detailed_analysis": "核心考点：公民权利的行使与维护。解题关键：①识别情境中涉及的权利类型；②分析正确的维权途径。思维难点：区分合法维权与非法行为的界限。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字情境分析题",
+    "common_mistakes": ["权利类型判断错误", "维权途径不合法", "答题要点不全面"],
+    "answer": "(1)受教育权 (2)与家长沟通→向学校反映→向教育部门投诉→法律途径 (3)珍惜受教育权利，自觉履行受教育义务",
+    "total_score": 10,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 3.5, "answer": "识别情境中涉及的公民权利类型"}},
+        {{"sub_id": 2, "difficulty_score": 6.0, "answer": "提出合法合理的维权途径"}},
+        {{"sub_id": 3, "difficulty_score": 5.5, "answer": "结合自身实际谈认识和做法"}}
+    ]
+}}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- ⚠️ 本学科为敏感学科，特别注意价值观导向和法律表述准确性
+- 返回的JSON必须是有效格式
+- 不要添加markdown代码块标记

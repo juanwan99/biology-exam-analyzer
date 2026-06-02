@@ -1,0 +1,32 @@
+.env
+.secrets/
+.credentials/
+*.bak
+__pycache__/
+*.pyc
+logs/
+uploads/
+reports/
+artifacts/
+tmp_*
+node_modules/
+frontend/dist/
+
+
+# Runtime-provided evidence modules (local only)
+backend/services/*_engine_client.py
+backend/services/_kb_backend.py
+backend/services/evidence_gateway.py
+backend/services/evidence_context.py
+backend/services/evidence_audit.py
+backend/services/agent_search_corpus.py
+backend/test_*_engine_client.py
+backend/test_evidence_gateway.py
+backend/test_evidence_context.py
+backend/test_evidence_audit.py
+backend/test_agent_search_corpus.py
+
+# RC1 特征缓存（运行期生成，不入库）
+backend/.feature_cache/
+.feature_cache/
+docs/

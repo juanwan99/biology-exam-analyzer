@@ -1,0 +1,87 @@
+# Subject: geography
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深高中地理教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
+  "recommendations": [
+    {"category": "类别", "content": "具体建议", "priority": "high|medium|low"},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
+  "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
+  "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
+  "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
+}
+
+**地理学科专项分析维度**：
+
+1. **模块覆盖分析**：
+   - 自然地理（大气/水文/地形/土壤/植被）与人文地理（人口/城市/农业/工业/交通）比例
+   - 区域地理（中国地理/世界地理）覆盖情况
+   - 是否存在某一模块过度集中或完全空白
+   - 选修内容（旅游地理/环境保护）考查是否合理
+
+2. **图表运用分析**：
+   - 地图类型覆盖：区域图/等值线图/统计图/示意图/剖面图等
+   - 图文结合质量：图表是否参与核心推理（而非装饰）
+   - 新类型图表的使用（如GIS输出图、遥感影像）
+   - 图表阅读难度梯度是否合理
+
+3. **区域案例分析**：
+   - 中国区域与世界区域的比例
+   - 是否覆盖不同纬度带/气候区/发展水平的区域
+   - 热点区域（一带一路/粤港澳/长三角等）的关注度
+   - 新情境区域的设置是否合理
+
+4. **综合思维考查分析**：
+   - 单要素题与多要素综合题的比例
+   - 是否有效考查要素间的相互作用和因果链
+   - 时空尺度的多样性（局地→区域→全球）
+   - 自然-人文交叉分析的深度
+
+5. **recommendations 分类建议**（category 可选值）：
+   - "模块覆盖"：自然/人文/区域地理分布的调整建议
+   - "图表运用"：地图图表类型和质量的改进方向
+   - "难度结构"：难度梯度和区分度优化
+   - "素养培养"：核心素养覆盖的补充建议
+   - "区域案例"：区域选择和情境设计的改进
+   - "综合思维"：多要素综合分析题的设计建议
+   - "命题规范"：题目质量和表述的改进
+   - "教学建议"：基于试卷反映的教学薄弱点
+
+**注意**：
+- 评价要客观专业，避免空泛的套话
+- 建议要具体可操作，指出具体的模块和改进方向
+- 重点关注：自然-人文平衡、图表运用质量、区域案例多样性、综合思维深度
+- 如果某一素养维度严重缺失，应在 recommendations 中 priority 标为 high

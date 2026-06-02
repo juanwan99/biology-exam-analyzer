@@ -1,0 +1,219 @@
+# Subject: english
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请分析这道英语题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的英语教学术语（如"定语从句""虚拟语气""主旨大意""推理判断""词义猜测"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么语言能力）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导解题过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础词汇语法直接考查（常见时态/介词/固定搭配）
+   - 中等：需要理解语境和简单推理（完形填空/细节理解）
+   - 困难：需要综合分析或深层推理（推断题/读后续写/概要写作）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 英语学科常见：近义词混淆、时态语态误用、中式思维干扰、长难句理解偏差、忽略语境线索
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 语法填空：写正确答案词形
+   - 写作题：写评分要点和范文要素
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 听力题：1.5分
+     * 阅读理解：2.5分
+     * 七选五：2分
+     * 完形填空：1分（每空）
+     * 语法填空：1.5分（每空）
+     * 应用文写作：15分
+     * 读后续写/概要写作：25分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数
+   - 听力/阅读/完形通常为3-4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个填空/多个小问（如语法填空各空、写作各评分维度），需要识别并分析
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：基础词汇语法、简单理解
+       - 4-7分：需要语境推断、中等难度分析
+       - 7-10分：需要综合运用、深层推理、高级表达
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（语法填空）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "was built（一般过去时被动语态）"},
+         {"sub_id": 2, "difficulty_score": 5.5, "answer": "which（非限制性定语从句）"},
+         {"sub_id": 3, "difficulty_score": 7.0, "answer": "to promote（不定式作目的状语）"}
+     ]
+     ```
+
+   - 示例（写作题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 6.0, "answer": "内容完整：包含所有要点（邀请/时间/地点/活动）"},
+         {"sub_id": 2, "difficulty_score": 7.0, "answer": "语言质量：语法正确+词汇丰富+句式多样"},
+         {"sub_id": 3, "difficulty_score": 5.0, "answer": "格式规范：书信格式+字数80-100词"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、图片等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图
+     * `table`：数据表格（如时刻表/价目表/日程表）
+     * `image`：图片（如海报/广告/地图/漫画）
+     * `diagram`：示意图/流程图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如看图写作/图表描述）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂多模态组合，需要从多个信息源提取并整合
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
+**示例输出（阅读理解题）**：
+
+{
+    "knowledge_points": ["推理判断", "篇章逻辑", "观点态度", "细节理解"],
+    "detailed_analysis": "核心考点：推断作者对科技发展的态度。解题关键：抓住文中关键态度词(however/unfortunately)和论证逻辑（先肯定后转折）。思维难点：区分作者态度与文中引用人物观点。",
+    "difficulty": "困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字阅读理解题",
+    "common_mistakes": ["混淆作者与引用人物观点", "忽略转折词后的核心态度", "以偏概全选择极端选项"],
+    "answer": "C",
+    "total_score": 2.5,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了文中引用专家的观点与作者态度"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": false, "error_reason": "只关注了正面论述，忽略了转折"},
+        {"option": "C", "difficulty_score": 7.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "态度过于极端，文中无依据"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（完形填空 - 单空）**：
+
+{
+    "knowledge_points": ["词义辨析", "上下文语境", "固定搭配"],
+    "detailed_analysis": "核心考点：近义词在特定语境中的辨析。解题关键：根据下文'with great care'推断此处需要表达'小心翼翼地处理'之意。思维难点：四个动词都有'处理'之意但语义侧重不同。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字完形填空",
+    "common_mistakes": ["忽略搭配限制", "脱离语境选择常见词", "中式思维干扰选词"],
+    "answer": "B",
+    "total_score": 1,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "语义接近但搭配不当"},
+        {"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 4.5, "is_correct": false, "error_reason": "中式思维首选但语域不符"},
+        {"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "词义明显不符"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（读后续写 - 有子题）**：
+
+{
+    "knowledge_points": ["读后续写", "叙事结构", "情感表达", "语言衔接", "高级表达"],
+    "detailed_analysis": "核心考点：基于已有语篇的创意续写能力。解题关键：①准确把握原文情节走向和人物性格；②续写内容与原文在逻辑、情感、语言风格上保持一致。思维难点：在创意发挥与原文一致性之间取得平衡。",
+    "difficulty": "困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字续写题",
+    "common_mistakes": ["续写情节与原文脱节", "语言风格突变", "忽略给定首句的衔接"],
+    "answer": "评分维度：内容逻辑(0-8分)+语言表达(0-8分)+衔接连贯(0-9分)",
+    "total_score": 25,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 8.0, "answer": "第一段续写：承接上文，推动情节发展，包含转折或冲突"},
+        {"sub_id": 2, "difficulty_score": 8.5, "answer": "第二段续写：情节高潮或解决，情感升华，与全文主题呼应"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记（```json）
+- 可以使用①②③、→等符号使结构清晰
+- 如果题目包含长篇阅读材料，分析其核心论点而非逐段复述
+- 重点是"思维含量"，不是"步骤完整性"

@@ -1,0 +1,193 @@
+# Subject: geography
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请分析这道地理题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的地理学术语（如"热力环流""水循环""城市化""产业转移""可持续发展"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么地理原理/规律）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易判断失误的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础地理事实直接考查（如气候类型识别、大洲大洋定位）
+   - 中等：需要理解因果关系和简单推理（如地形对气候的影响分析）
+   - 困难：需要多因素综合分析或区域系统推理（如区域可持续发展方案评价）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 地理学科常见：南北半球混淆、季风方向判断错误、时区计算失误、等值线判读偏差、因果关系颠倒
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：4分（地理高考标准）
+     * 综合题：根据小问合计，通常22-24分
+     * 选做题：通常10分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接描述/识记地理事实
+       - 4-7分：需要因果分析、简单推理
+       - 7-10分：需要多因素综合分析、评价建议
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（区域分析题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "描述该区域地形特征：西高东低，以山地丘陵为主"},
+         {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析河流水文特征成因：降水集中+地形坡度大→流量大+含沙量高"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "评价该区域农业发展的条件及可持续发展建议"}
+     ]
+     ```
+
+   - 示例（气候分析题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.5, "answer": "判断气候类型：温带季风气候"},
+         {"sub_id": 2, "difficulty_score": 5.5, "answer": "分析气候成因：海陆热力性质差异+纬度位置"},
+         {"sub_id": 3, "difficulty_score": 7.5, "answer": "比较两地气候差异及对农业生产的影响"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、地图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图（如气温降水图/人口增长图）
+     * `table`：数据表格（如统计数据表）
+     * `map`：地图（如区域图/等高线图/专题地图）
+     * `contour`：等值线图（等高线/等温线/等压线）
+     * `profile`：剖面图（地形剖面/大气垂直剖面）
+     * `diagram`：示意图（水循环/大气环流/地质构造）
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如从等高线图判断地形特征）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂多图联读/等值线综合判读，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
+**示例输出（等高线选择题）**：
+
+{
+    "knowledge_points": ["等高线判读", "地形特征分析", "河流流向判断"],
+    "detailed_analysis": "核心考点：等高线地形图的综合判读。解题关键：根据等高线弯曲方向判断山脊与山谷，确定河流流向。思维难点：等高线弯曲方向与地势高低的对应关系易混淆。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "contour",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 3,
+    "representation_reason": "等高线图是判断地形和河流流向的核心依据",
+    "common_mistakes": ["等高线凸低为高混淆", "河流流向判断反向", "忽略比例尺影响坡度判断"],
+    "answer": "B",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了山脊与山谷的等高线弯曲方向"},
+        {"option": "B", "difficulty_score": 6.5, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": false, "error_reason": "河流流向判断反向"},
+        {"option": "D", "difficulty_score": 4.0, "is_correct": false, "error_reason": "坡度判断忽略了等高距"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（综合题 - 有子题）**：
+
+{
+    "knowledge_points": ["河流水文特征", "流域开发", "水资源利用", "可持续发展"],
+    "detailed_analysis": "核心考点：流域综合开发与水资源可持续利用。解题关键：①从地形+气候推断水文特征；②结合区域条件分析开发利弊；③从生态+经济+社会三维度评价。思维难点：开发与保护的辩证关系。",
+    "difficulty": "困难",
+    "has_representation": true,
+    "representation_type": "map",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 3,
+    "representation_reason": "流域图+水文数据是分析河流特征和开发条件的核心依据",
+    "common_mistakes": ["只分析自然因素忽略人文", "开发建议缺乏针对性", "忽略负面影响"],
+    "answer": "(1)流量大、水位季节变化明显、含沙量小 (2)水能丰富、灌溉便利但洪涝风险 (3)合理开发建议+生态保护措施",
+    "total_score": 24,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.5, "answer": "描述河流水文特征：流量、水位、含沙量、结冰期等"},
+        {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析流域开发的有利条件和不利因素"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "提出流域可持续发展的具体建议（生态+经济+社会）"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记（```json）
+- 可以使用①②③、→等符号使结构清晰
+- 如果题目包含地图/图表，要结合图表内容但不要描述图表细节
+- 重点是"思维含量"，不是"步骤完整性"

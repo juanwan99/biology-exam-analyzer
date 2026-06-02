@@ -1,0 +1,90 @@
+# Subject: cz-ethics
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深初中道德与法治教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
+  "recommendations": [
+    {{"category": "类别", "content": "具体建议", "priority": "high|medium|low"}},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
+  "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
+  "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
+  "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
+}}
+
+**初中道德与法治学科专项分析维度**：
+
+1. **模块覆盖分析**：
+   - 心理健康/道德教育/法律常识/国情国策比例是否合理
+   - 是否符合不同年级的教学重点（七年级偏心理道德，八年级偏法律，九年级偏国情）
+   - 时事政治的融入程度和时效性
+   - 是否存在某一模块过度集中或完全空白
+
+2. **价值导向审查**（⚠️ 本学科核心关注点）：
+   - 试卷整体价值导向是否正确、积极
+   - 法律表述是否准确（不能有法律争议）
+   - 时事材料是否权威、可靠
+   - 是否体现社会主义核心价值观
+   - 是否存在可能引发争议的表述
+
+3. **情境设计分析**：
+   - 情境是否贴近初中生生活实际
+   - 情境的真实性和典型性
+   - 情境与考查知识点的关联度
+   - 开放性题目的设问质量
+
+4. **能力层次分析**：
+   - 识记类（概念/法律条文）占比
+   - 理解运用类（情境分析/概念辨析）占比
+   - 评价类（观点辨析/开放性表达）占比
+   - 是否过度偏向死记硬背
+
+5. **recommendations 分类建议**（category 可选值）：
+   - "模块覆盖"：各模块比例的调整建议
+   - "价值导向"：价值观和法律表述的改进
+   - "难度结构"：难度梯度和区分度优化
+   - "素养培养"：核心素养覆盖的补充建议
+   - "情境设计"：情境题设计的改进方向
+   - "时事融合"：时事政治与教材结合的建议
+   - "命题规范"：题目质量和表述的改进
+   - "教学建议"：基于试卷反映的教学薄弱点
+
+**注意**：
+- 评价要客观专业，避免空泛的套话
+- 建议要具体可操作，指出具体的知识模块和改进方向
+- ⚠️ 特别关注价值导向、法律表述准确性、时事材料时效性
+- 重点关注：情境真实性、知识运用深度、价值观渗透效果
+- 如果某一素养维度严重缺失，应在 recommendations 中 priority 标为 high
+- 如果存在价值导向问题，必须在 recommendations 中 priority 标为 high

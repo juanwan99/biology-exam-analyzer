@@ -1,0 +1,79 @@
+# Subject: biology
+# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析（v3.2: score_share）
+# Variables: {question_block}, {qtype_hint}
+你是一名资深高中生物命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请只输出严格 JSON（不要多余解释）。必须二选一：
+
+成功时输出：
+{
+  "status": "ok",
+  "data": {
+    "subquestions": [
+      {
+        "id": 1,
+        "score_share": 该小问占总分的比例(0.0-1.0的浮点数，所有小问之和=1.0),
+        "working_memory": 1-5,
+        "reasoning_steps": 正整数,
+        "trap_density": 1-3,
+        "novelty": 1-3,
+        "knowledge_breadth": 1-3,
+        "brief": "核心任务(<=20字)"
+      }
+    ],
+    "dependencies": [
+      {
+        "from": 源小问id,
+        "to": 目标小问id,
+        "strength": "weak"或"strong",
+        "reason": "依赖内容(<=30字)"
+      }
+    ],
+    "global_features": {
+      "shared_context_load": 1-3,
+      "shared_context_reason": "<=20字",
+      "global_method_novelty": 1-3,
+      "method_novelty_reason": "<=20字"
+    },
+    "bloom": 1-6,
+    "bloom_distribution": {},
+    "bloom_reason": "<=30字",
+    "info_density": 1-3,
+    "density_reason": "<=20字",
+    "representation_complexity": 1-3,
+    "representation_reason": "<=20字",
+    "quality_score": 1-5,
+    "quality_scientific": "<=60字",
+    "quality_normative": "<=60字",
+    "quality_language": "<=60字",
+    "quality_context": "<=60字",
+    "quality_sensitivity": "<=60字",
+    "teacher_comment": "<=150字"
+  }
+}
+
+失败时输出：
+{
+  "status": "failed",
+  "failure_type": "cannot_identify_subquestions|insufficient_stem|non_big_question|schema_uncertain",
+  "reason": "说明无法可靠结构化的原因(<=80字)"
+}
+
+结构化硬约束：
+- subquestions 必须对应题面可见小问，不得为了凑数拆分或合并。
+- 每个小问的 score_share 是该小问占总分的比例，所有小问的 score_share 之和必须等于 1.0。
+- 如果无法确定各小问的分值比例，按小问数量均分（如 3 小问各 0.33）。
+- 如果无法识别小问或题干证据不足，输出 status=failed，不要猜测。
+- dependencies 的 from/to 只能引用 subquestions 中存在的 id。
+- "strong" 表示前一问结论/产物是后一问前提；"weak" 表示仅有背景帮助。
+- global_method_novelty: 1=全教材内，2=部分需要迁移，3=核心方法教材外。
+
+难度构念判定补充：
+- reasoning_steps 只计最少认知操作数，不按填空数量累计；同一小问多个空如果只是同一步推理的答案拆分，仍按一步或两步计。
+- trap_density 只计真实可混淆路径，不按采分点数量累计。
+- novelty=3 适用于核心解法依赖教材外或明显超常规迁移的方法，例如三引物PCR鉴定插入方向、GFP/融合蛋白定位、复杂载体构建、CRISPR、In-Fusion 克隆等；普通 PCR 或常规遗传判断不能自动给 3。
+- 若题目要求引物方向/序列位置/融合蛋白/插入方向判断，representation_complexity 通常不低于 3；涉及多个候选引物或方向判断的小问 trap_density 通常不低于 2。
+- global_method_novelty 评估整题核心方法，不是知识点数量；同一方法在多个小问重复出现不能重复抬高难度。

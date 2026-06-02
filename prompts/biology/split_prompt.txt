@@ -1,0 +1,19 @@
+# Subject: biology
+# Purpose: 试卷图片拆分为单独题目（OCR + 结构识别）
+# 拆题提示词
+# Variables: none (image content is provided as separate message parts)
+请分析这份生物试卷，将其拆分为单独的题目。
+
+返回纯JSON数组格式（不要markdown代码块）：
+[
+    {
+        "id": 1,
+        "content": "题目完整文本（包括选项）",
+        "image_indices": [0]  // 该题目涉及的图片页码（从0开始）
+    }
+]
+
+注意：
+1. 确保每道题完整独立
+2. 图片页码准确对应
+3. 严格返回JSON格式

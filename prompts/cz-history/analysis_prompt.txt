@@ -1,0 +1,138 @@
+# Subject: cz-history
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请深入分析这道初中历史题目，返回纯JSON格式（不要markdown代码块）：
+
+{{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
+        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+    ],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+    ]
+}}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的历史学术语（如"郡县制""丝绸之路""洋务运动""工业革命"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 考查时段与主题（1句话说明考查什么时期的什么内容）
+     ② 解题关键（1-2句话，抓住判断的核心依据）
+     ③ 思维难点（1句话，学生最容易犯的错误）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+
+3. **难度（difficulty）**：
+   - 简单：基础史实直接考查（时间/人物/事件的直接匹配）
+   - 中等：需要理解因果关系或进行简单比较
+   - 困难：需要综合分析材料、比较归纳或评价历史事件
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 初中历史常见：时间混淆、人物张冠李戴、因果倒置、中外史实混淆
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 默认值：选择题2分，材料分析题根据小问合计通常10-15分
+
+7. **选项数量（num_options）**：仅选择题提供
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题提供
+   - 对每个选项进行难度评估（0-10分）
+   - 标注是否为正确选项和误选原因
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 每个子题需要 sub_id、difficulty_score（0-10）、answer
+     - 0-4分：直接回忆史实、从材料中提取明确信息
+     - 4-7分：需要概括归纳、简单因果分析
+     - 7-10分：需要综合分析、比较评价（初中较少）
+   - 选择题返回空列表 []
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：是否包含图表等非文字表征
+   - `representation_type`：可选值：`none`/`chart`/`table`/`map`/`timeline`/`image`/`multi`
+   - `representation_is_core_to_solving`：表征是否参与核心推理
+   - `representation_complexity`：1-3
+   - `representation_reason`：一句话说明（≤30字）
+
+**示例输出（选择题 - 古代史）**：
+{{
+    "knowledge_points": ["秦始皇统一六国", "中央集权制度", "郡县制"],
+    "detailed_analysis": "核心考点：秦朝巩固统一的措施。解题关键：区分秦始皇在政治、经济、文化、军事方面的具体措施。思维难点：混淆秦朝与汉朝的政策。",
+    "difficulty": "简单",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字选择题",
+    "common_mistakes": ["混淆郡县制与分封制", "秦汉政策张冠李戴"],
+    "answer": "B",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了分封制的朝代"}},
+        {{"option": "B", "difficulty_score": 5.0, "is_correct": true, "error_reason": ""}},
+        {{"option": "C", "difficulty_score": 3.5, "is_correct": false, "error_reason": "属于汉朝的措施"}},
+        {{"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "时间错位"}}
+    ],
+    "sub_questions": []
+}}
+
+**示例输出（材料分析题 - 有子题）**：
+{{
+    "knowledge_points": ["近代化探索", "洋务运动", "戊戌变法", "辛亥革命"],
+    "detailed_analysis": "核心考点：中国近代化探索历程。解题关键：①从材料提取关键信息对应历史事件；②按照器物→制度→思想的线索理解近代化。思维难点：区分不同探索的侧重点和局限性。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字材料分析题",
+    "common_mistakes": ["混淆各运动的代表人物", "近代化线索顺序记错", "原因分析不全面"],
+    "answer": "(1)洋务运动 (2)学习西方技术→学习西方制度→学习西方思想 (3)启示：要全面学习，不能只学表面",
+    "total_score": 12,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 3.0, "answer": "根据材料判断对应的历史事件"}},
+        {{"sub_id": 2, "difficulty_score": 5.5, "answer": "概括近代化探索的发展线索"}},
+        {{"sub_id": 3, "difficulty_score": 6.5, "answer": "总结启示，需要结合史实谈感悟"}}
+    ]
+}}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式
+- 不要添加markdown代码块标记
+- 初中历史以识记和理解为主，分析要求相对简单

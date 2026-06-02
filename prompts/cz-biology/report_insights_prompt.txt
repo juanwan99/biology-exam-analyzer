@@ -1,0 +1,56 @@
+# Subject: cz-biology
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深初中生物教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+注意：这是**初中生物**试卷，评价标准应基于义务教育阶段课程标准（2022版），不能用高中标准衡量。初中生物注重基础概念建立、科学探究入门和生命教育。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点。关注初中生物特有的考查维度：基本概念理解、实验探究能力、识图分析能力、生活应用能力的覆盖情况。",
+  "recommendations": [
+    {"category": "类别", "content": "具体建议", "priority": "high|medium|low"},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，200字内。关注：选择题与非选择题难度梯度是否合理、实验设计题的开放度、概念理解题与应用分析题的比例。初中生物应以基础为主，适当设置提高题。",
+  "knowledge_analysis": "知识覆盖分析，200字内。对照初中生物七大主题（2022版课标）：生物体的结构层次、生物的多样性、生物与环境、植物的生活、人体生理、动物的运动和行为、生物的生殖发育与遗传变异。指出薄弱章节和盲区。",
+  "competency_analysis": "素养覆盖分析，200字内。基于四大生物核心素养（2022版：生命观念、科学思维、探究实践、态度责任），指出不足的素养维度和改进方向。",
+  "bloom_analysis": "认知层级分析，150字内。评价高阶思维（分析、评价、创造）占比是否充分，识记类题目是否偏多，是否有开放性实验设计或资料分析题。初中生物应在夯实记忆基础的同时注重理解和简单应用。"
+}
+
+**category 参考值**：
+- 知识覆盖：某主题缺失或偏多（如人体生理占比过高、生态环境缺失）
+- 难度结构：梯度不合理、区分度不足
+- 素养培养：某素养维度覆盖不足（如探究实践缺失）
+- 题型设计：实验题/识图题/资料分析题配比
+- 情境创设：与生活实际的关联度
+- 命题规范：生物学术语规范性、图文匹配准确性
+- 教学建议：针对薄弱点的教学改进方向

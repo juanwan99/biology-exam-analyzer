@@ -1,0 +1,84 @@
+services:
+  # PostgreSQL + pgvector 数据库
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: biology_postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      - POSTGRES_USER=biology
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      - POSTGRES_DB=biology_edu
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biology -d biology_edu"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: biology_backend
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - ./backend:/app  # Python代码实时同步，修改后只需重启容器
+      - ./logs:/app/logs
+      - ./backend/prompts:/app/prompts
+      - ./prompts:/app/subject_prompts  # 多学科 prompt 模板
+      - ./uploads:/app/uploads
+      - ./backend/rules:/app/rules
+      - ./.credentials:/app/.credentials:ro
+      - ./reports:/app/reports
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - LOG_LEVEL=INFO
+      - ANALYSIS_CONCURRENCY=10
+      - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - QWEN_TEXT_MODEL=${QWEN_TEXT_MODEL:-qwen-plus}
+      - QWEN_VISION_MODEL=${QWEN_VISION_MODEL:-qwen3-vl-plus}
+      - LLM_VISION_PROVIDER=${LLM_VISION_PROVIDER:-auto}
+      - LLM_ENABLE_QWEN_TEXT_FALLBACK=${LLM_ENABLE_QWEN_TEXT_FALLBACK:-false}
+      - LLM_SA_CREDENTIALS=${LLM_SA_CREDENTIALS}
+      - LLM_PROJECT=${LLM_PROJECT}
+      - LLM_LOCATION=${LLM_LOCATION:-global}
+      - LLM_EXAM_REVIEW_FLASH_MODEL=${LLM_EXAM_REVIEW_FLASH_MODEL}
+      - LLM_EXAM_REVIEW_PRO_MODEL=${LLM_EXAM_REVIEW_PRO_MODEL}
+      - EXAM_REVIEW_CHANNEL=${EXAM_REVIEW_CHANNEL:-agent_search}
+      - REPORT_GROUNDING_ENABLED=${REPORT_GROUNDING_ENABLED:-true}
+      - REPORT_GROUNDING_MIN_SUPPORT=${REPORT_GROUNDING_MIN_SUPPORT:-0.6}
+      - REPORT_GROUNDING_CITATION_THRESHOLD=${REPORT_GROUNDING_CITATION_THRESHOLD:-0.6}
+      - EVIDENCE_RANKING_ENABLED=${EVIDENCE_RANKING_ENABLED:-true}
+      - EVIDENCE_RANKING_TOP_N=${EVIDENCE_RANKING_TOP_N:-5}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    container_name: biology_frontend
+    ports:
+      - "127.0.0.1:3001:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

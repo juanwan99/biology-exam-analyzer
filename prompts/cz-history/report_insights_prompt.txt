@@ -1,0 +1,87 @@
+# Subject: cz-history
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深初中历史教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
+  "recommendations": [
+    {{"category": "类别", "content": "具体建议", "priority": "high|medium|low"}},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
+  "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
+  "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
+  "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
+}}
+
+**初中历史学科专项分析维度**：
+
+1. **时空跨度分析**：
+   - 中国古代史/中国近现代史/世界史比例是否合理
+   - 是否存在某一时段过度集中或完全空白
+   - 不同年级教学内容的覆盖均衡性
+   - 政治/经济/文化/科技模块比例
+
+2. **题型结构分析**：
+   - 选择题与非选择题的分值比例（通常5:5或4:6）
+   - 材料分析题的材料来源和难度
+   - 是否有列举题、连线题等基础题型保底
+   - 开放性题目的比例和质量
+
+3. **知识层次分析**：
+   - 识记类（时间/人物/事件）的占比
+   - 理解类（原因/影响/特征）的占比
+   - 分析类（比较/归纳/评价）的占比
+   - 初中应以识记和理解为主（70-80%），分析为辅
+
+4. **材料运用分析**：
+   - 文字材料的难度是否适合初中生
+   - 图片/地图/年表的使用频率
+   - 材料与教材的关联度
+   - 材料阅读量是否适中
+
+5. **recommendations 分类建议**（category 可选值）：
+   - "时空覆盖"：时段/区域分布的调整建议
+   - "题型结构"：选择题/非选择题比例优化
+   - "难度结构"：难度梯度和区分度优化
+   - "素养培养"：核心素养覆盖的补充建议
+   - "材料运用"：材料题设计的改进方向
+   - "命题规范"：题目质量和表述的改进
+   - "教学建议"：基于试卷反映的教学薄弱点
+
+**注意**：
+- 评价要客观专业，避免空泛的套话
+- 建议要具体可操作，指出具体的知识模块和改进方向
+- 重点关注：时空覆盖均衡性、知识层次合理性、材料难度适切性
+- 初中历史以识记和理解为主，不应过多要求复杂分析和论证
+- 如果某一素养维度严重缺失，应在 recommendations 中 priority 标为 high

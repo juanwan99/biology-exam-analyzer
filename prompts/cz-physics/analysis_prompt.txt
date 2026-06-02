@@ -1,0 +1,195 @@
+# Subject: cz-physics
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请深入分析这道初中物理题目，返回纯JSON格式（不要markdown代码块）：
+
+注意：这是**初中物理**试题，知识范围限于义务教育阶段（8-9年级）。
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的物理学术语（如"欧姆定律"而非"电阻定律"、"阿基米德原理"而非"浮力定理"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 核心考点（1句话说明考查什么）
+     ② 解题关键（1-2句话，抓住思维含量最高的部分）
+     ③ 思维难点（1句话，学生最容易卡住的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导计算过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础知识直接应用（如识别物态变化、判断力的方向）
+   - 中等：需要理解和简单推理（如受力分析、简单电路计算）
+   - 困难：需要综合分析或复杂推理（如多状态电路分析、浮力压强综合）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 填空题：写准确答案（含单位）
+   - 计算题：写完整计算过程和结果
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：2-3分
+     * 填空题：每空1-2分
+     * 实验探究题：6-8分
+     * 计算题：6-8分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接记忆、基础概念、简单计算
+       - 4-7分：需要理解推理、中等难度分析
+       - 7-10分：需要综合分析、深度推理、复杂计算
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分，也返回空列表 []
+
+   - 示例（实验探究题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 3.0, "answer": "探究电流与电压的关系"},
+         {"sub_id": 2, "difficulty_score": 5.0, "answer": "控制电阻不变，改变电压"},
+         {"sub_id": 3, "difficulty_score": 6.5, "answer": "电流与电压成正比，即I=U/R"},
+         {"sub_id": 4, "difficulty_score": 7.5, "answer": "滑动变阻器应串联接入，起保护电路和调节作用"}
+     ]
+     ```
+
+   - 示例（计算题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "v=s/t=100m/20s=5m/s"},
+         {"sub_id": 2, "difficulty_score": 6.0, "answer": "G=mg=50kg×10N/kg=500N"},
+         {"sub_id": 3, "difficulty_score": 7.5, "answer": "P=W/t=Fs/t=500N×100m/20s=2500W"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、电路图、实验装置图等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：折线图/柱状图/v-t图/s-t图
+     * `table`：数据表格
+     * `circuit`：电路图
+     * `device`：实验装置图/光路图
+     * `force_diagram`：受力分析图/力的示意图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理
+     * `true`：解题必须依赖表征信息（如从电路图判断连接方式、从v-t图读取速度信息）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表/单个电路图，读图即可获取信息
+     * 3：复杂电路图/多状态装置图/多图联读，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+
+**示例输出（欧姆定律选择题）**：
+
+{
+    "knowledge_points": ["欧姆定律", "串联电路", "电压分配"],
+    "detailed_analysis": "核心考点：串联电路中欧姆定律的应用。解题关键：①判断电路为串联连接；②利用U=IR分别计算各电阻两端电压。思维难点：串联电路电流相等但电压按电阻比分配。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "circuit",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "电路图是判断连接方式和分析电路的基础",
+    "common_mistakes": ["串联电路误认为并联", "电压分配方向搞反", "单位换算错误"],
+    "answer": "C",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "将串联误判为并联"},
+        {"option": "B", "difficulty_score": 5.5, "is_correct": false, "error_reason": "电压分配比例计算错误"},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 4.5, "is_correct": false, "error_reason": "忘记串联电路电流处处相等"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（浮力计算大题 - 有子题）**：
+
+{
+    "knowledge_points": ["阿基米德原理", "浮力", "密度", "二力平衡", "压强"],
+    "detailed_analysis": "核心考点：浮力计算与物体浮沉条件的综合应用。解题关键：①利用称重法求浮力F浮=G-F拉；②由阿基米德原理F浮=ρ液gV排求排开液体体积。思维难点：区分物体体积与排开液体体积。",
+    "difficulty": "困难",
+    "has_representation": true,
+    "representation_type": "device",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "实验装置图展示物体浸入液体的状态",
+    "common_mistakes": ["混淆物体体积和排液体积", "忘记g取10N/kg", "密度单位换算出错"],
+    "answer": "见各小问",
+    "total_score": 8,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 3.5, "answer": "F浮=G-F拉=5N-3N=2N"},
+        {"sub_id": 2, "difficulty_score": 5.5, "answer": "V排=F浮/(ρ水g)=2N/(1000kg/m³×10N/kg)=2×10⁻⁴m³"},
+        {"sub_id": 3, "difficulty_score": 7.5, "answer": "ρ物=m/V=G/(gV)，需先求物体体积（漂浮时V排=V物）"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记
+- 可以使用①②③、→等符号使结构清晰
+- 物理公式保留标准符号和单位（ρ、Ω、N、Pa、W等）
+- 重点是"思维含量"，不是"步骤完整性"

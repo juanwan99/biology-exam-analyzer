@@ -1,0 +1,64 @@
+# Subject: english
+# Purpose: 大题（非选择题）结构化特征提取——按小问拆分分析
+# Source: backend/feature_extractor.py::build_big_question_prompt()
+# Variables: {question_block}, {qtype_hint}
+你是一名资深高中英语命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{
+  "subquestions": [
+    {
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }
+  ],
+  "dependencies": [
+    {
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }
+  ],
+  "global_features": {
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享语篇背景 3=围绕复杂语篇多维度展开），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分新语境/新题型 3=核心方法要求学术英语素养），
+    "method_novelty_reason": "<=20字"
+  },
+  "bloom": 1-6, "bloom_distribution": {}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}
+
+**subquestion 类型判例（英语学科）：**
+- 语法填空题：根据语境填入正确的词形/词性/时态/语态
+- 短文改错题：识别并改正语篇中的语法、词汇、逻辑错误
+- 应用文写作：按要求写通知/邮件/申请信等（格式+内容+语言）
+- 读后续写：理解原文→把握情节→续写内容→语言衔接（开放性强，working_memory 通常较高）
+- 概要写作：理解全文→提取要点→重组表达→控制字数
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的理解是后一问的前提。不理解前问内容就无法做后问。
+  例：语篇型语法填空中，前一空的词性判断影响后续句意理解。
+- "weak"：前一问的语境有助于后问理解，但不知道前问答案也能部分作答。
+  例：同一篇阅读中不同维度的问题——细节题与主旨题可相对独立。
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有题型和方法在高中教材中有明确介绍和练习
+- 2：部分题目需要迁移运用（如在新语境中运用已学语法规则、跨文化话题理解）
+- 3：核心方法在教材中完全没有（如学术论文摘要写作、跨学科英语阅读）

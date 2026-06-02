@@ -1,0 +1,87 @@
+# Subject: english
+# Purpose: 整卷综合分析（试卷质量评估 + 难度/知识/素养/认知层级分析 + 改进建议）
+# Source: backend/report_insights.py::_build_overall_prompt()
+# Variables: {exam_name}, {total_questions}, {total_score}, {avg_difficulty}, {avg_cognitive_level},
+#            {difficulty_distribution}, {bloom_distribution}, {gradient_front}, {gradient_middle},
+#            {gradient_back}, {gradient_type}, {top_points}, {avg_per_dimension},
+#            {top_difficulty_factors}, {competency_distribution}
+你是一名资深高中英语教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+
+## 试卷基本信息
+- 名称: {exam_name}
+- 题目数: {total_questions}，总分: {total_score}
+
+## 整卷指标
+- 平均难度（分值加权）: {avg_difficulty}（10分制）
+- 平均认知层级（分值加权）: {avg_cognitive_level}（10分制）
+- 难度分布: {difficulty_distribution}
+- Bloom 认知层级分布（分值占比）: {bloom_distribution}
+
+## 难度梯度
+- 前段: {gradient_front}，中段: {gradient_middle}，后段: {gradient_back}
+- 梯度类型: {gradient_type}
+
+## 知识覆盖
+- Top10 知识点: {top_points}
+
+## 6维特征均值
+{avg_per_dimension}
+- 对难度贡献最大的3个维度: {top_difficulty_factors}
+
+## 素养分布
+{competency_distribution}
+
+请输出严格 JSON（不要多余解释）：
+{
+  "overall_assessment": "总评，150字内，概括试卷整体质量和突出特点",
+  "recommendations": [
+    {"category": "类别", "content": "具体建议", "priority": "high|medium|low"},
+    ...5-8条
+  ],
+  "difficulty_analysis": "难度结构分析，含梯度评价和调整建议，200字内",
+  "knowledge_analysis": "知识覆盖分析，指出薄弱章节和盲区，200字内",
+  "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
+  "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
+}
+
+**英语学科专项分析维度**：
+
+1. **语言技能覆盖分析**：
+   - 听/读/写三大技能的分值占比是否合理
+   - 语言知识（词汇/语法）与语言运用（阅读/写作）的平衡
+   - 输入性技能（听力/阅读）与输出性技能（写作）的比例
+   - 微技能覆盖：细节理解/推理判断/主旨大意/词义猜测/篇章结构等是否均衡
+
+2. **语篇类型分析**：
+   - 记叙文/说明文/议论文/应用文的比例
+   - 话题多样性：科技/文化/环保/社会/教育/健康等
+   - 语篇难度梯度：词汇量/句子复杂度/篇章长度是否递进
+   - 是否包含中国文化相关语篇（课标要求）
+
+3. **词汇语法分析**：
+   - 考查词汇的频率分布（高频/中频/低频词汇比例）
+   - 语法项目覆盖：时态/从句/非谓语/虚拟语气等是否全面
+   - 是否过度集中于某一语法项目
+   - 词汇考查方式：辨析/搭配/派生/语境推断
+
+4. **写作能力分析**：
+   - 应用文题目的实用性和真实性
+   - 读后续写/概要写作的思维含量
+   - 写作话题是否贴近学生生活和认知水平
+   - 是否有效考查高级表达和逻辑组织能力
+
+5. **recommendations 分类建议**（category 可选值）：
+   - "技能覆盖"：听读写技能比例的调整建议
+   - "语篇选择"：语篇类型和话题的改进方向
+   - "难度结构"：难度梯度和区分度优化
+   - "素养培养"：核心素养覆盖的补充建议
+   - "词汇语法"：语言知识考查的改进
+   - "写作设计"：写作题目设计的优化
+   - "命题规范"：题目质量和表述的改进
+   - "教学建议"：基于试卷反映的教学薄弱点
+
+**注意**：
+- 评价要客观专业，避免空泛的套话
+- 建议要具体可操作，指出具体的语言技能和改进方向
+- 重点关注：语言技能全覆盖、语篇类型多样性、思维品质考查深度
+- 如果某一素养维度严重缺失，应在 recommendations 中 priority 标为 high

@@ -1,0 +1,140 @@
+# Subject: cz-geography
+# Purpose: 单题深度分析（知识点 + 解题分析 + 难度 + 选项/子题拆分 + 表征分析）
+# Source: backend/prompts/analysis_prompt.txt
+# Variables: {question_type}, {section_header}
+**分节信息**：{section_header}
+
+请深入分析这道初中地理题目，返回纯JSON格式（不要markdown代码块）：
+
+{{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"}},
+        {{"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}}
+    ],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}}
+    ]
+}}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的地理学术语（如"等高线""温带季风气候""人口分布""水资源"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 考查内容（1句话说明考什么地理知识/技能）
+     ② 解题关键（1-2句话，抓住判断的核心依据，特别是读图方法）
+     ③ 思维难点（1句话，学生最容易犯的错误）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+
+3. **难度（difficulty）**：
+   - 简单：基础地理常识（省会城市、大洲大洋、基本概念）
+   - 中等：需要读图分析或简单推理（气候判断、地形判读）
+   - 困难：需要综合多要素分析（区域综合分析、人地关系）
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 初中地理常见：方向判断错误、比例尺换算失误、气候类型混淆、地图信息读取遗漏
+
+5. **答案（answer）**：
+   - 选择题：直接写选项
+   - 填空/读图题：写出完整答案
+
+6. **题目分值（total_score）**：
+   - 默认值：选择题2分，综合题根据小问合计通常10-15分
+
+7. **选项数量（num_options）**：仅选择题提供
+
+8. **选项难度分析（option_difficulty_breakdown）**：仅选择题提供
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 每个子题需要 sub_id、difficulty_score（0-10）、answer
+     - 0-4分：直接从图中读取信息
+     - 4-7分：需要理解和简单分析
+     - 7-10分：需要综合分析多要素关系
+   - 选择题返回空列表 []
+
+10. **表征分析（representation 相关字段）**：⚠️ 地理学科特别重要
+   - `has_representation`：是否包含图表（地理题大量使用地图和图表）
+   - `representation_type`：可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图（如气温降水图）
+     * `table`：数据表格
+     * `map`：地图（区域图/等高线图/政区图）
+     * `image`：景观照片/示意图
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：地理题中图表通常是核心（true 居多）
+   - `representation_complexity`：1-3
+   - `representation_reason`：一句话说明（≤30字）
+
+**示例输出（选择题 - 读图题）**：
+{{
+    "knowledge_points": ["等高线地形图", "海拔判读", "地形类型识别"],
+    "detailed_analysis": "核心考点：等高线地形图判读。解题关键：根据等高线疏密判断坡度，闭合等高线判断山峰或盆地。思维难点：等高线弯曲方向与山谷/山脊的判断。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "map",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "需要从等高线图中判读地形特征",
+    "common_mistakes": ["山谷山脊方向混淆", "等高线疏密与坡度关系弄反"],
+    "answer": "B",
+    "total_score": 2,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {{"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了山谷和山脊"}},
+        {{"option": "B", "difficulty_score": 5.5, "is_correct": true, "error_reason": ""}},
+        {{"option": "C", "difficulty_score": 4.5, "is_correct": false, "error_reason": "海拔读取错误"}},
+        {{"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "地形类型判断明显错误"}}
+    ],
+    "sub_questions": []
+}}
+
+**示例输出（综合题 - 有子题）**：
+{{
+    "knowledge_points": ["中国地理", "长江流域", "水资源", "南水北调"],
+    "detailed_analysis": "核心考点：长江流域的自然与人文地理特征。解题关键：①结合地图定位长江干支流；②从气候分析水资源分布不均的原因。思维难点：将自然条件与人类活动联系起来分析。",
+    "difficulty": "中等",
+    "has_representation": true,
+    "representation_type": "map",
+    "representation_is_core_to_solving": true,
+    "representation_complexity": 2,
+    "representation_reason": "需从长江流域图中读取水系信息",
+    "common_mistakes": ["干支流名称混淆", "水资源不均原因分析不全面", "南水北调路线记错"],
+    "answer": "(1)宜昌 (2)亚热带季风气候，降水集中在夏季 (3)南水北调缓解北方缺水问题",
+    "total_score": 10,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {{"sub_id": 1, "difficulty_score": 3.0, "answer": "从地图上读取长江上中游分界点"}},
+        {{"sub_id": 2, "difficulty_score": 5.5, "answer": "分析长江流域的气候特征及对水资源的影响"}},
+        {{"sub_id": 3, "difficulty_score": 6.0, "answer": "说明南水北调工程的意义"}}
+    ]
+}}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式
+- 不要添加markdown代码块标记
+- 地理学科特别注意图表分析，大部分题目都涉及读图

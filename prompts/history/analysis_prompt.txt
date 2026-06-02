@@ -1,0 +1,211 @@
+**分节信息**：{section_header}
+**题型**：{question_type}
+
+请深入分析这道高中历史题目，返回纯JSON格式（不要markdown代码块）：
+
+{
+    "knowledge_points": ["知识点1", "知识点2", "知识点3"],
+    "detailed_analysis": "解题分析（严格控制在100字以内）",
+    "difficulty": "简单/中等/困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "表征如何参与解题",
+    "common_mistakes": ["易错点1", "易错点2"],
+    "answer": "标准答案",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 3.0, "is_correct": true, "error_reason": "误选原因"},
+        {"option": "B", "difficulty_score": 5.0, "is_correct": false, "error_reason": "误选原因"}
+    ],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "子题答案要点"}
+    ]
+}
+
+**分析要求**：
+
+1. **知识点（knowledge_points）**：
+   - 列出3-5个核心知识点
+   - 按重要性排序
+   - 使用标准的历史学术语（如"郡县制""重农抑商""洋务运动""启蒙运动"）
+
+2. **解题分析（detailed_analysis）**：⚠️ 重点要求
+   - **字数限制**：严格控制在100字以内！超过100字视为不合格
+   - **内容要求**：只写核心要点，不要逐步推导
+   - **必须包含**：
+     ① 考查时段与主题（1句话说明考查什么时期的什么内容）
+     ② 解题关键（1-2句话，抓住史料解读或推理的核心）
+     ③ 思维难点（1句话，学生最容易判断失误的地方）
+   - **禁止内容**：
+     ❌ 不要逐步推导分析过程
+     ❌ 不要逐项分析每个选项
+     ❌ 不要写成教学文本
+   - **风格**：简洁、专业、直击要害
+
+3. **难度（difficulty）**：
+   - 简单：基础史实直接考查（时间/人物/事件的直接匹配）
+   - 中等：需要理解因果关系或进行简单比较分析
+   - 困难：需要综合多维度分析、评价历史观点或进行复杂论述
+
+4. **易错点（common_mistakes）**：
+   - 列出2-3个核心易错点
+   - 简洁明了，每个易错点不超过15字
+   - 历史学科常见：时间混淆、因果倒置、张冠李戴、以偏概全、今人视角代替古人立场
+
+5. **答案（answer）**：
+   - 选择题：直接写选项（如"A"、"B"）
+   - 非选择题：写完整答案要点
+
+6. **题目分值（total_score）**：⚠️ 重要
+   - 从分节信息中提取单题分值
+   - 如果分节信息包含"每题X分"或"每小题X分"，则total_score=X
+   - 如果分节信息包含"共X分"且明确题目范围，则total_score=X÷题目数量
+   - 如果无法从分节信息推断，使用默认值：
+     * 选择题：4分（历史高考标准）
+     * 材料分析题：根据小问合计，通常12-15分
+     * 论述题：通常12分
+
+7. **选项数量（num_options）**：
+   - 仅选择题需要提供
+   - 统计题目中的选项个数（A、B、C、D...）
+   - 通常为4个选项
+
+8. **选项难度分析（option_difficulty_breakdown）**：
+   - 仅选择题需要提供
+   - 对每个选项进行难度评估（0-10分）：
+     * 0-3分：该选项容易排除或容易识别正误
+     * 4-7分：需要一定思考才能判断
+     * 8-10分：干扰性强，容易误选
+   - 标注是否为正确选项（is_correct）
+   - 说明误选原因（error_reason）
+
+9. **子题分析（sub_questions）**：⚠️ 仅非选择题需要
+   - 如果题目有多个小问（如(1)(2)(3)），需要识别并分析每个子题
+   - 每个子题需要：
+     * sub_id：子题序号（1,2,3...）
+     * difficulty_score：该子题的难度系数（0-10分）
+       - 0-4分：直接提取材料信息、回忆基础史实
+       - 4-7分：需要概括归纳、因果分析、简单比较
+       - 7-10分：需要综合评价、多角度论述、史论结合
+     * answer：该子题的答案要点（简洁表述）
+
+   - **重要**：选择题返回空列表 []
+   - 如果非选择题没有明确的子题划分（如整体论述题），也返回空列表 []
+
+   - 示例（材料分析题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中反映的经济现象：商品经济发展、城市繁荣"},
+         {"sub_id": 2, "difficulty_score": 6.5, "answer": "原因：政治统一、交通发达、手工业进步、对外贸易"},
+         {"sub_id": 3, "difficulty_score": 8.0, "answer": "评价：促进社会转型但受封建制度制约，与同期西方比较"}
+     ]
+     ```
+
+   - 示例（论述题）：
+     ```json
+     "sub_questions": [
+         {"sub_id": 1, "difficulty_score": 9.0, "answer": "自拟论题并用史实论证，要求论题明确、史实准确、论证充分、逻辑清晰"}
+     ]
+     ```
+
+10. **表征分析（representation 相关字段）**：
+   - `has_representation`：题目是否包含图表、地图、统计数据等非文字表征
+   - `representation_type`：表征类型，可选值：
+     * `none`：纯文字题
+     * `chart`：柱状图/折线图/饼图（如经济数据统计）
+     * `table`：数据表格（如历史事件时间表、统计表）
+     * `map`：历史地图（如疆域图、战争形势图、贸易路线图）
+     * `timeline`：年表/时间轴
+     * `image`：历史图片（如文物照片、漫画、宣传画）
+     * `multi`：多种表征组合
+   - `representation_is_core_to_solving`：表征是否参与核心推理（关键字段）
+     * `true`：解题必须依赖表征信息（如从历史地图判断疆域变化）
+     * `false`：表征仅为装饰或辅助说明
+   - `representation_complexity`：1-3
+     * 1：纯文字，无表征
+     * 2：简单图表，读图即可获取信息
+     * 3：复杂史料组合/多图联读，需要从图中推理
+   - `representation_reason`：一句话说明表征如何参与解题（≤30字）
+   - **注意**：如果 `has_representation=false`，则 `representation_type="none"`、`representation_is_core_to_solving=false`、`representation_complexity=1`
+
+**示例输出（选择题 - 古代史）**：
+
+{
+    "knowledge_points": ["科举制", "隋唐政治制度", "选官制度演变"],
+    "detailed_analysis": "核心考点：科举制的特点与影响。解题关键：区分科举制与察举制、九品中正制的本质差异——以考试成绩为标准。思维难点：混淆科举制"公平性"与"局限性"的关系。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字选择题，无图表",
+    "common_mistakes": ["混淆察举制与科举制", "忽略科举制的阶段性变化", "以偏概全夸大公平性"],
+    "answer": "B",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 4.0, "is_correct": false, "error_reason": "混淆了察举制的特征"},
+        {"option": "B", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "C", "difficulty_score": 5.5, "is_correct": false, "error_reason": "夸大了科举制的社会流动效果"},
+        {"option": "D", "difficulty_score": 3.0, "is_correct": false, "error_reason": "明显的时间错误"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（选择题 - 近代史）**：
+
+{
+    "knowledge_points": ["洋务运动", "近代化探索", "中体西用"],
+    "detailed_analysis": "核心考点：洋务运动的目的与局限。解题关键：理解'中体西用'的实质——维护封建统治而非推动社会转型。思维难点：不能因洋务运动引进技术就认为其是资产阶级改革。",
+    "difficulty": "中等",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字概念题",
+    "common_mistakes": ["混淆洋务派与维新派的主张", "过度肯定洋务运动的进步性"],
+    "answer": "C",
+    "total_score": 4,
+    "num_options": 4,
+    "option_difficulty_breakdown": [
+        {"option": "A", "difficulty_score": 5.0, "is_correct": false, "error_reason": "混淆了维新派的主张"},
+        {"option": "B", "difficulty_score": 4.5, "is_correct": false, "error_reason": "忽略了阶级局限性"},
+        {"option": "C", "difficulty_score": 6.0, "is_correct": true, "error_reason": ""},
+        {"option": "D", "difficulty_score": 3.5, "is_correct": false, "error_reason": "时间错位，属于清末新政内容"}
+    ],
+    "sub_questions": []
+}
+
+**示例输出（材料分析题 - 有子题）**：
+
+{
+    "knowledge_points": ["明清经济", "商品经济发展", "资本主义萌芽", "海禁政策"],
+    "detailed_analysis": "核心考点：明清商品经济发展与资本主义萌芽。解题关键：①从材料提取经济现象；②联系封建制度分析制约因素；③中西对比视角。思维难点：区分商品经济发展与资本主义萌芽的本质差异。",
+    "difficulty": "困难",
+    "has_representation": false,
+    "representation_type": "none",
+    "representation_is_core_to_solving": false,
+    "representation_complexity": 1,
+    "representation_reason": "纯文字材料分析题",
+    "common_mistakes": ["照抄材料不概括", "分析原因遗漏政策因素", "中西对比流于表面"],
+    "answer": "(1)商帮兴起、长途贸易发展、白银货币化 (2)重农抑商、海禁闭关、自然经济为主体 (3)与西方相比缺乏制度保障和海外市场",
+    "total_score": 14,
+    "num_options": 0,
+    "option_difficulty_breakdown": [],
+    "sub_questions": [
+        {"sub_id": 1, "difficulty_score": 4.0, "answer": "概括材料中明清商品经济发展的表现"},
+        {"sub_id": 2, "difficulty_score": 6.5, "answer": "分析制约资本主义萌芽发展的因素"},
+        {"sub_id": 3, "difficulty_score": 8.5, "answer": "与同期西方比较，评价中国经济发展的特点与局限"}
+    ]
+}
+
+**注意事项**：
+- ⚠️ detailed_analysis必须严格控制在100字以内
+- 返回的JSON必须是有效格式（可以被json.loads()解析）
+- 不要添加markdown代码块标记（```json）
+- 可以使用①②③、→等符号使结构清晰
+- 如果题目包含文言文史料，要结合史料内容分析但不要全文翻译
+- 重点是"思维含量"，不是"步骤完整性"

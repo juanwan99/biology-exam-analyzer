@@ -1,0 +1,56 @@
+你是一名资深高中化学命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+
+题目：
+{question_block}{qtype_hint}
+
+请输出严格 JSON（不要多余解释），格式如下：
+{
+  "subquestions": [
+    {
+      "id": 1,
+      "points": 该小问分值(整数),
+      "working_memory": 1-5（该小问解题时需同时在脑中保持的信息元素数），
+      "reasoning_steps": 正整数（该小问最少认知操作数），
+      "trap_density": 1-3（看似正确但实际错误的推理路径数），
+      "novelty": 1-3（知识/方法新颖度），
+      "knowledge_breadth": 1-3（跨知识模块程度），
+      "brief": "核心任务(<=20字)"
+    }
+  ],
+  "dependencies": [
+    {
+      "from": 源小问id,
+      "to": 目标小问id,
+      "strength": "weak"或"strong",
+      "reason": "依赖内容(<=30字)"
+    }
+  ],
+  "global_features": {
+    "shared_context_load": 1-3（跨问保持负担。1=各问独立 2=共享背景 3=围绕复杂系统），
+    "shared_context_reason": "<=20字",
+    "global_method_novelty": 1-3（教材外方法。1=全教材内 2=部分外 3=核心方法外），
+    "method_novelty_reason": "<=20字"
+  },
+  "bloom": 1-6, "bloom_distribution": {}, "bloom_reason": "<=30字",
+  "info_density": 1-3, "density_reason": "<=20字",
+  "representation_complexity": 1-3, "representation_reason": "<=20字",
+  "quality_score": 1-5,
+  "quality_scientific": "<=60字", "quality_normative": "<=60字",
+  "quality_language": "<=60字", "quality_context": "<=60字",
+  "quality_sensitivity": "<=60字", "teacher_comment": "<=150字"
+}
+
+**subquestion 示例（化学大题）：**
+- 化学计算题：小问包含摩尔质量计算、物质的量换算、浓度计算等
+- 实验方案设计：小问包含实验目的、实验步骤、现象描述、结论推导
+- 工艺流程分析：小问包含原料预处理、反应条件选择、分离提纯操作、产品检验
+
+**dependencies 判定规则（关键！）：**
+- "strong"：前一问的结论/计算结果是后一问的前提。如摩尔质量→物质的量→浓度，不知道前步结果就无法继续。
+- "weak"：前一问的背景知识有助于后问理解，但不知道前问答案也能部分作答。如了解反应类型有助于写方程式，但也可直接根据元素守恒书写。
+- 无关的小问之间不加 dependency
+
+**global_method_novelty 判例：**
+- 1：所有方法在高中教材中有明确介绍（如酸碱滴定、蒸馏、过滤）
+- 2：部分方法需要迁移应用（如陌生工艺流程中的除杂策略）
+- 3：核心方法在教材中完全没有（如电化学合成新型材料、绿色化学新工艺）

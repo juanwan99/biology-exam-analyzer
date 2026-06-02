@@ -1,0 +1,286 @@
+{
+  "bx1": {
+    "name": "生物学必修1·分子与细胞",
+    "short_name": "必修1",
+    "chapters": [
+      {
+        "chapter": "第1章",
+        "title": "走近细胞",
+        "start_page": 2,
+        "sections": [
+          {"section": "第1节", "title": "细胞是生命活动的基本单位", "start_page": 2}
+        ]
+      },
+      {
+        "chapter": "第2章",
+        "title": "组成细胞的分子",
+        "start_page": 18,
+        "sections": [
+          {"section": "第1节", "title": "细胞中的元素和化合物", "start_page": 18},
+          {"section": "第2节", "title": "细胞中的无机物", "start_page": 23},
+          {"section": "第3节", "title": "细胞中的糖类和脂质", "start_page": 26},
+          {"section": "第4节", "title": "蛋白质是生命活动的主要承担者", "start_page": 30},
+          {"section": "第5节", "title": "核酸是遗传信息的携带者", "start_page": 38}
+        ]
+      },
+      {
+        "chapter": "第3章",
+        "title": "细胞的基本结构",
+        "start_page": 44,
+        "sections": [
+          {"section": "第1节", "title": "细胞膜的结构和功能", "start_page": 44},
+          {"section": "第2节", "title": "细胞器之间的分工合作", "start_page": 55},
+          {"section": "第3节", "title": "细胞核的结构和功能", "start_page": 65}
+        ]
+      },
+      {
+        "chapter": "第4章",
+        "title": "细胞的物质输入和输出",
+        "start_page": 72,
+        "sections": [
+          {"section": "第1节", "title": "被动运输", "start_page": 72},
+          {"section": "第2节", "title": "主动运输与胞吞、胞吐", "start_page": 80}
+        ]
+      },
+      {
+        "chapter": "第5章",
+        "title": "细胞的能量供应和利用",
+        "start_page": 86,
+        "sections": [
+          {"section": "第1节", "title": "降低化学反应活化能的酶", "start_page": 86},
+          {"section": "第2节", "title": "细胞的能量货币ATP", "start_page": 95},
+          {"section": "第3节", "title": "细胞呼吸的原理和应用", "start_page": 99},
+          {"section": "第4节", "title": "光合作用与能量转化", "start_page": 108}
+        ]
+      },
+      {
+        "chapter": "第6章",
+        "title": "细胞的生命历程",
+        "start_page": 122,
+        "sections": [
+          {"section": "第1节", "title": "细胞的增殖", "start_page": 122},
+          {"section": "第2节", "title": "细胞的分化", "start_page": 132},
+          {"section": "第3节", "title": "细胞的衰老和死亡", "start_page": 137}
+        ]
+      }
+    ]
+  },
+  "bx2": {
+    "name": "生物学必修2·遗传与进化",
+    "short_name": "必修2",
+    "chapters": [
+      {
+        "chapter": "第1章",
+        "title": "遗传因子的发现",
+        "start_page": 2,
+        "sections": [
+          {"section": "第1节", "title": "孟德尔的豌豆杂交实验（一）", "start_page": 2},
+          {"section": "第2节", "title": "孟德尔的豌豆杂交实验（二）", "start_page": 12}
+        ]
+      },
+      {
+        "chapter": "第2章",
+        "title": "基因和染色体的关系",
+        "start_page": 22,
+        "sections": [
+          {"section": "第1节", "title": "减数分裂和受精作用", "start_page": 22},
+          {"section": "第2节", "title": "基因在染色体上", "start_page": 35},
+          {"section": "第3节", "title": "伴性遗传", "start_page": 41}
+        ]
+      },
+      {
+        "chapter": "第3章",
+        "title": "基因的本质",
+        "start_page": 48,
+        "sections": [
+          {"section": "第1节", "title": "DNA是主要的遗传物质", "start_page": 48},
+          {"section": "第2节", "title": "DNA的结构", "start_page": 55},
+          {"section": "第3节", "title": "DNA的复制", "start_page": 62},
+          {"section": "第4节", "title": "基因通常是有遗传效应的DNA片段", "start_page": 67}
+        ]
+      },
+      {
+        "chapter": "第4章",
+        "title": "基因的表达",
+        "start_page": 72,
+        "sections": [
+          {"section": "第1节", "title": "基因指导蛋白质的合成", "start_page": 72},
+          {"section": "第2节", "title": "基因表达与性状的关系", "start_page": 82}
+        ]
+      },
+      {
+        "chapter": "第5章",
+        "title": "基因突变及其他变异",
+        "start_page": 90,
+        "sections": [
+          {"section": "第1节", "title": "基因突变和基因重组", "start_page": 90},
+          {"section": "第2节", "title": "染色体变异", "start_page": 98},
+          {"section": "第3节", "title": "人类遗传病", "start_page": 104}
+        ]
+      },
+      {
+        "chapter": "第6章",
+        "title": "生物的进化",
+        "start_page": 112,
+        "sections": [
+          {"section": "第1节", "title": "生物有共同祖先的证据", "start_page": 112},
+          {"section": "第2节", "title": "自然选择与适应的形成", "start_page": 117},
+          {"section": "第3节", "title": "种群基因组成的变化与物种的形成", "start_page": 123},
+          {"section": "第4节", "title": "协同进化与生物多样性的形成", "start_page": 131}
+        ]
+      }
+    ]
+  },
+  "xxbx1": {
+    "name": "生物学选择性必修1·稳态与调节",
+    "short_name": "选必1",
+    "chapters": [
+      {
+        "chapter": "第1章",
+        "title": "人体的内环境与稳态",
+        "start_page": 2,
+        "sections": [
+          {"section": "第1节", "title": "细胞生活的环境", "start_page": 2},
+          {"section": "第2节", "title": "内环境的稳态", "start_page": 10}
+        ]
+      },
+      {
+        "chapter": "第2章",
+        "title": "神经调节",
+        "start_page": 18,
+        "sections": [
+          {"section": "第1节", "title": "神经调节的结构基础", "start_page": 18},
+          {"section": "第2节", "title": "神经调节的基本方式", "start_page": 26},
+          {"section": "第3节", "title": "神经冲动的产生和传导", "start_page": 32},
+          {"section": "第4节", "title": "神经系统的分级调节", "start_page": 42},
+          {"section": "第5节", "title": "人脑的高级功能", "start_page": 48}
+        ]
+      },
+      {
+        "chapter": "第3章",
+        "title": "体液调节",
+        "start_page": 56,
+        "sections": [
+          {"section": "第1节", "title": "激素与内分泌系统", "start_page": 56},
+          {"section": "第2节", "title": "激素调节的过程", "start_page": 64},
+          {"section": "第3节", "title": "体液调节与神经调节的关系", "start_page": 74}
+        ]
+      },
+      {
+        "chapter": "第4章",
+        "title": "免疫调节",
+        "start_page": 82,
+        "sections": [
+          {"section": "第1节", "title": "免疫系统的组成和功能", "start_page": 82},
+          {"section": "第2节", "title": "特异性免疫", "start_page": 90},
+          {"section": "第3节", "title": "免疫失调", "start_page": 101},
+          {"section": "第4节", "title": "免疫学的应用", "start_page": 109}
+        ]
+      },
+      {
+        "chapter": "第5章",
+        "title": "植物生命活动的调节",
+        "start_page": 118,
+        "sections": [
+          {"section": "第1节", "title": "植物生长素", "start_page": 118},
+          {"section": "第2节", "title": "其他植物激素", "start_page": 130},
+          {"section": "第3节", "title": "植物生长调节剂的应用", "start_page": 137},
+          {"section": "第4节", "title": "环境因素参与调节植物的生命活动", "start_page": 142}
+        ]
+      }
+    ]
+  },
+  "xxbx2": {
+    "name": "生物学选择性必修2·生物与环境",
+    "short_name": "选必2",
+    "chapters": [
+      {
+        "chapter": "第1章",
+        "title": "种群及其动态",
+        "start_page": 2,
+        "sections": [
+          {"section": "第1节", "title": "种群的数量特征", "start_page": 2},
+          {"section": "第2节", "title": "种群数量的变化", "start_page": 11},
+          {"section": "第3节", "title": "影响种群数量变化的因素", "start_page": 22}
+        ]
+      },
+      {
+        "chapter": "第2章",
+        "title": "群落及其演替",
+        "start_page": 30,
+        "sections": [
+          {"section": "第1节", "title": "群落的结构", "start_page": 30},
+          {"section": "第2节", "title": "群落的主要类型", "start_page": 40},
+          {"section": "第3节", "title": "群落的演替", "start_page": 48}
+        ]
+      },
+      {
+        "chapter": "第3章",
+        "title": "生态系统及其稳定性",
+        "start_page": 56,
+        "sections": [
+          {"section": "第1节", "title": "生态系统的结构", "start_page": 56},
+          {"section": "第2节", "title": "生态系统的能量流动", "start_page": 64},
+          {"section": "第3节", "title": "生态系统的物质循环", "start_page": 74},
+          {"section": "第4节", "title": "生态系统的信息传递", "start_page": 83},
+          {"section": "第5节", "title": "生态系统的稳定性", "start_page": 89}
+        ]
+      },
+      {
+        "chapter": "第4章",
+        "title": "人与环境",
+        "start_page": 98,
+        "sections": [
+          {"section": "第1节", "title": "人类活动对生态环境的影响", "start_page": 98},
+          {"section": "第2节", "title": "生物多样性及其保护", "start_page": 106},
+          {"section": "第3节", "title": "生态工程", "start_page": 115}
+        ]
+      }
+    ]
+  },
+  "xxbx3": {
+    "name": "生物学选择性必修3·生物技术与工程",
+    "short_name": "选必3",
+    "chapters": [
+      {
+        "chapter": "第1章",
+        "title": "发酵工程",
+        "start_page": 2,
+        "sections": [
+          {"section": "第1节", "title": "传统发酵技术的应用", "start_page": 2},
+          {"section": "第2节", "title": "微生物的培养技术及应用", "start_page": 14},
+          {"section": "第3节", "title": "发酵工程及其应用", "start_page": 28}
+        ]
+      },
+      {
+        "chapter": "第2章",
+        "title": "细胞工程",
+        "start_page": 40,
+        "sections": [
+          {"section": "第1节", "title": "植物细胞工程", "start_page": 40},
+          {"section": "第2节", "title": "动物细胞工程", "start_page": 52}
+        ]
+      },
+      {
+        "chapter": "第3章",
+        "title": "基因工程",
+        "start_page": 64,
+        "sections": [
+          {"section": "第1节", "title": "重组DNA技术的基本工具", "start_page": 64},
+          {"section": "第2节", "title": "基因工程的基本操作程序", "start_page": 75},
+          {"section": "第3节", "title": "基因工程的应用", "start_page": 88},
+          {"section": "第4节", "title": "蛋白质工程的崛起", "start_page": 96}
+        ]
+      },
+      {
+        "chapter": "第4章",
+        "title": "生物技术的安全性与伦理问题",
+        "start_page": 102,
+        "sections": [
+          {"section": "第1节", "title": "转基因产品的安全性", "start_page": 102},
+          {"section": "第2节", "title": "关注生物技术的伦理问题", "start_page": 109}
+        ]
+      }
+    ]
+  }
+}
