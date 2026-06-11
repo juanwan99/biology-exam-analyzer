@@ -29,6 +29,7 @@ import time
 
 from logger import get_logger
 from config import UPLOAD_DIR, REPORTS_DIR
+from report_signing import sign_report_path
 import credits_service
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
@@ -48,6 +49,10 @@ from deps import (
 )
 
 logger = get_logger()
+
+# 持有后台分析任务引用，防 asyncio 在任务完成前将其 GC 回收（CPython 仅弱引用 task）
+_bg_tasks: set = set()
+import task_manager
 
 router = APIRouter(tags=["analysis"])
 
@@ -175,7 +180,11 @@ async def analyze_document(
     report_mode: str = Form("full"),
     exam_review_channel: Optional[str] = Form(None),
 ):
-    """主接口：上传文档并完成完整分析流程。"""
+    """主接口：上传文档并完成完整分析流程。
+
+    【已下线】此端点无认证无计费，已被 /api/analyze_auto（带认证+计费）取代，
+    前端无任何调用方，保留路由仅返回 410，杜绝绕过付费墙的免费分析。"""
+    raise HTTPException(410, detail="此接口已下线，请使用 /api/analyze_auto")
     svc = get_analysis_service()
     start_time = datetime.now()
     logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
@@ -258,6 +267,47 @@ async def get_credits_balance(authorization: Optional[str] = Header(None)):
 
 
 # ============ 规则拆分 + 自动分析 API（v3.3支持PDF）============
+
+async def _resolve_user_and_review(authorization: Optional[str]):
+    """统一认证 + 评审旁路。返回 (user_id, review_mode)。
+    - 本地 reviewer token（active_tokens 中 username==reviewer）→ (id, True)，调用方跳过扣费
+    - momowan token → verify_token → (id, False)，调用方负责扣费
+    与 analyze_auto 的评审旁路语义保持一致。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="请先登录")
+    token = authorization[7:]
+
+    from auth_router import active_tokens as _admin_tokens
+    _rev = _admin_tokens.get(token)
+    if _rev and _rev.get("username") == "reviewer":
+        logger.info("[评审] reviewer 评审模式，跳过积分")
+        return _rev["id"], True
+
+    try:
+        user_info = await credits_service.verify_token(token)
+        logger.info(f"[积分] 用户 {user_info['id']} ({user_info.get('email')}) 通过认证")
+        return user_info["id"], False
+    except credits_service.InvalidTokenError as e:
+        raise HTTPException(401, detail=str(e))
+    except Exception as e:
+        logger.error(f"[认证] 失败: {e}")
+        raise HTTPException(401, detail="认证失败，请重新登录")
+
+
+async def _ensure_balance(user_id: int, review_mode: bool):
+    """非评审模式下检查积分余额，不足抛 402。"""
+    if review_mode:
+        return
+    try:
+        balance = await credits_service.get_balance(user_id)
+        if balance < credits_service.ANALYSIS_COST:
+            raise HTTPException(402, detail=f"积分不足：余额 {balance}，需要 {credits_service.ANALYSIS_COST}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[积分] 余额查询失败: {e}")
+        raise HTTPException(500, detail="积分查询失败，请稍后重试")
+
 
 @router.post("/api/analyze_auto")
 async def analyze_auto(
@@ -377,137 +427,30 @@ async def analyze_auto(
         else:
             logger.info("[评审] 跳过扣费")
 
-        # 4. 并发分析所有题目（分析+难度+素养一次完成）
-        logger.info(f"开始并发分析 {len(questions)} 道题（{MAX_WORKERS}线程）...")
-        sem = asyncio.Semaphore(MAX_WORKERS)
+        # 4. 创建异步任务，立即返回 task_id
+        task_id = task_manager.create(len(questions))
 
-        async def analyze_one(q):
-            async with sem:
-                try:
-                    return await analyze_question_full(
-                        q,
-                        image_bytes,
-                        mode,
-                        exam_review_channel=effective_review_channel,
-                    )
-                except Exception as e:
-                    logger.error(f"题目 {q.get('id')} 分析失败: {e}")
-                    q["error"] = str(e)
-                    return q
+        # 捕获变量供后台任务使用
+        _bg_filename = file.filename
+        _bg_questions = questions
+        _bg_image_bytes = image_bytes
+        _bg_mode = mode
+        _bg_generate_report = generate_report
+        _bg_report_mode = report_mode
+        _bg_review_channel = effective_review_channel
+        _bg_competency_analyzer = competency_analyzer
+        _bg_start_time = start_time
 
-        questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
+        _bg_task = asyncio.create_task(_run_analysis_pipeline(
+            task_id, _bg_questions, _bg_image_bytes, _bg_mode,
+            _bg_review_channel, _bg_competency_analyzer,
+            _bg_generate_report, _bg_report_mode, _bg_filename,
+            _bg_start_time,
+        ))
+        _bg_tasks.add(_bg_task)
+        _bg_task.add_done_callback(_bg_tasks.discard)
 
-        logger.info(f"所有题目分析完成")
-
-        # 6. 聚合统计数据（分值加权）
-        try:
-            competency_list = _build_competency_list(questions)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
-        except Exception as e:
-            logger.error(f"素养聚合失败: {str(e)}")
-            competency_summary = {}
-
-        # 7. 计算整卷统计（移到 PDF 生成之前）
-        try:
-            exam_statistics = generate_exam_statistics(questions, competency_summary)
-        except Exception as e:
-            logger.error(f"整卷统计失败: {str(e)}")
-            exam_statistics = {}
-
-        metadata_quality = _compute_route_metadata_quality(questions)
-
-        # 8. 生成PDF报告（可选）
-        report_url = None
-        html_report_url = None
-        report_error = None
-        if generate_report:
-            try:
-                _validate_report_metadata_for_route(questions)
-
-                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
-
-                artifacts = await _generate_route_report_artifacts(
-                    questions, competency_summary, exam_statistics,
-                    {"name": file.filename, "total": len(questions), "mode": mode},
-                    report_mode, pdf_path, effective_review_channel,
-                )
-
-                report_url = f"/api/reports/{exam_id}.pdf"
-                if artifacts.get("html_path"):
-                    html_report_url = f"/api/reports/{exam_id}.html"
-                logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
-            except Exception as e:
-                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
-                report_error = f"报告生成失败: {str(e)}"
-
-        # 8.5 分数预估（如果数据库可用）
-        score_prediction = None
-        try:
-            from database import get_db_session
-            from prediction_service import PredictionService
-
-            # 获取数据库会话
-            db = await get_db_session()
-            try:
-                prediction_service = PredictionService(db)
-
-                # 计算试卷总分
-                # AI 可能只提取部分题目分值，导致总分不完整
-                # 策略：如果提取的总分 < 题目数*2（不合理），使用默认 100 分
-                raw_total = sum(
-                    q.get('analysis', {}).get('total_score', q.get('total_score', 0))
-                    for q in questions
-                )
-                min_reasonable = len(questions) * 2  # 每题至少 2 分
-                if raw_total < min_reasonable:
-                    total_score = 100
-                    logger.info(f"[自动分析] 提取总分 {raw_total} 不合理（< {min_reasonable}），使用默认 100 分")
-                else:
-                    total_score = raw_total
-
-                # 推断年级（默认高三，后续可以从文件名或内容推断）
-                grade = "高三"
-
-                # 进行预估
-                score_prediction = await prediction_service.predict_exam_score(
-                    questions=questions,
-                    total_score=total_score,
-                    grade=grade,
-                    exam_name=file.filename,
-                    save_prediction=True
-                )
-                logger.info(f"[自动分析] 分数预估完成: 预测均分={score_prediction.get('predicted_average')}")
-            finally:
-                await db.close()
-        except ImportError:
-            pass  # 数据库模块不可用，跳过
-        except Exception as e:
-            logger.warning(f"[自动分析] 分数预估失败（不影响主流程）: {str(e)}")
-
-        # 9. 返回结果
-        elapsed_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"[自动分析] 完成！总耗时: {elapsed_time:.1f}秒")
-
-        result = {
-            "total_count": len(questions),
-            "questions": questions,
-            "processing_time": elapsed_time,
-            "mode": mode,
-            "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,
-            "metadata_quality": metadata_quality,
-            "report_url": report_url,
-            "html_report_url": html_report_url,
-            "report_error": report_error,
-            "exam_review_channel": effective_review_channel,
-        }
-
-        # 添加分数预估（如果有）
-        if score_prediction:
-            result["score_prediction"] = score_prediction
-
-        return result
+        return {"task_id": task_id, "status": "processing", "total": len(questions)}
 
     except HTTPException:
         raise
@@ -524,12 +467,156 @@ async def analyze_auto(
                 logger.warning(f"删除临时文件失败: {str(e)}")
 
 
+
+async def _run_analysis_pipeline(
+    task_id, questions, image_bytes, mode,
+    effective_review_channel, competency_analyzer,
+    generate_report, report_mode, filename,
+    start_time,
+):
+    """后台分析管线 — analyze_auto 返回后异步执行。"""
+    try:
+        total = len(questions)
+        completed = [0]
+
+        logger.info(f"开始并发分析 {total} 道题（{MAX_WORKERS}线程）...")
+        sem = asyncio.Semaphore(MAX_WORKERS)
+
+        async def analyze_one(q):
+            async with sem:
+                try:
+                    result = await analyze_question_full(
+                        q, image_bytes, mode,
+                        exam_review_channel=effective_review_channel,
+                    )
+                    completed[0] += 1
+                    task_manager.update(task_id, completed[0], f"已分析 {completed[0]}/{total} 题")
+                    return result
+                except Exception as e:
+                    completed[0] += 1
+                    task_manager.update(task_id, completed[0], f"已分析 {completed[0]}/{total} 题")
+                    logger.error(f"题目 {q.get('id')} 分析失败: {e}")
+                    q["error"] = str(e)
+                    return q
+
+        questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
+        logger.info("所有题目分析完成")
+        task_manager.update(task_id, total, "正在生成报告...")
+
+        try:
+            competency_list = _build_competency_list(questions)
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+        except Exception as e:
+            logger.error(f"素养聚合失败: {str(e)}")
+            competency_summary = {}
+
+        try:
+            exam_statistics = generate_exam_statistics(questions, competency_summary)
+        except Exception as e:
+            logger.error(f"整卷统计失败: {str(e)}")
+            exam_statistics = {}
+
+        metadata_quality = _compute_route_metadata_quality(questions)
+
+        report_url = None
+        html_report_url = None
+        report_error = None
+        if generate_report:
+            try:
+                _validate_report_metadata_for_route(questions)
+                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
+                artifacts = await _generate_route_report_artifacts(
+                    questions, competency_summary, exam_statistics,
+                    {"name": filename, "total": len(questions), "mode": mode},
+                    report_mode, pdf_path, effective_review_channel,
+                )
+                report_url = f"/api/reports/{exam_id}.pdf?{sign_report_path(f'{exam_id}.pdf')}"
+                if artifacts.get("html_path"):
+                    html_report_url = f"/api/reports/{exam_id}.html?{sign_report_path(f'{exam_id}.html')}"
+                logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
+            except Exception as e:
+                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
+                report_error = f"报告生成失败: {str(e)}"
+
+        score_prediction = None
+        try:
+            from database import get_db_session
+            from prediction_service import PredictionService
+            db = await get_db_session()
+            try:
+                prediction_service = PredictionService(db)
+                raw_total = sum(
+                    q.get('analysis', {}).get('total_score', q.get('total_score', 0))
+                    for q in questions
+                )
+                min_reasonable = len(questions) * 2
+                total_score = 100 if raw_total < min_reasonable else raw_total
+                score_prediction = await prediction_service.predict_exam_score(
+                    questions=questions, total_score=total_score,
+                    grade="高三", exam_name=filename, save_prediction=True,
+                )
+                logger.info(f"[自动分析] 分数预估完成: 预测均分={score_prediction.get('predicted_average')}")
+            finally:
+                await db.close()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"[自动分析] 分数预估失败（不影响主流程）: {str(e)}")
+
+        elapsed_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[自动分析] 完成！总耗时: {elapsed_time:.1f}秒")
+
+        result = {
+            "total_count": len(questions),
+            "questions": questions,
+            "processing_time": elapsed_time,
+            "mode": mode,
+            "competency_summary": competency_summary,
+            "exam_statistics": exam_statistics,
+            "metadata_quality": metadata_quality,
+            "report_url": report_url,
+            "html_report_url": html_report_url,
+            "report_error": report_error,
+            "exam_review_channel": effective_review_channel,
+        }
+        if score_prediction:
+            result["score_prediction"] = score_prediction
+
+        task_manager.complete(task_id, result)
+
+    except Exception as e:
+        logger.error(f"[自动分析] 后台任务失败: {e}", exc_info=True)
+        task_manager.fail(task_id, str(e))
+
+
+@router.get("/api/analysis/status/{task_id}")
+async def analysis_status(task_id: str):
+    """轮询分析任务状态。"""
+    task = task_manager.get(task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    resp = {
+        "status": task["status"],
+        "progress": task["progress"],
+        "total": task["total"],
+        "message": task["message"],
+    }
+    if task["status"] == "completed":
+        resp["result"] = task["result"]
+    elif task["status"] == "failed":
+        resp["error"] = task["error"]
+    return resp
+
+
+
 # ============ Word文档题目拆分 API（v3.0优化）============
 
 @router.post("/api/analyze/auto_split")
 async def auto_split_questions(
     file: UploadFile = File(...),
-    use_rule: bool = Form(True)  # 保留参数兼容性，v3.0固定使用Word提取
+    use_rule: bool = Form(True),  # 保留参数兼容性，v3.0固定使用Word提取
+    authorization: Optional[str] = Header(None),
 ):
     """
     第一阶段：自动拆分题目（v3.0：仅支持Word文档）
@@ -546,6 +633,9 @@ async def auto_split_questions(
             "method": "word_native"
         }
     """
+    # 认证（仅鉴权防滥用；拆分不扣费，扣费在 confirm_split）
+    await _resolve_user_and_review(authorization)
+
     word_splitter = get_word_splitter()
 
     start_time = datetime.now()
@@ -648,6 +738,7 @@ async def confirm_split(
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
     exam_review_channel: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
 ):
     """
     第二阶段：确认拆分结果（人工修正后）并继续分析（v3.0：使用Word媒体数据）
@@ -661,10 +752,14 @@ async def confirm_split(
     Returns:
         完整分析结果（同/api/analyze）
     """
+    # 认证 + 评审旁路（reviewer 跳过扣费，与 analyze_auto 一致）
+    user_id, review_mode = await _resolve_user_and_review(authorization)
+    await _ensure_balance(user_id, review_mode)
+
     competency_analyzer = get_competency_analyzer()
 
     start_time = datetime.now()
-    logger.info(f"[确认拆分] session_id={session_id}, mode={mode}")
+    logger.info(f"[确认拆分] session_id={session_id}, mode={mode}, 用户={user_id}, 评审={review_mode}")
 
     try:
         # 1. 获取session数据
@@ -686,6 +781,24 @@ async def confirm_split(
             if "id" not in q:
                 raise HTTPException(400, f"第{i+1}项缺少 id 字段")
         logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目")
+
+        # 题目校验通过，扣除积分（评审模式跳过；同 session 幂等，防刷新/重试重复扣费 DR-01）
+        if not review_mode:
+            if session_data.get("charged"):
+                logger.info(f"[积分] session {session_id} 已扣费，跳过重复扣费（幂等）")
+            else:
+                try:
+                    await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题确认-{session_id}")
+                    session_data["charged"] = True
+                    save_session(session_id, session_data)
+                    logger.info(f"[积分] 确认拆分已扣费 {credits_service.ANALYSIS_COST} 积分")
+                except credits_service.InsufficientCreditsError as e:
+                    raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+                except Exception as e:
+                    logger.error(f"[积分] 扣费失败: {e}")
+                    raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+        else:
+            logger.info("[评审] 确认拆分跳过扣费")
 
         # 3. 获取原始题目数据（含_media_for_ai）
         original_questions = session_data.get("auto_split_result", {}).get("questions", [])
@@ -815,9 +928,9 @@ async def confirm_split(
                     report_mode, pdf_path, effective_review_channel,
                 )
 
-                report_url = f"/api/reports/{exam_id}.pdf"
+                report_url = f"/api/reports/{exam_id}.pdf?{sign_report_path(f'{exam_id}.pdf')}"
                 if artifacts.get("html_path"):
-                    html_report_url = f"/api/reports/{exam_id}.html"
+                    html_report_url = f"/api/reports/{exam_id}.html?{sign_report_path(f'{exam_id}.html')}"
                 logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
             except Exception as e:
                 logger.error(f"报告生成失败: {str(e)}", exc_info=True)

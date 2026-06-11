@@ -13,6 +13,7 @@ from metadata_contracts import LLMCallRecord
 from vision_context import extract_visual_context
 
 logger = get_logger()
+_split_merge_sem = asyncio.Semaphore(8)  # 全局：限制 split-merge 子问总并发，防网关过载
 
 SCORE_SHARE_NORMALIZATION_MAX_DEVIATION = 0.10
 
@@ -1182,7 +1183,7 @@ class QuestionAnalyzer:
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
-            sub_timeout = max(analysis_timeout, 480.0)
+            sub_timeout = max(analysis_timeout, 240.0)
             for sub_budget in (64000,):
                 _transient_left = 1
                 while True:
@@ -1263,8 +1264,12 @@ class QuestionAnalyzer:
             if len(sub_metas) < 2:
                 return None
             logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分（并行）({initial_reason})")
+            async def _sem_wrapped_sub(_i, _sm):
+                async with _split_merge_sem:
+                    return await _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+
             _sub_tasks = [
-                _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+                _sem_wrapped_sub(_i, _sm)
                 for _i, _sm in enumerate(sub_metas, start=1)
             ]
             _sub_raw = await asyncio.gather(*_sub_tasks, return_exceptions=True)
@@ -1282,9 +1287,11 @@ class QuestionAnalyzer:
                     ok_metas.append(sub_metas[_idx])
                 else:
                     logger.warning(f"[分析] 题目{question_id} 第{_idx+1}问 split 失败")
-            if len(ok_results) < len(sub_metas):
-                logger.warning(f"[分析] 题目{question_id} split-merge 子问不全 ({len(ok_results)}/{len(sub_metas)})，回退阶梯")
+            if len(ok_results) == 0:
+                logger.warning(f"[分析] 题目{question_id} split-merge 零子问成功，回退阶梯")
                 return None
+            if len(ok_results) < len(sub_metas):
+                logger.warning(f"[分析] 题目{question_id} split-merge 部分子问完成 ({len(ok_results)}/{len(sub_metas)})，使用部分结果")
             from fine_grained_merge import merge_subquestion_results
             merged = merge_subquestion_results(ok_results, ok_metas, big_total)
             from llm_schemas import (FineGrainedResult, validate_llm_output,
@@ -1939,6 +1946,19 @@ class QuestionAnalyzer:
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
             )
+
+        # 大题直接 split-merge（跳过 v2 整题分析，省 4-5 分钟）
+        _direct_split_score = _infer_fallback_total_score()
+        if use_v2 and _direct_split_score >= 10:
+            logger.info(f"[分析] 题目{question_id} 大题直接 split-merge（score={_direct_split_score}）")
+            try:
+                _direct_result = await _split_merge_analysis("big_question_direct")
+            except Exception as _dsm_exc:
+                logger.warning(f"[分析] 题目{question_id} 大题直接 split-merge 失败 {_dsm_exc}，回退 v2")
+                _direct_result = None
+            if _direct_result is not None:
+                return _direct_result
+            logger.info(f"[分析] 题目{question_id} split-merge 返回 None，回退 v2 整题分析")
 
         try:
             logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")

@@ -359,6 +359,96 @@ function ResultDisplay({ data }) {
           padding: 'clamp(24px, 4vw, 48px)',
         }}
       >
+        {/* HTML 报告入口 — 顶部醒目横幅 */}
+        {(data.html_report_url || data.report_url) && (
+          <div
+            style={{
+              marginBottom: '36px',
+              padding: '28px 32px',
+              background: 'linear-gradient(135deg, #1a2e1f, #2d5a3d)',
+              borderRadius: '20px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{
+                width: '52px', height: '52px', borderRadius: '14px',
+                background: 'rgba(200, 240, 212, 0.15)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#c8f0d4" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ color: '#fff', fontSize: '1.15rem', fontWeight: 700, marginBottom: '4px' }}>
+                  质量评估报告已生成
+                </h3>
+                <p style={{ color: 'rgba(200, 240, 212, 0.7)', fontSize: '0.85rem', margin: 0 }}>
+                  包含难度曲线、素养分布、命题质量等可视化图表
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              {data.html_report_url && (
+                <a
+                  href={data.html_report_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: '12px 32px', fontSize: '15px', fontWeight: 600,
+                    display: 'inline-flex', alignItems: 'center', gap: '8px',
+                    textDecoration: 'none', borderRadius: '12px',
+                    background: '#c8f0d4', color: '#1a2e1f',
+                    transition: 'transform 0.15s, box-shadow 0.15s',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(0,0,0,0.25)' }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)' }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                    <polyline points="15 3 21 3 21 9"/>
+                    <line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                  查看在线报告
+                </a>
+              )}
+              {data.report_url && (
+                <a
+                  href={data.report_url}
+                  download="试卷质量评估报告.pdf"
+                  style={{
+                    padding: '12px 24px', fontSize: '14px', fontWeight: 500,
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    textDecoration: 'none', borderRadius: '12px',
+                    background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.85)',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.18)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  PDF
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 整卷分析 */}
         {data.exam_statistics && (
           <ExamStatisticsEnhanced
@@ -396,34 +486,7 @@ function ResultDisplay({ data }) {
           </div>
         </div>
 
-        {/* 报告下载 — 突出 CTA */}
-        {data.report_url && (
-          <div
-            style={{
-              marginBottom: '48px',
-              padding: '32px 36px',
-              background: 'linear-gradient(135deg, var(--macaron-mint-light), var(--macaron-mint))',
-              border: '1px solid #b8d1bf',
-              borderRadius: '20px',
-              textAlign: 'center',
-            }}
-          >
-            <h3 className="font-bold" style={{ color: 'var(--color-primary)', fontSize: '1.25rem', marginBottom: '8px' }}>
-              质量评估报告已生成
-            </h3>
-            <p className="text-sm" style={{ color: 'var(--color-secondary)', marginBottom: '24px' }}>
-              包含难度曲线、素养分布等可视化图表
-            </p>
-            <a
-              href={data.report_url}
-              download="试卷质量评估报告.pdf"
-              className="btn-primary"
-              style={{ padding: '14px 48px', fontSize: '16px', display: 'inline-block', textDecoration: 'none' }}
-            >
-              下载PDF报告
-            </a>
-          </div>
-        )}
+
 
         {/* 题目列表 */}
         <div>

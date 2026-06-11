@@ -19,6 +19,13 @@ TEXT_REVIEW_PURPOSES = {
     "report_insights",
     "report_teaching_suggestions",
 }
+LIGHTWEIGHT_PURPOSES = {
+    "feature_extraction",
+    "big_question_feature_extraction",
+    "competency_analysis",
+    "report_insights",
+    "report_teaching_suggestions",
+}
 
 PROVIDERS = [
     {
@@ -36,7 +43,7 @@ PROVIDERS = [
         "model_role": "vision",
         "model_policy": "exam-review-qwen-vision",
         "max_tokens": 8192,
-        "semaphore_limit": 6,
+        "semaphore_limit": 15,
         "retry_count": 1,
         "no_proxy": True,
     },
@@ -70,7 +77,7 @@ PROVIDERS = [
         "model_role": "analysis_text",
         "model_policy": "exam-review-qwen-text",
         "max_tokens": 8192,
-        "semaphore_limit": 6,
+        "semaphore_limit": 15,
         "retry_count": 1,
         "no_proxy": True,
     },
@@ -159,6 +166,12 @@ def _apply_purpose_preference(
             provider for provider in providers
             if provider.get("name") != "qwen_text"
         ]
+    if normalized in LIGHTWEIGHT_PURPOSES:
+        priority = {"qwen_text": 0, "deepseek": 1}
+        return sorted(
+            providers,
+            key=lambda provider: priority.get(provider.get("name"), 50),
+        )
     if normalized in TEXT_REVIEW_PURPOSES:
         priority = {"deepseek": 0, "qwen_text": 1}
         return sorted(

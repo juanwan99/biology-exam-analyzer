@@ -1,5 +1,6 @@
 import io
 import json
+from datetime import datetime
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -68,84 +69,67 @@ class FakeCompetencyAnalyzer:
         return {}
 
 
+def _skip_score_prediction(monkeypatch):
+    """拦截后台管线的 score_prediction 段，防止测试真连 DB 写 ScorePrediction 表。
+    _run_analysis_pipeline 内 `from database import get_db_session` 在函数执行时取
+    database 模块属性 → monkeypatch database.get_db_session 即可让其抛错走 except 分支。"""
+    import database
+
+    async def _raise():
+        raise RuntimeError("score_prediction skipped in test")
+
+    monkeypatch.setattr(database, "get_db_session", _raise)
+
+
 @pytest.mark.asyncio
-async def test_analyze_document_route_preserves_service_metadata_quality(monkeypatch, tmp_path):
-    captured = {}
-
-    class FakeService:
-        async def run_full_analysis(self, **kwargs):
-            captured.update(kwargs)
-            return {
-                "questions": [_question(1, overall=0.55)],
-                "competency_summary": {},
-                "exam_statistics": {},
-                "metadata_quality": {
-                    "low_confidence_questions": [1],
-                    "warning_questions": [{"id": 1, "warnings": ["feature_status:partial"]}],
-                },
-                "report_url": None,
-                "report_error": None,
-            }
-
+async def test_analyze_document_route_is_offline_410(monkeypatch, tmp_path):
+    """analyze_document 已下线（410），杜绝绕过付费墙的免费分析。"""
     monkeypatch.setattr(analysis_router, "UPLOAD_DIR", tmp_path)
-    monkeypatch.setattr(analysis_router, "get_analysis_service", lambda: FakeService())
 
     upload = UploadFile(filename="exam.docx", file=io.BytesIO(b"docx"))
 
-    result = await analysis_router.analyze_document(
-        file=upload,
-        mode=analysis_router.AnalysisMode.DEEP,
-        generate_report=False,
-        exam_review_channel="model",
-    )
+    with pytest.raises(HTTPException) as exc:
+        await analysis_router.analyze_document(
+            file=upload,
+            mode=analysis_router.AnalysisMode.DEEP,
+            generate_report=False,
+            exam_review_channel="model",
+        )
 
-    assert result["metadata_quality"]["low_confidence_questions"] == [1]
-    assert captured["exam_review_channel"] == "model"
-    assert result["exam_review_channel"] == "model"
+    assert exc.value.status_code == 410
 
 
 @pytest.mark.asyncio
-async def test_analyze_auto_route_returns_metadata_quality(monkeypatch, tmp_path):
+async def test_analysis_pipeline_produces_metadata_quality(monkeypatch):
+    """analyze_auto 异步化后，metadata_quality 由后台管线 _run_analysis_pipeline 产出，
+    经 task_manager.complete 存入 task result（前端轮询 status 取回）。"""
     captured = {}
-
-    async def fake_verify_token(token):
-        return {"id": 1, "email": "teacher@example.com"}
-
-    async def fake_get_balance(user_id):
-        return 1000
-
-    async def fake_consume(user_id, cost, reason):
-        return None
 
     async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
         captured["exam_review_channel"] = exam_review_channel
         return _question(1, overall=0.55)
 
-    monkeypatch.setattr(analysis_router.credits_service, "verify_token", fake_verify_token)
-    monkeypatch.setattr(analysis_router.credits_service, "get_balance", fake_get_balance)
-    monkeypatch.setattr(analysis_router.credits_service, "consume", fake_consume)
-    monkeypatch.setattr(analysis_router, "UPLOAD_DIR", tmp_path)
-    monkeypatch.setattr(analysis_router, "get_word_splitter", lambda: FakeWordSplitter())
-    monkeypatch.setattr(analysis_router, "get_doc_processor", lambda: FakeDocProcessor())
-    monkeypatch.setattr(analysis_router, "get_competency_analyzer", lambda: FakeCompetencyAnalyzer())
+    _skip_score_prediction(monkeypatch)
+    monkeypatch.setattr(analysis_router.task_manager, "complete", lambda tid, result: captured.update(result))
     monkeypatch.setattr(analysis_router, "generate_exam_statistics", lambda questions, summary: {})
     monkeypatch.setattr(analysis_router, "analyze_question_full", fake_analyze_question_full)
-    monkeypatch.setattr(analysis_router, "_ensure_review_channel_ready", lambda channel: channel)
 
-    upload = UploadFile(filename="exam.docx", file=io.BytesIO(b"docx"))
-
-    result = await analysis_router.analyze_auto(
-        file=upload,
+    await analysis_router._run_analysis_pipeline(
+        task_id="t1",
+        questions=[{"id": 1, "content": "题干", "_media_for_ai": []}],
+        image_bytes=[],
         mode=analysis_router.AnalysisMode.DEEP,
+        effective_review_channel="app_builder",
+        competency_analyzer=FakeCompetencyAnalyzer(),
         generate_report=False,
-        exam_review_channel="app_builder",
-        authorization="Bearer token",
+        report_mode="full",
+        filename="exam.docx",
+        start_time=datetime.now(),
     )
 
     assert captured["exam_review_channel"] == "app_builder"
-    assert result["exam_review_channel"] == "app_builder"
-    assert result["metadata_quality"]["low_confidence_questions"] == [1]
-    assert result["metadata_quality"]["warning_questions"] == [
+    assert captured["metadata_quality"]["low_confidence_questions"] == [1]
+    assert captured["metadata_quality"]["warning_questions"] == [
         {"id": 1, "warnings": ["feature_status:partial"]}
     ]
 
@@ -189,15 +173,9 @@ async def test_analyze_auto_preflights_app_builder_before_consuming_credits(monk
 
 
 @pytest.mark.asyncio
-async def test_analyze_auto_route_returns_html_report_url(monkeypatch, tmp_path):
-    async def fake_verify_token(token):
-        return {"id": 1, "email": "teacher@example.com"}
-
-    async def fake_get_balance(user_id):
-        return 1000
-
-    async def fake_consume(user_id, cost, reason):
-        return None
+async def test_analysis_pipeline_signs_report_url(monkeypatch):
+    """后台管线生成的报告 URL 必须带 HMAC 签名（Phase 2.5 防报告 PII 匿名遍历）。"""
+    captured = {}
 
     async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
         return _question(1, overall=0.9)
@@ -208,35 +186,44 @@ async def test_analyze_auto_route_returns_html_report_url(monkeypatch, tmp_path)
     ):
         return {"pdf_path": str(pdf_path), "html_path": str(pdf_path.with_suffix(".html"))}
 
-    monkeypatch.setattr(analysis_router.credits_service, "verify_token", fake_verify_token)
-    monkeypatch.setattr(analysis_router.credits_service, "get_balance", fake_get_balance)
-    monkeypatch.setattr(analysis_router.credits_service, "consume", fake_consume)
-    monkeypatch.setattr(analysis_router, "UPLOAD_DIR", tmp_path)
-    monkeypatch.setattr(analysis_router, "get_word_splitter", lambda: FakeWordSplitter())
-    monkeypatch.setattr(analysis_router, "get_doc_processor", lambda: FakeDocProcessor())
-    monkeypatch.setattr(analysis_router, "get_competency_analyzer", lambda: FakeCompetencyAnalyzer())
+    _skip_score_prediction(monkeypatch)
+    monkeypatch.setattr(analysis_router.task_manager, "complete", lambda tid, result: captured.update(result))
     monkeypatch.setattr(analysis_router, "generate_exam_statistics", lambda questions, summary: {})
     monkeypatch.setattr(analysis_router, "analyze_question_full", fake_analyze_question_full)
     monkeypatch.setattr(analysis_router, "_validate_report_metadata_for_route", lambda questions: None)
     monkeypatch.setattr(analysis_router, "_generate_route_report_artifacts", fake_generate_report_artifacts)
-    monkeypatch.setattr(analysis_router, "_ensure_review_channel_ready", lambda channel: channel)
 
-    upload = UploadFile(filename="exam.docx", file=io.BytesIO(b"docx"))
-
-    result = await analysis_router.analyze_auto(
-        file=upload,
+    await analysis_router._run_analysis_pipeline(
+        task_id="t1",
+        questions=[{"id": 1, "content": "题干", "_media_for_ai": []}],
+        image_bytes=[],
         mode=analysis_router.AnalysisMode.DEEP,
+        effective_review_channel="model",
+        competency_analyzer=FakeCompetencyAnalyzer(),
         generate_report=True,
-        authorization="Bearer token",
+        report_mode="full",
+        filename="exam.docx",
+        start_time=datetime.now(),
     )
 
-    assert result["report_url"].endswith(".pdf")
-    assert result["html_report_url"].endswith(".html")
+    assert captured["report_url"].split("?")[0].endswith(".pdf")
+    assert "sig=" in captured["report_url"] and "exp=" in captured["report_url"]
+    assert captured["html_report_url"].split("?")[0].endswith(".html")
+    assert "sig=" in captured["html_report_url"] and "exp=" in captured["html_report_url"]
 
 
 @pytest.mark.asyncio
 async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_path):
     captured = {}
+
+    async def fake_verify_token(token):
+        return {"id": 1, "email": "teacher@example.com"}
+
+    async def fake_get_balance(user_id):
+        return 1000
+
+    async def fake_consume(user_id, cost, reason):
+        return None
 
     async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
         captured["exam_review_channel"] = exam_review_channel
@@ -245,6 +232,9 @@ async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_pat
     session_file = tmp_path / "session.docx"
     session_file.write_bytes(b"docx")
 
+    monkeypatch.setattr(analysis_router.credits_service, "verify_token", fake_verify_token)
+    monkeypatch.setattr(analysis_router.credits_service, "get_balance", fake_get_balance)
+    monkeypatch.setattr(analysis_router.credits_service, "consume", fake_consume)
     monkeypatch.setattr(
         analysis_router,
         "get_session",
@@ -265,6 +255,7 @@ async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_pat
         mode=analysis_router.AnalysisMode.DEEP,
         generate_report=False,
         exam_review_channel="model",
+        authorization="Bearer token",
     )
 
     assert captured["exam_review_channel"] == "model"
@@ -277,6 +268,15 @@ async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path):
+    async def fake_verify_token(token):
+        return {"id": 1, "email": "teacher@example.com"}
+
+    async def fake_get_balance(user_id):
+        return 1000
+
+    async def fake_consume(user_id, cost, reason):
+        return None
+
     async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
         return _question(1, overall=0.9)
 
@@ -289,6 +289,9 @@ async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path
     session_file = tmp_path / "session.docx"
     session_file.write_bytes(b"docx")
 
+    monkeypatch.setattr(analysis_router.credits_service, "verify_token", fake_verify_token)
+    monkeypatch.setattr(analysis_router.credits_service, "get_balance", fake_get_balance)
+    monkeypatch.setattr(analysis_router.credits_service, "consume", fake_consume)
     monkeypatch.setattr(
         analysis_router,
         "get_session",
@@ -310,7 +313,10 @@ async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path
         corrected_questions=json.dumps([{"id": 1, "content": "题干"}]),
         mode=analysis_router.AnalysisMode.DEEP,
         generate_report=True,
+        authorization="Bearer token",
     )
 
-    assert result["report_url"] == "/api/reports/session-1.pdf"
-    assert result["html_report_url"] == "/api/reports/session-1.html"
+    assert result["report_url"].split("?")[0] == "/api/reports/session-1.pdf"
+    assert "sig=" in result["report_url"] and "exp=" in result["report_url"]
+    assert result["html_report_url"].split("?")[0] == "/api/reports/session-1.html"
+    assert "sig=" in result["html_report_url"] and "exp=" in result["html_report_url"]

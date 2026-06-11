@@ -67,13 +67,15 @@ def _icon(name: str) -> str:
     return f'<span class="report-icon icon-{_e(_slug(name))}" aria-hidden="true"></span>'
 
 
-def _section_heading(number: str, title: str, icon_name: str) -> str:
+def _section_heading(number: str, title: str, icon_name: str, description: str = "") -> str:
+    desc_html = f'<p class="section-desc">{_e(description)}</p>' if description else ""
     return (
         '<div class="section-heading">'
         f'{_icon(icon_name)}'
         '<div>'
         f'<div class="section-label">{_e(number)}</div>'
         f'<h2>{_e(title)}</h2>'
+        f'{desc_html}'
         '</div></div>'
     )
 
@@ -909,7 +911,7 @@ def _render_summary(model: Dict[str, Any]) -> str:
         cards.append('<p class="muted">暂无执行摘要结论</p>')
     return (
         '<section class="report-section" id="summary">'
-        f'{_section_heading("01", "执行摘要", "executive")}'
+        f'{_section_heading("01", "执行摘要", "executive", "全卷的“体检报告单”。系统逐题分析后，从难度是否合理、素养是否覆盖全、命题是否规范三个角度，给出总体判断和需要优先处理的问题清单。")}'
         f'<p class="lead-judgment">{_txt(summary.get("lead_judgment", ""))}</p>'
         f'<div class="big-call-grid summary-card-grid">{"".join(cards)}</div>'
         f'{_render_evidence_integrity(model)}'
@@ -933,11 +935,24 @@ def _render_glance(model: Dict[str, Any]) -> str:
         cards.append('<p class="muted">暂无关键指标</p>')
     return (
         '<section class="report-section compact" id="glance">'
-        f'{_section_heading("02", "一页速览", "glance")}'
+        f'{_section_heading("02", "一页速览", "glance", "用 4 个核心数字概括全卷：题目总数、平均难度（0–10，越高越难）、采分点与误区点数量、AI 调用次数。每个数字旁边有一句话解读，30 秒看完全卷概况。")}'
         f'<div class="glance-grid">{"".join(cards)}</div>'
         "</section>"
     )
 
+
+
+_FIGURE_DESCRIPTIONS = {
+    "difficulty_gradient": "横轴题号，纵轴难度值 0-10。难度怎么算：每道题从知识复杂度、认知层级（布鲁姆）、信息提取难度、推理步骤四方面打分后加权平均。怎么看：曲线整体偏高（均值 > 7）说明全卷偏难；红色标记的是高压题（>= 7 分），最容易拉开区分度。前、中、后三段均值帮你判断试卷是前松后紧还是全程高压。",
+    "bloom_distribution": "按布鲁姆六级认知层级统计题数：识记（记住事实）、理解（解释概念）、应用（解决新情境）、分析（拆解关系）、评价（做出判断）、创造（设计方案）。高考卷通常应用+分析占主体；识记占比过高说明偏简单，评价+创造过多则可能超纲。",
+    "knowledge_top_points": "按分值权重从高到低排列知识点。权重怎么算：统计该知识点关联的所有采分点分值总和。例如基因表达涉及 3 道题共 5 个采分点合计 18 分，权重就是 18。排名前 3 的知识点就是复习重点；如果某个高权重知识点同时标了高风险，说明题目有质量问题，需优先修改。",
+    "competency_distribution": "统计全卷对四大核心素养的考查比例：生命观念、科学思维、科学探究、社会责任。每道题标注了考查哪些素养及权重，汇总后得到全卷占比。课标要求四项均有覆盖，如果某项为 0% 或极低说明有缺口。一级素养做总览，章节分析里可看二级素养细分。",
+    "question_risk_distribution": "把全部题目按质量风险分三档：高风险（红）、中风险（黄）、低风险（绿）。风险怎么判：检查每道题是否有科学性错误、表述歧义、答案争议、情境失真、评分标准模糊等问题，命中越多风险越高。建议顺序：先改高风险（可能有硬伤），再看中风险，低风险基本合格。",
+    "metadata_quality": "评估 AI 对每道题看得准不准：题号是否识别正确、分值是否提取到、题型判断是否准确。分三档：高可信（绿，可直接采信）、中可信（黄，建议人工抽查）、低可信（红，分析结论需人工确认）。常见低可信原因：试卷没标分值、题目跨页切割、选项格式不规范。",
+    "fine_grained_heatmap": "每行一道题，每列一个分析维度（难度、质量评分、数据置信度、采分点数量、陷阱强度）。颜色越深数值越高。横向看：一整行都深色说明这道题全方位都重；纵向看：如果陷阱强度列整体偏深，说明全卷学生易错点多、讲评压力大。这张图帮你找出被平均值掩盖的异常题。",
+    "seu_competency_matrix": "本报告最细的分析粒度。把每道题拆成若干采分点（SEU），逐个标注知识点、核心素养、认知层级和分值。举例：某题拆出 3 个采分点：减数分裂过程（生命观念，识记，2 分）、染色体变异判断（科学思维，分析，3 分）、实验设计思路（科学探究，应用，3 分）。可据此检查评分标准是否可操作。",
+    "du_trap_map": "统计每道题里可能导致学生犯错的陷阱点。每个陷阱标注了：误区类型（易混概念/隐含条件/干扰选项等）、严重程度（强度 1-5，越高越容易踩坑）、涉及的知识边界。强度 >= 4 的陷阱是讲评重点；如果一道题陷阱数 >= 3 个，可能是题目本身设计过于复杂，建议简化。",
+}
 
 def _render_figure(figure: Dict[str, Any]) -> str:
     figure_id = str(figure.get("id") or "")
@@ -960,6 +975,7 @@ def _render_figure(figure: Dict[str, Any]) -> str:
         f'<div class="exhibit-label">{_e(_ref_label(figure.get("source")))}</div>'
         f'{_icon(_figure_icon(figure.get("id")))}'
         f'<figcaption>{_txt(figure.get("title"))}</figcaption>'
+        f'<p class="figure-desc">{_e(_FIGURE_DESCRIPTIONS.get(figure_id, ""))}</p>'
         f'<p class="takeaway">{_txt(figure.get("takeaway"))}</p>'
         f'{chart_html}'
         f'{details_html}'
@@ -988,7 +1004,7 @@ def _render_chapters(model: Dict[str, Any]) -> str:
         chapters.append('<p class="muted">暂无章节分析</p>')
     return (
         '<section class="report-section" id="chapters">'
-        f'{_section_heading("03", "章节分析", "figure")}'
+        f'{_section_heading("03", "章节分析", "figure", "把试卷按教材章节拆开看：每章考了几题、难度偏高还是偏低、侧重哪种素养。如果某章零覆盖或全是简单题，说明命题存在盲区，可以针对性补充。")}'
         f'{"".join(chapters)}'
         "</section>"
     )
@@ -1017,7 +1033,7 @@ def _render_portfolio(model: Dict[str, Any]) -> str:
     portfolio_chart = render_portfolio_bubble(_items(portfolio.get("rows")))
     return (
         '<section class="report-section" id="portfolio">'
-        f'{_section_heading("04", "题目组合诊断", "portfolio")}'
+        f'{_section_heading("04", "题目组合诊断", "portfolio", "一张表看全部题目的“健康状态”：每题标注了难度值、分值、质量风险（高/中/低）和核心问题。高风险题可能有科学性错误或表述歧义，建议优先复核。")}'
         f'<p class="section-thesis">{_txt(portfolio.get("thesis"))}</p>'
         f'<div class="wide-chart-frame"><div class="chart-kicker">组合图表</div>{portfolio_chart}</div>'
         '<div class="table-wrap"><table class="portfolio-table">'
@@ -1172,7 +1188,7 @@ def _render_deep_dives(model: Dict[str, Any]) -> str:
         panels.append('<p class="muted">暂无单题审查明细</p>')
     return (
         '<section class="report-section" id="deep-dives">'
-        f'{_section_heading("05", "单题审查明细", "deep-dive")}'
+        f'{_section_heading("05", "单题审查明细", "deep-dive", "点开任意一道题查看完整审查：题目原文、涉及哪些知识点、难度从哪来（知识复杂度/认知层级/推理步骤各占多少）、考查什么素养、参考答案、以及命题质量评分（1–5 分）。")}'
         f'{"".join(panels)}'
         "</section>"
     )
@@ -1204,7 +1220,7 @@ def _render_methodology(model: Dict[str, Any]) -> str:
         prompt_rows.append('<tr><td colspan="4" class="muted" data-label="状态">暂无提示词清单</td></tr>')
     return (
         '<section class="report-section methodology" id="methodology">'
-        f'{_section_heading("06", "AI 调用与方法论", "methodology")}'
+        f'{_section_heading("06", "AI 调用与方法论", "methodology", "说明这份报告怎么生成的：AI 对每道题调用了几次、提取了哪些字段、设了哪些质量检查规则，同时列出已知局限，帮你判断哪些结论可以直接采信、哪些需要人工复核。")}'
         f'{summary_cards}'
         f'<div class="wide-chart-frame"><div class="chart-kicker">方法论图表</div>{render_methodology_chart(methodology)}</div>'
         '<div class="method-grid">'
@@ -1604,6 +1620,9 @@ h1 {
   margin-bottom: 24px;
 }
 .section-heading h2 { margin-bottom: 0; }
+.figure-desc { margin: 4px 0 12px; font-size: .85rem; color: #9ca3af; line-height: 1.55; font-style: normal; }
+.figure-desc:empty { display: none; }
+.section-desc { margin: 6px 0 0; font-size: .92rem; color: #6b7280; font-weight: 400; line-height: 1.6; max-width: 640px; }
 .section-label {
   color: var(--accent);
   font-size: 13px;

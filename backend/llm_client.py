@@ -90,7 +90,7 @@ async def _get_client(proxy: str = None, trust_env: bool = True) -> httpx.AsyncC
     if client is None or client.is_closed:
         kwargs = dict(
             timeout=120.0,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
             trust_env=trust_env,
         )
         if proxy:

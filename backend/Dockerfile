@@ -38,5 +38,10 @@ RUN mkdir -p /app/logs /app/uploads /app/prompts
 # 暴露端口
 EXPOSE 8000
 
+# 入口脚本：自动检测 requirements.txt 变化并安装新依赖
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
 # 启动命令（单worker模式，适配1核2G）
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

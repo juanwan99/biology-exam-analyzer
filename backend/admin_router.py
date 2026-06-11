@@ -19,7 +19,7 @@ from typing import Optional
 from enum import Enum
 
 import aiofiles
-from fastapi import APIRouter, HTTPException, Header, Depends, Request
+from fastapi import APIRouter, HTTPException, Header, Depends, Request, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -187,22 +187,33 @@ async def run_calibration_api(admin_ok=Depends(verify_admin)):
 # ============ 报告下载 API ============
 
 @router.get("/api/reports/{filename}")
-async def download_report(filename: str):
+async def download_report(
+    filename: str,
+    sig: Optional[str] = Query(None),
+    exp: Optional[str] = Query(None),
+):
     """
     下载生成的 PDF 报告或查看 HTML 报告
 
     Args:
         filename: 报告文件名（如: 20251019_143022.pdf / .html）
+        sig/exp: 服务端签发的 HMAC 签名 + 过期戳（防学生报告 PII 被匿名遍历，Phase 2.5）
 
     Returns:
         报告文件响应
     """
+    # 签名校验：报告 URL 由服务端签发，无效/过期/缺失签名 → 401（reviewer 与正常用户同路径签发，旁路不受影响）
+    from report_signing import verify_report_sig
+    if not verify_report_sig(filename, sig, exp):
+        logger.warning(f"报告访问签名无效或已过期: {filename}")
+        raise HTTPException(401, "报告链接无效或已过期")
+
     logger.info(f"请求下载报告: {filename}")
 
     # 安全检查：Path.resolve() + 基目录校验
     report_base = REPORTS_DIR.resolve()
     report_path = (report_base / filename).resolve()
-    if not str(report_path).startswith(str(report_base)):
+    if not report_path.is_relative_to(report_base):
         logger.warning(f"路径穿越尝试: {filename} -> {report_path}")
         raise HTTPException(400, "非法文件名")
 
@@ -221,7 +232,7 @@ async def download_report(filename: str):
             media_type='text/html; charset=utf-8',
             filename=filename,
             headers={
-                "Content-Disposition": f'inline; filename="{filename}"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
                 "X-Content-Type-Options": "nosniff",
             }
         )
@@ -249,8 +260,8 @@ async def serve_uploads(path: str):
     UPLOADS_BASE = UPLOAD_DIR.resolve()
     file_path = (UPLOADS_BASE / path).resolve()
 
-    # 安全检查：resolve 后必须仍在基目录下（防 URL 编码绕过）
-    if not str(file_path).startswith(str(UPLOADS_BASE)):
+    # 安全检查：resolve 后必须仍在基目录下（is_relative_to 修复 startswith 的兄弟目录绕过）
+    if not file_path.is_relative_to(UPLOADS_BASE):
         logger.warning(f"路径穿越尝试: {path} -> {file_path}")
         raise HTTPException(400, "非法路径")
 

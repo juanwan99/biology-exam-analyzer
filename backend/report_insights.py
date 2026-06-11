@@ -1,3 +1,4 @@
+import asyncio
 """PDF 报告 LLM 分析层 — GPT 5.4 生成综合分析文本。
 
 调用 1: 整卷综合分析（brief+full 共用）
@@ -1289,14 +1290,46 @@ async def generate_insights(
             "total_score": data.get("exam_info", {}).get("total_score"),
         }
 
-        # 调用 1: 整卷综合分析
+        # 调用 1+2: 整卷综合分析 & 教学建议 并行
         overall_prompt = _build_overall_prompt(data)
-        overall_text = await send_message_gpt(
-            prompt=overall_prompt,
-            max_tokens=64000,
-            temperature=0.0,
-            purpose="report_insights",
-        )
+        teaching_prompt = _build_teaching_prompt(data)
+
+        async def _run_overall():
+            return await send_message_gpt(
+                prompt=overall_prompt,
+                max_tokens=64000,
+                temperature=0.0,
+                purpose="report_insights",
+            )
+
+        async def _run_teaching():
+            try:
+                return await send_message_gpt(
+                    prompt=teaching_prompt,
+                    max_tokens=64000,
+                    temperature=0.0,
+                    purpose="report_teaching_suggestions",
+                ), teaching_prompt, 0, "none"
+            except Exception as first_error:
+                logger.warning(f"[LLM分析] 教学建议生成失败，触发短格式重试: {first_error}")
+                for retry_label, retry_prompt, retry_max_tokens in (
+                    ("compact", _build_teaching_prompt(data, compact=True), 64000),
+                    ("ultra_compact", _build_teaching_prompt(data, ultra_compact=True), 64000),
+                ):
+                    try:
+                        text = await send_message_gpt(
+                            prompt=retry_prompt,
+                            max_tokens=retry_max_tokens,
+                            temperature=0.0,
+                            purpose="report_teaching_suggestions",
+                        )
+                        return text, retry_prompt, 1, retry_label
+                    except Exception as retry_error:
+                        logger.warning(f"[LLM分析] 教学建议短格式重试失败 ({retry_label}): {retry_error}")
+                raise RuntimeError("教学建议生成失败（report_teaching_suggestions）") from first_error
+
+        overall_text, teaching_result = await asyncio.gather(_run_overall(), _run_teaching())
+        teaching_text, teaching_prompt_used, teaching_retry_count, teaching_retry_strategy = teaching_result
         result = _parse_json_response(overall_text)
         from llm_schemas import validate_llm_output, InsightsResult
         result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
@@ -1361,63 +1394,8 @@ async def generate_insights(
                 logger.info(f"[LLM分析] 逐题点评从特征提取复用，{len(question_comments)} 题")
 
 
-        # 教学建议（错因归类 + 讲评提纲 + 补救练习）
-        teaching_prompt = _build_teaching_prompt(data)
-        teaching_prompt_used = teaching_prompt
-        teaching_retry_count = 0
-        teaching_retry_strategy = "none"
-        try:
-            teaching_text = await send_message_gpt(
-                prompt=teaching_prompt,
-                # RC6: deepseek-v4-pro 是推理模型，reasoning token 先吃预算；4096 易在
-                # reasoning 阶段就 finish_reason=length（分析阶段用 12000~16000 才稳）。
-                max_tokens=64000,
-                temperature=0.0,
-                purpose="report_teaching_suggestions",
-            )
-            teaching = _parse_json_response(teaching_text)
-        except Exception as first_error:
-            logger.warning(
-                f"[LLM分析] 教学建议生成失败，触发短格式重试: {first_error}"
-            )
-            retry_errors = [("initial", first_error)]
-            # RC6: 失败主因是预算不足触发 finish_reason=length（给推理模型缩预算=必崩）。
-            # 重试改为"升预算"而非原来的"缩预算"阶梯（1536/768 对推理模型必然 length）。
-            # prompt 仍渐次精简以压缩输出量，但预算单调升到 provider 上限 16384。
-            for retry_label, retry_prompt, retry_max_tokens in (
-                ("compact", _build_teaching_prompt(data, compact=True), 64000),
-                (
-                    "ultra_compact",
-                    _build_teaching_prompt(data, ultra_compact=True),
-                    64000,
-                ),
-            ):
-                teaching_retry_count += 1
-                teaching_retry_strategy = retry_label
-                teaching_prompt_used = retry_prompt
-                try:
-                    teaching_text = await send_message_gpt(
-                        prompt=teaching_prompt_used,
-                        max_tokens=retry_max_tokens,
-                        temperature=0.0,
-                        purpose="report_teaching_suggestions",
-                    )
-                    teaching = _parse_json_response(teaching_text)
-                    break
-                except Exception as retry_error:
-                    retry_errors.append((retry_label, retry_error))
-                    logger.warning(
-                        "[LLM分析] 教学建议短格式重试失败 "
-                        f"({retry_label}): {retry_error}"
-                    )
-            else:
-                error_summary = "; ".join(
-                    f"{label}={error}" for label, error in retry_errors
-                )
-                raise RuntimeError(
-                    "教学建议生成失败（report_teaching_suggestions）: "
-                    f"{error_summary}"
-                ) from retry_errors[-1][1]
+        # 教学建议已在上方并行获取，这里只解析结果
+        teaching = _parse_json_response(teaching_text)
         llm_calls.append(_call_record(
             call_id="report-teaching-suggestions",
             purpose="report_teaching_suggestions",

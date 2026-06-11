@@ -20,6 +20,29 @@ from metadata_contracts import LLMCallRecord
 
 VISUAL_CONTEXT_PROMPT_ID = "biology.image_inputs.visual_context"
 VISUAL_CONTEXT_VERSION = "qwen-vision-preprocess-v1"
+# content_hash -> (prompt_context, call_dump)
+# 键为 题干+题型+章节头+图片内容(base64) 的 sha256：跨试卷即便题号相同，
+# 只要题干或图片不同即不会命中，杜绝同题号跨卷串卷污染。
+_visual_context_cache = {}
+_VISUAL_CONTEXT_CACHE_MAX = 256
+
+
+def _visual_context_cache_key(
+    question_text: str,
+    question_type: str,
+    section_header: str,
+    normalized: list[dict[str, str]],
+) -> str:
+    h = sha256()
+    h.update((question_text or "").encode("utf-8"))
+    h.update(b"\x00")
+    h.update((question_type or "").encode("utf-8"))
+    h.update(b"\x00")
+    h.update((section_header or "").encode("utf-8"))
+    for item in normalized:
+        h.update(b"\x00")
+        h.update((item.get("base64") or "").encode("utf-8"))
+    return h.hexdigest()
 
 
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
@@ -133,6 +156,13 @@ async def extract_visual_context(
     if not normalized:
         return "", None
 
+    # 缓存键改为内容哈希后不再依赖 question_id（None 时仍按内容缓存，命中更安全） #semantic-ok
+    cache_key = _visual_context_cache_key(question_text, question_type, section_header, normalized)
+    if cache_key in _visual_context_cache:
+        from logger import get_logger
+        get_logger().info(f"[视觉] 题目{question_id} visual_context 命中内容缓存，跳过 qwen_vision API")
+        return _visual_context_cache[cache_key]
+
     prompt = build_visual_context_prompt(
         question_text=question_text,
         question_id=question_id,
@@ -200,4 +230,7 @@ async def extract_visual_context(
         "Visual context extracted by Qwen Vision for DeepSeek review only:\n"
         f"{context_text}"
     )
+    if len(_visual_context_cache) >= _VISUAL_CONTEXT_CACHE_MAX:
+        _visual_context_cache.pop(next(iter(_visual_context_cache)))
+    _visual_context_cache[cache_key] = (prompt_context, call.model_dump())
     return prompt_context, call.model_dump()

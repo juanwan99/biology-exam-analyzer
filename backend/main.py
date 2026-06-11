@@ -195,6 +195,10 @@ async def start_cleanup_task():
                 from session_manager import clean_expired_sessions
                 clean_expired_sessions()
 
+                # 清理过期分析任务（防完成任务 result 永驻内存）
+                import task_manager
+                task_manager.cleanup()
+
                 if expired or stale:
                     logger.debug(f"[定期清理] tokens={len(expired)} attempts={len(stale)}")
             except Exception as e:
