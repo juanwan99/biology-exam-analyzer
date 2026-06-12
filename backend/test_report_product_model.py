@@ -33,32 +33,6 @@ def test_product_model_uses_single_commercial_report_contract():
     assert model["question_portfolio"]["rows"][0]["metadata_confidence"] is not None
 
 
-def test_product_model_exposes_report_grounding_status_in_evidence_integrity():
-    insights = {
-        "_grounding_status": "needs_review",
-        "_grounding_checks": [
-            {
-                "status": "needs_review",
-                "support_score": 0.42,
-                "threshold": 0.6,
-                "claim_count": 2,
-                "cited_chunk_count": 0,
-            }
-        ],
-    }
-
-    model = build_report_product_model(sample_report_data(), insights)
-
-    item_by_id = {
-        item.get("id"): item
-        for item in model["evidence_integrity"]["items"]
-        if isinstance(item, dict)
-    }
-    assert item_by_id["report_grounding"]["severity"] == "warning"
-    assert item_by_id["report_grounding"]["value"] == "0.42"
-    assert "needs_review" in model["evidence_integrity"]["grounding_status"]
-
-
 def test_metadata_status_fails_closed_for_quality_gate_gaps():
     assert metadata_status({
         "blocked_questions": [{"id": 21, "reason": "big_question_structure_failed"}],

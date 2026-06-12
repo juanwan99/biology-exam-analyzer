@@ -1,9 +1,7 @@
 """Calibration helpers for model-produced exam analysis structures.
 
-The functions here are deliberately deterministic. An evidence service supplies
-the textbook/rubric anchors in the prompt and metadata; this module then keeps
-the downstream score math stable by normalizing noisy model labels before they
-are aggregated.
+The functions here are deliberately deterministic. This module normalizes noisy
+model output labels so that the downstream score aggregation stays stable.
 """
 from __future__ import annotations
 

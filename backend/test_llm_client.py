@@ -57,26 +57,14 @@ def _error(status):
 
 class TestLlmConfig:
     def test_get_providers_filters_missing_keys(self):
-        import os, tempfile
+        import os
         from llm_config import get_providers, PROVIDERS
         # Find a key_env provider
         key_providers = [p for p in PROVIDERS if p.get("key_env")]
-        if key_providers:
-            env = {key_providers[0]["key_env"]: "test-key"}
-            with patch.dict(os.environ, env, clear=False):
-                result = get_providers()
-                assert len(result) >= 1
-        else:
-            # All providers use sa_file_env; test with temp SA file
-            sa_provider = [p for p in PROVIDERS if p.get("sa_file_env")][0]
-            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-                f.write(b"{}")
-                sa_path = f.name
-            env = {sa_provider["sa_file_env"]: sa_path}
-            with patch.dict(os.environ, env, clear=False):
-                result = get_providers()
-                assert len(result) >= 1
-            import os as _os; _os.unlink(sa_path)
+        env = {key_providers[0]["key_env"]: "test-key"}
+        with patch.dict(os.environ, env, clear=False):
+            result = get_providers()
+            assert len(result) >= 1
 
     def test_get_providers_empty_when_no_keys(self):
         import os
@@ -87,36 +75,9 @@ class TestLlmConfig:
                 clear[p["key_env"]] = ""
             for env_name in p.get("key_envs") or []:
                 clear[env_name] = ""
-            if p.get("sa_file_env"):
-                clear[p["sa_file_env"]] = ""
         with patch.dict(os.environ, clear):
             result = get_providers()
             assert result == []
-
-    def test_native_provider_requires_sdk_module(self):
-        import os
-        import tempfile
-        from llm_config import get_providers
-
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            f.write(b"{}")
-            sa_path = f.name
-        env = {
-            "LLM_SA_CREDENTIALS": sa_path,
-            "LLM_SDK_MODULE": "",
-            "LLM_EXAM_REVIEW_FLASH_MODEL": "flash-model-preview",
-            "LLM_EXAM_REVIEW_PRO_MODEL": "pro-model-preview",
-            "DEEPSEEK_API_KEY": "",
-        }
-        try:
-            with patch.dict(os.environ, env, clear=False):
-                result = get_providers()
-                assert all(provider.get("api_format") != "native_sdk" for provider in result)
-        finally:
-            os.unlink(sa_path)
-
-
-
 
 
 # ── Fallback 测试 ─────────────────────────────────────────────────
@@ -165,97 +126,6 @@ class TestFallback:
                 assert metadata["purpose"] == "question_split"
                 assert metadata["model_role"] == "flash"
                 assert metadata["model_policy"] == "exam-review-primary"
-
-    @pytest.mark.asyncio
-    async def test_app_builder_alias_uses_model_generation_with_evidence_channel_metadata(self):
-        from llm_client import (
-            get_last_llm_call_metadata,
-            llm_call,
-            reset_llm_review_channel,
-            set_llm_review_channel,
-        )
-
-        token = set_llm_review_channel("app_builder")
-        try:
-            with patch("llm_client._http_post", return_value=_anthropic_ok()):
-                with patch("llm_client.get_providers", return_value=_mock_providers(1)) as get_providers:
-                    result = await llm_call(
-                        [{"role": "user", "content": "只返回 JSON"}],
-                        purpose="question_analysis",
-                    )
-        finally:
-            reset_llm_review_channel(token)
-
-        assert result == "hello from anthropic"
-        get_providers.assert_called_once()
-        metadata = get_last_llm_call_metadata()
-        assert metadata["provider"] == "provider-0"
-        assert metadata["review_channel"] == "evidence"
-        assert metadata.get("operation") is None
-
-    @pytest.mark.asyncio
-    async def test_grounded_generation_channel_uses_evidence_grounded_generation(self, monkeypatch):
-        monkeypatch.setenv("LLM_EXAM_REVIEW_FLASH_MODEL", "flash-model-preview")
-        monkeypatch.setenv("LLM_EXAM_REVIEW_PRO_MODEL", "pro-model-preview")
-        from llm_client import (
-            get_last_llm_call_metadata,
-            llm_call,
-            reset_llm_review_channel,
-            set_llm_review_channel,
-        )
-
-        class FakeGateway:
-            def __init__(self):
-                self.calls = []
-
-            async def generate_grounded_content(self, **kwargs):
-                self.calls.append(kwargs)
-                return {
-                    "text": "{\"ok\": true}",
-                    "grounding_score": 0.9,
-                    "metadata": {
-                        "provider": "evidence_service",
-                        "operation": "generate_grounded_content",
-                    },
-                }
-
-        gateway = FakeGateway()
-        token = set_llm_review_channel("grounded_generation")
-        try:
-            with patch("llm_client._get_evidence_gateway", return_value=gateway):
-                with patch("llm_client.get_providers") as get_providers:
-                    result = await llm_call(
-                        [{"role": "user", "content": "只返回 JSON"}],
-                        purpose="question_analysis",
-                    )
-        finally:
-            reset_llm_review_channel(token)
-
-        assert result == "{\"ok\": true}"
-        assert get_providers.call_count == 0
-        assert gateway.calls[0]["model_id"] == "pro-model-preview"
-        metadata = get_last_llm_call_metadata()
-        assert metadata["provider"] == "evidence_service"
-        assert metadata["operation"] == "generate_grounded_content"
-        assert metadata["review_channel"] == "grounded_generation"
-        assert metadata["model_policy"] == "exam-review-app-builder-grounded-generation"
-
-    @pytest.mark.asyncio
-    async def test_grounded_generation_channel_rejects_image_inputs_without_model_fallback(self):
-        from llm_client import llm_call, reset_llm_review_channel, set_llm_review_channel
-
-        token = set_llm_review_channel("grounded_generation")
-        try:
-            with patch("llm_client.get_providers") as get_providers:
-                with pytest.raises(RuntimeError, match="does not support image_url"):
-                    await llm_call([{"role": "user", "content": [
-                        {"type": "text", "text": "describe"},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abcd"}},
-                    ]}])
-        finally:
-            reset_llm_review_channel(token)
-
-        assert get_providers.call_count == 0
 
     @pytest.mark.asyncio
     async def test_fallback_to_second(self):

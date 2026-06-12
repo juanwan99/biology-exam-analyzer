@@ -2491,8 +2491,6 @@ def _build_evidence_integrity(
     metadata = _as_dict(report_data.get("metadata_quality"))
     knowledge = _as_dict(report_data.get("knowledge"))
     insights = _as_dict(insights)
-    grounding_checks = _as_list(insights.get("_grounding_checks"))
-    grounding_status = str(insights.get("_grounding_status") or "").strip()
     seu_rows = _as_list(fine_exhibits.get("seu_rows"))
     competency_rows = _as_list(fine_exhibits.get("competency_evidence_rows"))
     allocation_counts = Counter(row.get("allocation_source") or "unknown" for row in seu_rows)
@@ -2547,24 +2545,6 @@ def _build_evidence_integrity(
     knowledge_non_textbook_points = _as_list(knowledge.get("non_textbook_points"))
 
     items: List[Dict] = []
-    if grounding_checks:
-        first_grounding = _as_dict(grounding_checks[0])
-        status = str(first_grounding.get("status") or grounding_status or "unknown")
-        score = _num(first_grounding.get("support_score"), 0.0)
-        threshold = _num(first_grounding.get("threshold"), 0.6)
-        severity = "info" if status == "ok" and score >= threshold else "warning"
-        items.append({
-            "id": "report_grounding",
-            "title": "整卷结论证据校验",
-            "value": f"{score:.2f}",
-            "detail": (
-                f"证据核查状态 {status}，阈值 {threshold:.2f}；"
-                f"声明数={int(_num(first_grounding.get('claim_count'), 0))}，"
-                f"引用证据块={int(_num(first_grounding.get('cited_chunk_count'), 0))}。"
-                "低于阈值时，整卷总结需要人工复核。"
-            ),
-            "severity": severity,
-        })
     for event in _as_list(insights.get("_report_failure_events")):
         if isinstance(event, dict):
             items.append({
@@ -2775,8 +2755,6 @@ def _build_evidence_integrity(
         "knowledge_unmapped_points": knowledge_unmapped_points,
         "knowledge_non_textbook_count": knowledge_non_textbook_count,
         "knowledge_non_textbook_points": knowledge_non_textbook_points,
-        "grounding_status": grounding_status,
-        "grounding_checks": grounding_checks,
         "missing_purpose_questions": missing_purpose_questions,
         "source_counts": {
             "seu_allocation": dict(allocation_counts),

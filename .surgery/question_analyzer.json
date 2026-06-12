@@ -1,0 +1,94 @@
+{
+ "group": "question_analyzer",
+ "actions": [
+  {
+   "type": "edit",
+   "file": "backend/question_analyzer.py",
+   "location": "L749-L759 analyze_question() signature",
+   "what": "删除 analyze_question 三个谷歌 evidence 注入参数：evidence_context_provider=None (L756)、evidence_ranking_enabled: bool|str|None=None (L757)、agent_search_enabled: bool|str|None=None (L758)。这三个参数仅在 L874-L931 的 evidence 重排块内被使用，删块后全部成为死参数。",
+   "replacement": "签名只保留 question_text/question_images/question_id/question_type=unknown/section_header=None 五个参数。删除后函数体的 prompt 构造走纯降级路径（只有 analysis_prompt + 可选 visual_context + 题目内容）。",
+   "risk": "上游调用方 backend/services/analysis_service.py L108-L115 仍以 evidence_ranking_enabled= 和 agent_search_enabled= 关键字传入（值来自 review_channel.channel_evidence_ranking_enabled / channel_uses_agent_search）。删参数后该调用方必须同步去掉这两个 kwarg，否则 TypeError。见 cross_file_notes。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/question_analyzer.py",
+   "location": "L802-L803 analyze_question() 局部变量初始化",
+   "what": "删除 evidence_context_meta = None (L802) 与 evidence_context_text = \"\" (L803) 两行初始化。二者只服务于 L874-L931 的 evidence 重排块；删块后 evidence_context_text 再无任何读取点，evidence_context_meta 的剩余读取点（L823、L863）也一并删除（见下两条）。",
+   "replacement": "无；保留紧邻的 question_media_items / question_media_refs / visual_context_text 等正常初始化。",
+   "risk": "低。必须与 L823-824、L863-864、L874-931 同批删除，单独删会留下对未定义名的引用。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/question_analyzer.py",
+   "location": "L823-L824 build_call_record() 闭包内",
+   "what": "删除 `if evidence_context_meta:` / `metadata[\"evidence_context\"] = evidence_context_meta` 两行。删 evidence 重排块后 evidence_context_meta 恒为 None，该分支恒不执行（死代码）。这就是测试 L1182-1183 断言的 metadata.evidence_context 来源——生产降级路径从不产生它。",
+   "replacement": "build_call_record 的 metadata 仅保留 response_length / analysis_version / metadata_extra / visual_context_source（L825-826）+ _llm_call_trace 透传，与当前降级实际产出一致。",
+   "risk": "低。纯死分支删除，不改变降级路径下任何已落库的 metadata 形状。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/question_analyzer.py",
+   "location": "L863-L864 attach_call_record() 闭包内",
+   "what": "删除 `if evidence_context_meta:` / `payload[\"_evidence_context\"] = evidence_context_meta` 两行。同上，删块后恒不执行。payload 不再注入 _evidence_context 键，与降级实际一致。",
+   "replacement": "attach_call_record 只保留 payload[\"_llm_calls\"] = calls 的赋值（L865）。",
+   "risk": "低。需确认下游无强依赖 payload['_evidence_context'] 的消费者；当前仓库内未发现读取该键的 tracked 代码（grep _evidence_context 仅命中本处定义）。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/question_analyzer.py",
+   "location": "L874-L931 evidence 注入主块（import + _is_transient_evidence_context_error + if _evidence_ranking_enabled(...) 重排循环）",
+   "what": "核心谷歌链路。删除：(1) L874-877 `from services.evidence_context import QuestionEvidenceContextBuilder, evidence_ranking_enabled as _evidence_ranking_enabled`；(2) L878-891 _is_transient_evidence_context_error 辅助函数；(3) L893-931 整个 `if _evidence_ranking_enabled(evidence_ranking_enabled):` 块——它调用 QuestionEvidenceContextBuilder().build_question_context()/带 3 次重试、把 context_text 追加进 prompt_sections、把 metadata 写入 evidence_context_meta。这是 grounding/证据重排注入的唯一入口。",
+   "replacement": "删块后 prompt_sections 保持 L873 的 [analysis_prompt]，随后直接进入 L933 的视觉上下文分支。full_prompt = analysis_prompt (+ 可选 visual_context) + 题目内容——即当前生产降级实际行为。",
+   "risk": "高度 load-bearing：L874 这条 import 没有 try/except 包裹（与任务描述的'都有 try/except'不符，本文件是裸 import）。远程删除 services/evidence_context.py 后，若不删此 import，则每次 analyze_question 都会 ImportError，击穿所有题目分析。因此本块删除是远程删 evidence 六件套的前置必做项，非可选。删除后 _evidence_ranking_enabled 这个门控函数随之消失，等价于'重排恒关闭'——正是当前默认行为。"
+  },
+  {
+   "type": "keep",
+   "file": "backend/question_analyzer.py",
+   "location": "L30 _llm_call_trace() 透传键元组",
+   "what": "保留 `for key in (\"provider_errors\",\"status\",\"operation\",\"fact_count\",\"grounding_score\",\"model_policy\")` 这行。这是从 get_last_call_metadata() trace 通用拷贝键的无害字典操作；degoogle 后 llm_client 上游不再产生 fact_count/grounding_score，循环对这两个键自然永不命中，行为不变。可选：为整洁可删 fact_count/grounding_score 两个键，但删与不删运行结果完全一致。",
+   "replacement": "保留原样（推荐），或可选去掉 fact_count/grounding_score 两键。",
+   "risk": "无行为风险。注意完全相同的元组还出现在 backend/competency_analyzer.py L32、feature_extractor.py L28、report_insights.py L28、vision_context.py L57，若决定清理需五处一致处理（属其他文件组）。"
+  },
+  {
+   "type": "keep",
+   "file": "backend/question_analyzer.py",
+   "location": "L1152/L1337/L1459/L1587/L1939/L2084/L2225 调用 + L2257-L2278 _needs_evidence_units() + L2323-L2536 _retry_missing_evidence_units() + L2538+ _get_evidence_units_retry_prompt()",
+   "what": "全部保留。这些 evidence_units / diagnostic_units / stimulus_units / missing_evidence_repair 是生物审题的细粒度业务逻辑（采分点/诊断单元/情境单元修复），与谷歌 grounding/Discovery 检索毫无关系。命名里的 'evidence' 是学科语义（证据链），不是证据检索服务。",
+   "replacement": "不动。",
+   "risk": "误删风险：'evidence' 关键字在本文件同时承载'谷歌证据检索'（L756-931，删）与'生物证据单元'（L2257+，留）两套语义，按命名一刀切会误伤业务。已逐处区分确认。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/test_question_analyzer_metadata.py",
+   "location": "L1127-L1184 test_analyze_question_injects_ranked_evidence_context_when_enabled()",
+   "what": "删除整个测试函数（含 L1127 @pytest.mark.asyncio 装饰器到 L1184）。它构造 FakeEvidenceContextProvider 返回 provider=evidence_service/operation=rank 的 metadata，传 evidence_context_provider= + evidence_ranking_enabled=True 验证证据上下文被注入 prompt 和 metadata。被测能力已删，参数已不存在。",
+   "replacement": "无（整删）。函数前后空行随删，下一个测试从 L1186 起。",
+   "risk": "低。删后该谷歌注入路径无测试覆盖属预期（能力已摘除）。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/test_question_analyzer_metadata.py",
+   "location": "L1186-L1225 test_analyze_question_does_not_call_evidence_ranking_by_default()",
+   "what": "删除整个测试函数（L1186 装饰器到 L1225）。它传 evidence_context_provider=FailingEvidenceContextProvider() 但不传 evidence_ranking_enabled，断言默认不调重排、metadata 无 evidence_context。参数 evidence_context_provider 删除后此用例无法构造。",
+   "replacement": "无（整删）。",
+   "risk": "低。'默认不重排'在摘除后是唯一且固定行为，已无需用例守护。"
+  },
+  {
+   "type": "delete_block",
+   "file": "backend/test_question_analyzer_metadata.py",
+   "location": "L1227-L1256 test_analyze_question_fails_closed_when_evidence_ranking_fails()",
+   "what": "删除整个测试函数（L1227 装饰器到 L1255 结束 + L1256 空行）。它传 evidence_ranking_enabled=True + FailingEvidenceContextProvider，断言重排失败时 fail-closed 抛 RuntimeError 且不调 LLM。fail-closed 逻辑随 L893-931 块一并删除。",
+   "replacement": "无（整删）。下一个测试 test_long_short_answer_uses_extended_timeout 从 L1258 起。",
+   "risk": "低。fail-closed 行为已不复存在，用例必须删。"
+  },
+  {
+   "type": "keep",
+   "file": "backend/test_question_analyzer_metadata.py",
+   "location": "L60-L150 fixtures、L1128 字符串 'evidence chain' 等、L1421-L1427 evidence_call、L1435-L1536 missing_evidence_repair 系列测试",
+   "what": "全部保留。这些 evidence/evidence_units/diagnostic_units/stimulus_units/missing_evidence_repair 测试覆盖的是生物证据单元修复业务逻辑，非谷歌链路；fixture 里的 'analyze evidence chain'/'ignore evidence' 等是学科文案。",
+   "replacement": "不动。",
+   "risk": "误删风险同源文件：仅删上面三个证据'重排/注入'测试，保留证据'单元修复'测试。"
+  }
+ ],
+ "cross_file_notes": "本组对外暴露的符号变化与调用方影响：\n\n1) analyze_question() 签名收窄（删 evidence_context_provider / evidence_ranking_enabled / agent_search_enabled 三参数）——直接破坏上游 backend/services/analysis_service.py L108-L115：该处以 `evidence_ranking_enabled=channel_evidence_ranking_enabled(exam_review_channel)`、`agent_search_enabled=channel_uses_agent_search(exam_review_channel)` 传参。analysis_service 改造时必须同步删掉这两个 kwarg（analysis_service 是另一文件组，需联动）。删后 review_channel.py 的 channel_evidence_ranking_enabled / channel_uses_agent_search 在分析链上失去消费者（reviewer 免扣费旁路 _resolve_user_and_review/review 模式判定与本文件无关，不受影响）。\n\n2) 裸 import 警告（最高优先级）：question_analyzer.py L874 `from services.evidence_context import ...` 没有 try/except 包裹。任务背景假设这些 import 都有降级保护，但本文件不是——它依赖远程实际存在 services/evidence_context.py，靠 L893 门控关闭来走降级。一旦远程删除 evidence 六件套而本块未删，analyze_question 将每次 ImportError 击穿全部题目分析。故 L874-931 删除是远程删文件的硬前置。\n\n3) metadata 透传：本文件 build_call_record/attach_call_record 删除后不再产出 metadata['evidence_context'] 与 payload['_evidence_context']；仓库内无 tracked 代码读取这两个键（grep 确认）。_llm_call_trace 对 fact_count/grounding_score 的通用透传保留无害（upstream degoogle 后自然不再产生），同款键元组在 competency_analyzer/feature_extractor/report_insights/vision_context 共 4 文件重复，若统一清理需跨组协调。\n\n4) provider='evidence_service'、grounding_score、fact_count 的真正产生地在 backend/llm_client.py L455-577 与 report_insights.py L1251+（其他文件组），本组只是下游透传，删除上游后本组透传变成永不触发的无害分支。"
+}

@@ -91,7 +91,6 @@ def _status_label(value: Any) -> str:
         "split_questions": "题目拆分",
         "report_insights": "报告综合分析",
         "report_teaching_suggestions": "教学建议生成",
-        "report_grounding_check": "证据核查",
         "feature_extraction": "难度质量抽取",
         "big_question_feature_extraction": "大题特征抽取",
         "competency_analysis": "核心素养分析",

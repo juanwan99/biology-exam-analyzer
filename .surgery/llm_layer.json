@@ -1,0 +1,212 @@
+{
+ "group": "llm_layer",
+ "actions": [
+  {
+   "file": "backend/llm_client.py",
+   "type": "edit",
+   "location": "L19 模块级全局 _evidence_gateway",
+   "what": "删除 `_evidence_gateway = None` 全局变量（evidence gateway 单例缓存）",
+   "replacement": "直接删行，无替代",
+   "risk": "低。唯一读写点在本文件 L67-76/L421-427/L444，同批删除"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "edit",
+   "location": "L67-76 close_llm_clients()",
+   "what": "删 L68 `global _evidence_gateway` 和 L74-76 gateway 关闭逻辑（`if _evidence_gateway is not None: await ...aclose()`）",
+   "replacement": "函数只保留 L70-73：遍历 _clients 关闭 httpx 客户端 + clear()。main.py:214-215 的 shutdown 调用方签名不变",
+   "risk": "低。生产中 _evidence_gateway 从未被实例化过（grounding 从未成功），删除后 shutdown 行为与实际生产一致"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L340-346 _channel_requires_app_builder_generation()",
+   "what": "整函数删除。它 import services.review_channel.channel_requires_grounded_generation 来判断是否走 App Builder 生成",
+   "risk": "低。唯一调用点 L557 同批删除。注意：只删这个'是否走谷歌生成'判定，不动 L27-38 的 set/reset_llm_review_channel（reviewer 渠道语义载体，analysis_service.py L88/445/526 在用）"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L349-355 _app_builder_model_id()",
+   "what": "整函数删除（Vertex 风格 models/xxx 模型 ID 剥离器，纯谷歌格式处理）",
+   "risk": "低。唯一调用点 L441 同批删除"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L358-378 _message_content_text()",
+   "what": "整函数删除（为 grounded generation 把 messages 压成纯文本、对 image_url 抛错）",
+   "risk": "低。grep 确认唯一调用点是 L386（_messages_to_grounded_generation），同批删除"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L381-397 _messages_to_grounded_generation()",
+   "what": "整函数删除（messages → prompt/system_instruction 拼接，仅服务 App Builder grounded generation）",
+   "risk": "低。唯一调用点 L442 同批删除"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L400-418 _grounding_facts_from_prompt()",
+   "what": "整函数删除（把 prompt 切块成 groundingFacts，含 EVIDENCE_GENERATION_FACT_CHARS / EVIDENCE_GENERATION_MAX_FACTS 两个环境变量读取）",
+   "risk": "低。唯一调用点 L443 同批删除。这两个 env 变量随之失效，部署 .env 若还定义只是死配置"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L421-427 _get_evidence_gateway()",
+   "what": "整函数删除。内含 `from services.evidence_gateway import EvidenceGateway`——本文件对 gitignored 六件套的唯一 import 点",
+   "risk": "低。调用点 L444 同批删除；test_llm_client.py L225 对它的 patch 在测试删除项里一并处理"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "delete_block",
+   "location": "L430-467 _call_app_builder_grounded_generation()",
+   "what": "整函数删除（App Builder grounded generation 主体：resolve_model_profile + EVIDENCE_GENERATION_MODEL env + gateway.generate_grounded_content + 写 provider=evidence_service / fact_count / grounding_score metadata）",
+   "risk": "低。这是 llm_policy 的唯一生产 import 点（L437），删除后 llm_policy.py 失去全部生产调用方 → 支撑整删。grounding_score/fact_count 两个 metadata 字段从此无生产产生源"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "edit",
+   "location": "L557-583 llm_call() 入口处 `if _channel_requires_app_builder_generation():` 分支",
+   "what": "整个 if 块删除（含成功 return 和 except 里写 provider=evidence_service 的失败 metadata，注意该分支异常是 re-raise 不降级——但生产中渠道从未命中 grounded_generation，所以删块=生产实际行为）",
+   "replacement": "保留 L556 `_last_call_metadata.set({})`，之后直接接 L584 `requires_images = _messages_include_images(messages)`——降级路径（多 provider fallback 链）成为唯一路径",
+   "risk": "低-中。若有人显式设 EXAM_REVIEW_CHANNEL=grounded_generation，行为从'尝试谷歌生成'变成'静默走国产 provider 链'——与任务原则一致但是个语义吞没点，建议在 review_channel 组同步移除该渠道枚举或加日志"
+  },
+  {
+   "file": "backend/llm_client.py",
+   "type": "keep",
+   "location": "L18 _review_channel ContextVar、L27-38 set_llm_review_channel/reset_llm_review_channel、L595/L617/L665 metadata 中的 review_channel 键",
+   "what": "保留：reviewer 业务语义（审题渠道标记 + 免扣费旁路依赖的渠道判定链）。analysis_service.py L88-89/445-446/526-527 设置渠道，metadata 透传 review_channel 是无害通用字典操作。L31 对 services/review_channel.normalize_review_channel 的 import 保留",
+   "risk": "依赖 review_channel 组保留 normalize_review_channel 及 app_builder/grant/1000_grant→evidence 别名映射（reviewer 免扣费语义可能挂在这些渠道名上）"
+  },
+  {
+   "file": "backend/llm_policy.py",
+   "type": "delete_file",
+   "location": "L1-97 整文件（POLICY_ID/DEFAULT_FLASH_MODEL/DEFAULT_PRO_MODEL/DISCONTINUED_MODELS/ModelProfile/resolve_model_profile）",
+   "what": "整删。flash/pro 双档模型策略只为 grounded generation 选谷歌模型 ID 服务；grep 全仓确认生产调用方仅 llm_client.py L437（同批删除），其余引用全在 test_llm_policy.py。purpose 路由的实际生效实现在 llm_config._apply_purpose_preference，不依赖本文件",
+   "risk": "中。①历史 memory 标注'llm_policy 绝不能动'——那是 degoogle 前主线的结论，本分支任务目标已明确推翻，建议在 commit message 注明。②LLM_EXAM_REVIEW_FLASH_MODEL/PRO_MODEL/LLM_POLICY_ID 三个 env 失效，部署 .env 残留为死配置。③_FLASH_PURPOSES/_PRO_PURPOSES 集合随文件消失，但 llm_config.TEXT_REVIEW_PURPOSES/LIGHTWEIGHT_PURPOSES 才是生产路由真源，行为不变"
+  },
+  {
+   "file": "backend/llm_config.py",
+   "type": "edit",
+   "location": "L194 get_providers() 内 subq_max_tokens 提额的 purpose 元组",
+   "what": "从元组中移除 \"report_grounding_check\"（该 purpose 唯一生产产生源是 report_insights.py L1353-1382 的 EvidenceGateway grounding 块，属另一组删除范围；生产中 grounding 从未启用故该 purpose 从未实际发出）",
+   "replacement": "`if purpose in (\"question_analysis_subquestion\", \"report_insights\", \"report_teaching_suggestions\") and p.get(\"subq_max_tokens\"):`",
+   "risk": "中（跨组耦合）：若 report_insights 组把 grounding check 改造成纯国产 LLM 核查并保留该 purpose 字符串，则此条目要保留，否则该 purpose 失去 65536 max_tokens 提额。需与 report 组对齐后执行"
+  },
+  {
+   "file": "backend/llm_config.py",
+   "type": "keep",
+   "location": "L16 TEXT_REVIEW_PURPOSES 中的 \"missing_evidence_repair\"",
+   "what": "保留。已实证（question_analyzer.py L2368/L2448）这是国产 LLM 对答案'证据单元(evidence_units)'缺失的修复重跑，纯业务语义与谷歌 evidence service 无关，是生产降级路径的一部分",
+   "risk": "无。名字含 evidence 容易被误杀，特此标注"
+  },
+  {
+   "file": "backend/llm_config.py",
+   "type": "keep",
+   "location": "L30-84 PROVIDERS 及其余全部",
+   "what": "保留。当前 provider 链 qwen_vision/deepseek/qwen_text 全国产，无任何谷歌项；这正是'降级路径变唯一路径'的承载文件",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "edit",
+   "location": "L59-79 TestLlmConfig.test_get_providers_filters_missing_keys",
+   "what": "删 L69-79 的 else 分支（'All providers use sa_file_env' 谷歌 SA 凭证残枝——当前 PROVIDERS 没有任何 sa_file_env 项，deepseek 有 key_env 故 if 分支恒走，else 是死代码）",
+   "replacement": "只保留 key_env 分支：设置 key_providers[0] 的 env 后断言 get_providers() 非空",
+   "risk": "低。测试覆盖不变"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "edit",
+   "location": "L81-94 test_get_providers_empty_when_no_keys",
+   "what": "删 L90-91 对 sa_file_env 的清空（死残枝）",
+   "replacement": "clear 字典只清 key_env/key_envs",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "delete_block",
+   "location": "L96-116 test_native_provider_requires_sdk_module",
+   "what": "整测试删除：验证 native_sdk（谷歌原生 SDK）provider 在 LLM_SDK_MODULE 为空时被排除——PROVIDERS 里已无 native_sdk 项，断言恒真已蜕化为空转；测试本身还设置 LLM_SA_CREDENTIALS/LLM_EXAM_REVIEW_* 等待删 env",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "keep",
+   "location": "L169-194 test_app_builder_alias_uses_model_generation_with_evidence_channel_metadata",
+   "what": "保留：它验证的恰是摘除后的目标行为——渠道别名 app_builder 归一化为 evidence 后不走谷歌生成、照常走 provider 链且 metadata.review_channel=\"evidence\"（现状下该用例本来就走 provider 路径，因 evidence≠grounded_generation）。建议仅改名去掉 app_builder 字样（如 test_evidence_channel_alias_uses_model_generation）",
+   "risk": "中（跨组）：依赖 review_channel 组保留 APP_BUILDER_ALIASES→evidence 的归一化；若该组删别名映射此测试需同步改输入渠道名"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "delete_block",
+   "location": "L196-241 test_grounded_generation_channel_uses_evidence_grounded_generation",
+   "what": "整测试删除：FakeGateway + patch llm_client._get_evidence_gateway + 断言 provider=evidence_service/grounding_score 路径，全部对应已删代码",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "delete_block",
+   "location": "L243-258 test_grounded_generation_channel_rejects_image_inputs_without_model_fallback",
+   "what": "整测试删除：验证 grounded_generation 渠道对图片输入抛错且不回落 provider——摘除后该渠道不再有特殊分支，语义不复存在",
+   "risk": "低。摘除后 grounded_generation 渠道的图片请求会正常走 qwen_vision，即降级行为"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "delete_block",
+   "location": "L1-83 六个 llm_policy 测试（test_default_policy_uses_pro / test_fast_purpose_uses_flash / test_critical_purpose_uses_pro / test_explicit_model_override_keeps_vendor_choice_at_gateway_boundary / test_preview_env_values_are_not_downgraded / test_discontinued_model_fails_closed）",
+   "what": "随 llm_policy.py 整删；同时收拾 L1-5 import（删 tempfile，保留 os/patch/pytest）",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "edit",
+   "location": "L88-104 test_qwen_key_enables_vision_provider_only_by_default",
+   "what": "保留测试主体（它验证降级路径的 vision 路由），仅删 L95 `monkeypatch.delenv(\"LLM_SA_CREDENTIALS\", raising=False)` 残枝",
+   "replacement": "其余断言原样保留",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "delete_block",
+   "location": "L107-121 test_qwen_vision_does_not_validate_unused_native_model",
+   "what": "整测试删除：前提是'native(谷歌)模型经 llm_policy DISCONTINUED 校验'——llm_config 现已不 import llm_policy，校验路径不存在，测试空转",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "delete_block",
+   "location": "L124-144 test_image_requests_auto_prefer_configured_qwen_over_native_provider",
+   "what": "整测试删除：'qwen 优先于 native(谷歌 SA) provider'的对照物已不存在；图片请求→仅 qwen_vision 的覆盖由 L88-104 用例的后半段保留",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "edit",
+   "location": "L147-170 test_general_text_requests_prefer_deepseek_then_qwen_without_native_by_default",
+   "what": "剥离谷歌脚手架：删 tempfile SA 文件、LLM_SA_CREDENTIALS/LLM_SDK_MODULE/LLM_CLOUD_MODE/LLM_ENABLE_NATIVE_TEXT_FALLBACK/LLM_EXAM_REVIEW_* env、以及 `api_format != \"native_sdk\"` 断言；测试改名去掉 without_native",
+   "replacement": "env 只留 DEEPSEEK_API_KEY/QWEN_API_KEY，保留核心断言：difficulty_review → [\"deepseek\"] 且 model_policy==\"exam-review-deepseek-primary\"",
+   "risk": "低。核心覆盖（qwen_text 默认不入文本链）保持"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "edit",
+   "location": "L175-200 test_review_text_purposes_use_deepseek_without_qwen_text_by_default（参数化）",
+   "what": "env 字典删 LLM_ENABLE_NATIVE_TEXT_FALLBACK/LLM_EXAM_REVIEW_FLASH_MODEL/LLM_EXAM_REVIEW_PRO_MODEL 三个死键；参数列表保留全部 purpose（含 missing_evidence_repair——国产修复 pass，勿删）",
+   "replacement": "env 只留 DEEPSEEK_API_KEY/QWEN_API_KEY",
+   "risk": "低"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "edit",
+   "location": "L203-218 test_qwen_text_fallback_requires_explicit_opt_in",
+   "what": "env 字典删 LLM_ENABLE_NATIVE_TEXT_FALLBACK/LLM_EXAM_REVIEW_* 死键，测试主体保留",
+   "replacement": "env 留 DEEPSEEK_API_KEY/QWEN_API_KEY/LLM_ENABLE_QWEN_TEXT_FALLBACK=true",
+   "risk": "低。建议顺手把瘦身后的 test_llm_policy.py 改名为 test_llm_config_routing.py（文件里已无任何 llm_policy 内容），或并入 test_llm_client.py 的 TestLlmConfig——二选一，避免文件名撒谎"
+  }
+ ],
+ "cross_file_notes": "本组摘除后消失的对外符号与跨组接口：(1) llm_policy 模块整体消失（resolve_model_profile/ModelProfile/POLICY_ID/DISCONTINUED_MODELS）——grep 全仓确认除 llm_client.py L437 和 test_llm_policy.py 外无任何调用方，无需其他组改动；(2) services/review_channel.py 的 channel_requires_grounded_generation（L45）失去唯一生产调用方 llm_client.py L344——review_channel 组可删该函数及 GROUNDED_GENERATION_CHANNELS 枚举，但必须同步改 test_review_channel.py L4/L17/L22；(3) llm_client 继续依赖 services/review_channel.normalize_review_channel（llm_client.py L31）及 app_builder/grant/1000_grant→evidence 别名映射——reviewer 免扣费语义（analysis_router.py L271 _resolve_user_and_review 本身不经 llm_client，独立保留）与渠道 metadata 标记都要求该函数存活，review_channel 组瘦身时不可删 normalize_review_channel；(4) metadata 字段 grounding_score/fact_count/operation=generate_grounded_content/provider=evidence_service 自此无生产产生源，下游（analysis_service/report_data 的 metadata 透传与测试断言）若有专门处理块由对应组删，通用 dict 透传可留；(5) llm_config.py L194 删 report_grounding_check 需与 report_insights 组对齐：他们删 L1353-1382 grounding 块后该 purpose 不再产生（report_product_charts.py L94 / report_product_html.py L124 的中文标签映射条目属无害字典，可顺手删）；(6) 失效环境变量清单（部署 .env 可清理）：EVIDENCE_GENERATION_MODEL、EVIDENCE_GENERATION_FACT_CHARS、EVIDENCE_GENERATION_MAX_FACTS、LLM_EXAM_REVIEW_FLASH_MODEL、LLM_EXAM_REVIEW_PRO_MODEL、LLM_POLICY_ID；(7) main.py L214-215 调用 close_llm_clients 签名不变，无需改动；(8) CLAUDE.md 中 test_llm_client.py「14 个」测试计数将变化，文档组顺手更新。"
+}

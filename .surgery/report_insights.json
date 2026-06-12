@@ -1,0 +1,182 @@
+{
+ "group": "report_insights",
+ "actions": [
+  {
+   "file": "backend/report_insights.py",
+   "type": "edit",
+   "location": "L9 import os",
+   "what": "删除 `import os`。文件内 os 仅在 _grounding_enabled(L492) 和 _run_grounding_check(L1220-1221) 使用，两者均被删除后 os 成为未用 import",
+   "replacement": "直接删除该行（asyncio/json/re 等其余 import 保留）",
+   "risk": "无。已 grep 确认 os. 仅出现在 L492/L1220/L1221"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "edit",
+   "location": "L28 _llm_call_trace()",
+   "what": "透传 key 元组中删除 \"fact_count\" 和 \"grounding_score\" 两个 grounding 专用 key（仅 llm_client 的 evidence 链路会写入，该链路同步摘除后永不出现）",
+   "replacement": "for key in (\"provider_errors\", \"status\", \"operation\", \"model_policy\"):  — 循环本身是无害通用字典透传，保留",
+   "risk": "极低。即使保留这两个 key 也只是永不命中的死键；删除是为收干。\"operation\"/\"status\" 可能被 llm_client 通用 trace 使用，保守保留"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "edit",
+   "location": "L34-58 _call_record()，具体 L38-43",
+   "what": "删除 `if metadata.get(\"provider\") in {\"evidence_service\"}:` 分支（provider=evidence_service / model=check_grounding 的 grounding 专用 LLMCallRecord 处理）。该分支唯一的触发者是 L1367-1382 的 grounding _call_record（同步删除）",
+   "replacement": "无条件执行 `provider, model, fallback_count, metadata = _llm_call_trace(metadata)`（即保留原 else 分支为唯一路径）。生产中所有 _call_record 调用（report-overall-insights / report-teaching-suggestions）本就走这条路径，行为不变",
+   "risk": "无。_call_record 为模块私有，删除 L1367-1382 后无任何调用方传入 provider=evidence_service"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L80-120 _compact_json() / _pct() / _number_text() / _distribution_value_by_label() / _float_or()（模块级五个辅助函数）",
+   "what": "删除。_compact_json 当前已是零调用死代码；其余四个仅被 _stabilize_grounded_insights(L127-277) 使用，后者删除后全部变死代码。注意 _build_grounding_facts 内部有自己的局部同名副本（L764-781 compact_json/pct/number_text、L1114-1131 _distribution_value_by_label/_float_or），不受影响",
+   "risk": "低。已 grep 确认模块级版本的调用点全部在 L147-272（_stabilize 内部）；下划线私有，无外部 import。若想最小化 diff 也可保留（纯死代码），但建议随 _stabilize 一并清掉"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L123-124 _formal_grounding_required()",
+   "what": "删除整个函数。唯一调用点 L1338（同步删除）。它是 grounding 开启 + metadata_quality 存在时触发稳定化重写的判定，生产中 grounding 从未开启成功，该函数实际恒等于走 False 路径",
+   "risk": "无。仅 generate_insights L1338 调用"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L127-277 _stabilize_grounded_insights()",
+   "what": "删除整个函数（151 行，把 LLM 报告文本重写成确定性短句以通过 Check Grounding 的稳定化层，含 result[\"_stabilized_for_grounding\"]=True 标记）。生产中 grounding 关闭 → _formal_grounding_required 恒 False → 该函数从未在生产执行；删除后报告文本=LLM 原始输出，与生产实际行为一致",
+   "risk": "无运行时风险。test_report_insights.py L580-598 直接 import 测试它，需同步删除该测试。_stabilized_for_grounding 标记 key 随之消失（grep 全仓仅本文件 L276 写入 + 本组测试 L595 断言）"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "keep",
+   "location": "L280-370 _build_overall_prompt()，特别是 L313-317 evidence_cards 嵌入 + L347-357 '## Grounding Evidence Cards' / '## Grounding requirements' 提示词文本",
+   "what": "整体保留，一字不改。这里的 'evidence cards' 是 _build_grounding_facts 从报告数据本地确定性生成的文本，嵌入发给 GPT/DeepSeek 的 prompt——这是无条件执行的生产路径（L1294 调用），prompt 内容是当前生产 LLM 输入的一部分。提示词中 '证据校验服务' / 'Check Grounding' 字样只是引导 LLM 写可核验短句的措辞，不发起任何谷歌调用。改动会改变 LLM 输入 → 违反行为一致原则",
+   "risk": "保留风险为零。后续若想清理措辞需单独评估对报告文风的影响，不属于本次摘除"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L489-494 _grounding_enabled()",
+   "what": "删除整个函数（含 REPORT_GROUNDING_ENABLED 环境变量读取）。调用点 L124 和 L1353 均同步删除。删除后 grounding 关闭成为唯一路径",
+   "risk": "无。注意 docker-compose.yml L57 仍注入 REPORT_GROUNDING_ENABLED=true（变死配置，由负责该文件的组清理）。隐患说明：当前代码若 channel 为 None 且该 env=true，grounding 会尝试 import 缺失的 evidence_gateway 并让报告整体失败——既然生产报告全部成功产出，证明该组合在生产从未生效；删除后这种组合也会成功出报告，方向上正是'降级路径变唯一路径'"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L497-510 _build_grounding_answer()",
+   "what": "删除整个函数。唯一调用点是 L1371（grounding _call_record 的 prompt 字段，同步删除）",
+   "risk": "无。本组测试 L447-462 直接测它，同步删除"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L513-747 grounding 声明拆分链：_split_grounding_claims(L513-535) / _rewrite_rank_claim(L538-549) / _extract_grounding_antecedent(L552-566) / _rewrite_antecedent_dependent_claim(L569-582) / _POLICY_MARKERS(L585-587) / _POLICY_START_MARKERS(L590-596) / _has_groundable_signal(L599-607) / _strip_grounding_category_prefix(L610-620) / _extract_policy_basis(L623-646) / _is_policy_only_claim(L649-654) / _has_hard_metric_signal(L657-666) / _is_low_signal_grounding_claim(L669-683) / _build_grounding_sections(L686-747)",
+   "what": "整链删除（235 行）。这套链条把 LLM 报告文本拆成可逐句送 check_grounding 的 claims，唯一入口是 _build_grounding_sections，而它的唯一调用点是 _run_grounding_check(L1217，同步删除)。链内函数互相调用、无任何外部使用（已 grep 确认 _build_overall_prompt / _build_grounding_facts 不依赖其中任何一个）",
+   "risk": "无运行时风险。本组测试 L349-417 四个 _build_grounding_sections 测试同步删除"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "keep",
+   "location": "L750-1208 _build_grounding_facts()",
+   "what": "保留。虽然函数名带 grounding，但它是纯本地数据→文本的确定性转换（无任何网络/谷歌调用），且被 _build_overall_prompt L313 无条件使用——产出的 evidence cards 文本是生产 prompt 的组成部分。删除 _run_grounding_check 后它的另两个调用点（L1218、L1374）消失，但 L313 仍在。不建议本次重命名（会连带改 4 个仍有效的测试且无行为收益）",
+   "risk": "保留风险为零。函数内 L757-758 的 1200 字符截断、各 evidence_card source 标签均只影响 prompt 文本"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L1211-1260 _run_grounding_check()",
+   "what": "删除整个函数（调用 evidence_gateway.check_grounding 的核心 grounding 执行体，含 REPORT_GROUNDING_MIN_SUPPORT / REPORT_GROUNDING_CITATION_THRESHOLD 环境变量、_grounding_checks/_grounding_status 结果写入、provider=evidence_service 聚合 metadata）。唯一调用点 L1358（同步删除）",
+   "risk": "无。删除后 generate_insights 返回的 result 永不含 _grounding_checks/_grounding_status——与生产实际产出一致（grounding 0 次成功，生产报告从未带过这两个 key）。下游读取方见 cross_file_notes"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "edit",
+   "location": "L1263-1268 generate_insights() 签名",
+   "what": "删除 `evidence_gateway=None` 和 `grounding_enabled: bool | None = None` 两个 keyword-only 参数及裸 `*,`",
+   "replacement": "async def generate_insights(data: dict, mode: str = \"brief\") -> dict:",
+   "risk": "跨文件破坏点（最高风险项）：backend/analysis_router.py L162-166 和 backend/services/analysis_service.py L529-532 传 grounding_enabled=channel_grounding_enabled(...)，参数删除后会 TypeError。必须与调用方修改同一 commit 落地。本组两个测试文件中 11+1 处 grounding_enabled=False 调用也需同步删 kwarg"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L1338-1339 generate_insights() 内 stabilize 触发",
+   "what": "删除 `if _formal_grounding_required(data, grounding_enabled): result = _stabilize_grounded_insights(result, data)` 两行。生产中条件恒 False，删除后行为不变：result 保持 validate_llm_output 后的 LLM 原始解析结果",
+   "risk": "无"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "delete_block",
+   "location": "L1353-1382 generate_insights() 内 grounding 执行块",
+   "what": "删除整个 `if _grounding_enabled(grounding_enabled):` 块，含：`from services.evidence_gateway import EvidenceGateway` 延迟 import（指向远程将被删除的 gitignored 六件套之一，且此处无 try/except 兜底——一旦进入必 ImportError）、_run_grounding_check 调用、'整卷证据校验失败（证据校验服务）' RuntimeError 包装、report-overall-grounding 的 _call_record（purpose=report_grounding_check, provider=evidence_service）",
+   "replacement": "删除后 _llm_calls 固定为 2 条记录（report-overall-insights + report-teaching-suggestions），与生产实际日志一致",
+   "risk": "低。这是文件里唯一一处对 evidence 六件套的 import。删除即'收干成纯降级行为'。与保留红线无关：本文件不含 _resolve_user_and_review / review 扣费逻辑"
+  },
+  {
+   "file": "backend/report_insights.py",
+   "type": "keep",
+   "location": "L1426-1497 _build_fallback_insights()",
+   "what": "保留（标注：与谷歌链路无关，超出本次摘除 scope）。该函数首行即 raise RuntimeError，L1429 之后全部不可达，且全仓无调用方——它是早已封死的旧降级实现，不是本次要'转正'的降级路径（本次的降级路径=不跑 grounding 的正常 LLM 流程）。可在单独的死代码清理中删除",
+   "risk": "保留无风险；若顺手删除也无依赖方，但会扩大本次 diff 的审查范围"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "edit",
+   "location": "L62/L76/L100/L118/L141/L174/L205/L223/L546/L560/L575 各 generate_insights(...) 调用",
+   "what": "删除 `grounding_enabled=False` kwarg（参数已从签名移除）。这些测试本身全部保留——它们测的就是降级路径（即摘除后的唯一路径）",
+   "replacement": "await generate_insights(sample_report_data, mode=\"brief\") 等",
+   "risk": "无。这些测试的断言（call_count、teaching 重试阶梯、temperature=0、token 预算、provider 记录）全部不依赖 grounding"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "delete_block",
+   "location": "L225-269 test_grounding_enabled_attaches_check_result()（含 L225 @patch 装饰器）",
+   "what": "删除。测试 grounding_enabled=True + FakeGateway 路径（断言 _grounding_checks、provider=evidence_service、model=check_grounding），被测代码已删",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "delete_block",
+   "location": "L349-417 四个 _build_grounding_sections 测试：test_grounding_sections_split_long_analysis_into_short_claims(L349-359) / test_grounding_sections_check_recommendation_basis_not_directive(L361-383) / test_grounding_sections_skip_pure_policy_and_low_signal_claims(L385-398) / test_grounding_sections_rewrite_pronoun_score_claims(L400-417)",
+   "what": "删除。直接 import 并测试已删除的 _build_grounding_sections",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "delete_block",
+   "location": "L447-462 test_grounding_answer_separates_sections_with_blank_lines()",
+   "what": "删除。测试已删除的 _build_grounding_answer",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "delete_block",
+   "location": "L479-524 test_grounding_low_support_marks_report_needs_review(L479-505) + test_grounding_failure_raises_report_generation_error(L507-524)（各含 @patch 装饰器行）",
+   "what": "删除。两者均走 grounding_enabled=True + gateway 路径，断言 _grounding_status/_grounding_checks 或 grounding 失败中断——被测路径已删",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "delete_block",
+   "location": "L580-598 test_formal_grounded_insights_rewrite_unverified_llm_claims()",
+   "what": "删除。直接 import 测试已删除的 _stabilize_grounded_insights，断言 _stabilized_for_grounding 标记",
+   "risk": "无"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "keep",
+   "location": "L271-328 test_grounding_facts_are_section_cards_and_traceable / L330-347 test_grounding_facts_expand_all_primary_competency_counts / L419-434 test_grounding_facts_include_ranked_knowledge_detail / L436-445 test_overall_prompt_requires_grounded_short_claims / L464-477 test_grounding_facts_include_exact_zero_primary_summary",
+   "what": "保留。这五个测试覆盖的 _build_grounding_facts 和 _build_overall_prompt 均保留（生产 prompt 路径），断言的 evidence_card source 标签和 'Grounding requirements' prompt 文本在摘除后依然成立",
+   "risk": "保留无风险。若后续有人重命名 _build_grounding_facts 需连带改这五个测试",
+   "replacement": "不适用"
+  },
+  {
+   "file": "backend/test_report_insights_metadata.py",
+   "type": "edit",
+   "location": "L73 test_generate_insights_attaches_report_llm_call_metadata()",
+   "what": "删除 `grounding_enabled=False` kwarg。测试其余部分（2 条 _llm_calls、prompt_id、parsed_schema、prompt_hash）保留——正是摘除后的目标行为",
+   "replacement": "result = await generate_insights(_report_data(), mode=\"brief\")",
+   "risk": "无"
+  }
+ ],
+ "cross_file_notes": "本组对外接口变化与调用方需配合的改动：(1) generate_insights 签名收缩为 (data, mode=\"brief\")——backend/analysis_router.py L155-166 需删除 `grounding_enabled=channel_grounding_enabled(exam_review_channel)` kwarg 及 L157 的 `from services.review_channel import channel_grounding_enabled` import；backend/services/analysis_service.py L515-532 同理（L525 import + L532 kwarg）。必须与本文件改动同一 commit 落地，否则调用方 TypeError: unexpected keyword argument。(2) 返回的 insights dict 从此永不含 _grounding_checks / _grounding_status / _stabilized_for_grounding 三个 key（与生产实际一致，生产从未产出过）——下游读取方变为永不命中的死分支：services/analysis_service.py L821-849（report_grounding_status 聚合）、report_product_model.py L2494-2563（report_grounding 证据完整性卡片）、report_product_charts.py L92-94 与 report_product_html.py L122-124（report_grounding_check→\"证据核查\" 标签映射）、test_analysis_service_metadata.py L994-1167、test_report_product_model.py L36 起，由各自文件组决定删除。(3) purpose=\"report_grounding_check\" 从此不再产生——llm_config.py L194 的 purpose 列表含该值（死值，由 llm_config 组清理）。(4) REPORT_GROUNDING_ENABLED / REPORT_GROUNDING_MIN_SUPPORT / REPORT_GROUNDING_CITATION_THRESHOLD 三个环境变量在本文件的唯一读取点全部删除；docker-compose.yml L57 的 REPORT_GROUNDING_ENABLED=true 注入变死配置。(5) 本文件是 services.evidence_gateway（gitignored 六件套）在 report_insights 链路的唯一 import 点（L1355，延迟 import 且无 try/except 兜底），删除后该链路与六件套零耦合。(6) 保留项澄清：_build_grounding_facts（L750-1208）和 _build_overall_prompt 的 Grounding Evidence Cards / Grounding requirements 段落保留——它们是本地确定性 prompt 构造，是当前生产 LLM 输入的一部分，与谷歌无关；reviewer 免扣费语义不在本文件组（本文件无 _resolve_user_and_review、无扣费逻辑），channel_grounding_enabled 的去留属 services/review_channel.py 所在组——注意该文件同时承载 reviewer 渠道判定，不可整文件删除。(7) 顺带发现：CLAUDE.md 中 \"test_report_insights.py 单元测试（3 个）\" 计数早已过期，摘除后约 14 个，可顺手修正但非必须。"
+}

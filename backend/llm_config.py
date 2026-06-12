@@ -191,7 +191,7 @@ def get_providers(
 
     for template in PROVIDERS:
         p = dict(template)
-        if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions", "report_grounding_check") and p.get("subq_max_tokens"):
+        if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions") and p.get("subq_max_tokens"):
             p["max_tokens"] = p["subq_max_tokens"]
         if p.get("vision_only") and not requires_images:
             continue

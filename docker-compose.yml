@@ -31,7 +31,6 @@ services:
       - ./prompts:/app/subject_prompts  # 多学科 prompt 模板
       - ./uploads:/app/uploads
       - ./backend/rules:/app/rules
-      - ./.credentials:/app/.credentials:ro
       - ./reports:/app/reports
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -48,18 +47,6 @@ services:
       - QWEN_VISION_MODEL=${QWEN_VISION_MODEL:-qwen3-vl-plus}
       - LLM_VISION_PROVIDER=${LLM_VISION_PROVIDER:-auto}
       - LLM_ENABLE_QWEN_TEXT_FALLBACK=${LLM_ENABLE_QWEN_TEXT_FALLBACK:-false}
-      - LLM_SA_CREDENTIALS=${LLM_SA_CREDENTIALS}
-      - LLM_PROJECT=${LLM_PROJECT}
-      - LLM_LOCATION=${LLM_LOCATION:-global}
-      - LLM_EXAM_REVIEW_FLASH_MODEL=${LLM_EXAM_REVIEW_FLASH_MODEL}
-      - LLM_EXAM_REVIEW_PRO_MODEL=${LLM_EXAM_REVIEW_PRO_MODEL}
-      - EXAM_REVIEW_CHANNEL=${EXAM_REVIEW_CHANNEL:-agent_search}
-      - REPORT_GROUNDING_ENABLED=${REPORT_GROUNDING_ENABLED:-true}
-      - REPORT_GROUNDING_MIN_SUPPORT=${REPORT_GROUNDING_MIN_SUPPORT:-0.6}
-      - REPORT_GROUNDING_CITATION_THRESHOLD=${REPORT_GROUNDING_CITATION_THRESHOLD:-0.6}
-      - EVIDENCE_RANKING_ENABLED=${EVIDENCE_RANKING_ENABLED:-true}
-      - EVIDENCE_RANKING_TOP_N=${EVIDENCE_RANKING_TOP_N:-5}
-      - HTTPS_PROXY=${HTTPS_PROXY}
     depends_on:
       postgres:
         condition: service_healthy

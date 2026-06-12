@@ -13,29 +13,10 @@ function AnalyzerPage() {
   const [error, setError] = useState(null)
   const [mode, setMode] = useState('deep')
   const [generateReport, setGenerateReport] = useState(false)
-  const [reviewChannel, setReviewChannel] = useState('evidence')
   const [dragOver, setDragOver] = useState(false)
   const [progress, setProgress] = useState(null)
   const fileInputRef = useRef(null)
   const pollingRef = useRef(false)
-  const reviewChannelOptions = [
-    {
-      id: 'evidence',
-      label: '证据增强审题',
-      help: '检索相关证据，校验审题结论。',
-    },
-    {
-      id: 'agent_search',
-      label: '智能体证据链路',
-      help: '检索证据后获取带引用的答案，注入逐题审题。',
-    },
-    {
-      id: 'model',
-      label: '普通模型审题',
-      help: '只走模型生成，不要求 证据服务门禁。',
-    },
-  ]
-  const activeReviewChannel = reviewChannelOptions.find(option => option.id === reviewChannel) || reviewChannelOptions[0]
 
   const [token, setToken] = useState(() => localStorage.getItem('bio_token') || '')
   const [user, setUser] = useState(() => {
@@ -61,6 +42,17 @@ function AnalyzerPage() {
 
   useEffect(() => {
     return () => { pollingRef.current = false }
+  }, [])
+
+  // 页面加载时恢复未完成的分析任务（浏览器关闭重开后仍可跟踪后台任务）
+  useEffect(() => {
+    const pendingTaskId = localStorage.getItem('bio_task_id')
+    if (pendingTaskId && token) {
+      setLoading(true)
+      setProgress({ progress: 0, total: 0, message: '恢复任务进度...' })
+      pollTaskStatus(pendingTaskId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleLogin = async (e) => {
@@ -137,6 +129,7 @@ function AnalyzerPage() {
 
         if (data.status === 'completed') {
           pollingRef.current = false
+          localStorage.removeItem('bio_task_id')
           setResult(data.result)
           setLoading(false)
           setProgress(null)
@@ -145,6 +138,7 @@ function AnalyzerPage() {
         }
         if (data.status === 'failed') {
           pollingRef.current = false
+          localStorage.removeItem('bio_task_id')
           setError(data.error || '分析失败')
           setLoading(false)
           setProgress(null)
@@ -155,6 +149,7 @@ function AnalyzerPage() {
         if (!pollingRef.current) return
         if (err.response?.status === 404) {
           pollingRef.current = false
+          localStorage.removeItem('bio_task_id')
           setLoading(false)
           setProgress(null)
           return
@@ -179,13 +174,13 @@ function AnalyzerPage() {
       formData.append('file', file)
       formData.append('mode', mode)
       formData.append('generate_report', generateReport)
-      formData.append('exam_review_channel', reviewChannel)
 
       const response = await axios.post('/api/analyze_auto', formData, {
         headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
       })
 
       const { task_id, total } = response.data
+      localStorage.setItem('bio_task_id', task_id)
       setProgress({ progress: 0, total: total || 0, message: '任务已提交，开始分析...' })
       pollTaskStatus(task_id)
     } catch (err) {
@@ -360,38 +355,6 @@ function AnalyzerPage() {
               </div>
             </div>
           )}
-
-          {/* 审题渠道 */}
-          <div style={{ marginBottom: '28px' }}>
-            <div style={{ padding: '18px 20px', border: '2px solid var(--color-border-light)', borderRadius: '16px', background: 'var(--color-bg)' }}>
-              <div className="flex items-center justify-between gap-3" style={{ marginBottom: '12px' }}>
-                <span className="font-semibold flex items-center" style={{ color: 'var(--color-primary)' }}>
-                  <Brain size={16} className="inline mr-1.5" /> 审题渠道
-                </span>
-                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>当前: {activeReviewChannel.label}</span>
-              </div>
-              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-                {reviewChannelOptions.map(option => (
-                  <button key={option.id} type="button" onClick={() => setReviewChannel(option.id)}
-                    className="transition-all"
-                    style={{
-                      minHeight: '72px', padding: '10px 12px', borderRadius: '12px',
-                      border: reviewChannel === option.id ? '2px solid var(--color-primary-light)' : '1px solid var(--color-border-light)',
-                      background: reviewChannel === option.id ? 'var(--macaron-mint-light)' : '#fff',
-                      color: 'var(--color-primary)',
-                      fontWeight: reviewChannel === option.id ? 700 : 500,
-                      textAlign: 'left',
-                    }}>
-                    <span style={{ display: 'block', marginBottom: '4px' }}>{option.label}</span>
-                    <span className="text-xs" style={{ display: 'block', color: 'var(--color-muted)', lineHeight: 1.35, fontWeight: 500 }}>{option.help}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs" style={{ marginTop: '10px', color: 'var(--color-muted)', lineHeight: 1.6 }}>
-                {activeReviewChannel.help} 缺少必需证据会直接报错，不生成伪正常报告。
-              </p>
-            </div>
-          </div>
 
           {/* 报告选项 */}
           <div style={{ marginBottom: '28px' }}>

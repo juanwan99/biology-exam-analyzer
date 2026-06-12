@@ -27,7 +27,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+    for key in ("provider_errors", "status", "model_policy"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata
@@ -753,9 +753,6 @@ class QuestionAnalyzer:
         question_id: int,
         question_type: str = "unknown",
         section_header: str = None,
-        evidence_context_provider=None,
-        evidence_ranking_enabled: bool | str | None = None,
-        agent_search_enabled: bool | str | None = None,
     ) -> dict:
         """
         第二次调用：分析单道题目
@@ -799,8 +796,6 @@ class QuestionAnalyzer:
 
         prompt_hash = sha256(analysis_prompt_template.encode("utf-8")).hexdigest()
         analysis_prompt_id = "biology.question_analysis." + ("v" + "2" if use_v2 else "v1")
-        evidence_context_meta = None
-        evidence_context_text = ""
         question_media_items = _question_images_to_media_items(question_images)
         question_media_refs = media_input_refs(question_media_items)
         visual_context_text = ""
@@ -820,8 +815,6 @@ class QuestionAnalyzer:
             }
             if metadata_extra:
                 metadata.update(metadata_extra)
-            if evidence_context_meta:
-                metadata["evidence_context"] = evidence_context_meta
             if visual_context_text:
                 metadata["visual_context_source"] = "qwen_vision"
             provider, model, fallback_count, metadata = _llm_call_trace(metadata)
@@ -860,8 +853,6 @@ class QuestionAnalyzer:
                 validation_errors,
                 **call_kwargs,
             ))
-            if evidence_context_meta:
-                payload["_evidence_context"] = evidence_context_meta
             payload["_llm_calls"] = calls
             return payload
 
@@ -871,64 +862,6 @@ class QuestionAnalyzer:
 
         # 构造完整Prompt
         prompt_sections = [analysis_prompt]
-        from services.evidence_context import (
-            QuestionEvidenceContextBuilder,
-            evidence_ranking_enabled as _evidence_ranking_enabled,
-        )
-        def _is_transient_evidence_context_error(exc: Exception) -> bool:
-            text = str(exc).lower()
-            transient_markers = (
-                "access token failed",
-                "transporterror",
-                "proxyerror",
-                "remote end closed connection",
-                "connectionpool",
-                "read timed out",
-                "connect timeout",
-                "temporarily unavailable",
-                "connection reset",
-            )
-            return any(marker in text for marker in transient_markers)
-
-        if _evidence_ranking_enabled(evidence_ranking_enabled):
-            provider = evidence_context_provider or QuestionEvidenceContextBuilder()
-            evidence_context = None
-            evidence_context_errors = []
-            for attempt in range(3):
-                try:
-                    evidence_context = await provider.build_question_context(
-                        question_text=question_text,
-                        question_id=question_id,
-                        question_type=question_type,
-                        section_header=section_header,
-                        agent_search_enabled=agent_search_enabled,
-                    )
-                    break
-                except Exception as exc:
-                    evidence_context_errors.append(str(exc))
-                    if attempt < 2 and _is_transient_evidence_context_error(exc):
-                        wait_seconds = 2 ** attempt
-                        logger.warning(
-                            "[证据重排] 题目%s transient error，%ss 后重试 %s/2: %s",
-                            question_id,
-                            wait_seconds,
-                            attempt + 1,
-                            str(exc)[:160],
-                        )
-                        await asyncio.sleep(wait_seconds)
-                        continue
-                    raise RuntimeError(
-                        f"题目{question_id}证据重排失败（证据排序服务）: {exc}"
-                    ) from exc
-            evidence_context_text = str(evidence_context.get("context_text") or "").strip()
-            if not evidence_context_text:
-                raise RuntimeError(
-                    f"题目{question_id}证据重排失败（证据排序服务）: empty context"
-                )
-            prompt_sections.append(evidence_context_text)
-            evidence_context_meta = evidence_context.get("metadata") or {}
-            if evidence_context_errors:
-                evidence_context_meta["retry_errors"] = evidence_context_errors
 
         if question_media_items:
             visual_context_text, visual_call_record = await extract_visual_context(

@@ -59,7 +59,7 @@ class TestGenerateInsights:
         """精简档只调用 1 次 GPT"""
         mock_gpt.return_value = MOCK_OVERALL_RESPONSE
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="brief")
         assert mock_gpt.call_count == 2  # overall + teaching
         assert "overall_assessment" in result
         assert len(result["recommendations"]) >= 1
@@ -73,7 +73,7 @@ class TestGenerateInsights:
         sample_report_data["questions"][0]["teacher_comment"] = "本题考查光合作用基本概念。"
         sample_report_data["questions"][1]["teacher_comment"] = "需要综合分析系谱图。"
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="full", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="full")
         assert mock_gpt.call_count == 2  # overall + teaching
         assert "question_comments" in result
         assert "1" in result["question_comments"]
@@ -97,7 +97,7 @@ class TestGenerateInsights:
         })
         mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, mock_teaching]
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="brief")
         ts = result["teaching_suggestions"]
         assert len(ts["error_categories"]) == 1
         assert ts["error_categories"][0]["category"] == "概念混淆"
@@ -115,7 +115,7 @@ class TestGenerateInsights:
         ]
         from report_insights import generate_insights
         with pytest.raises(RuntimeError, match="LLM .*生成失败"):
-            await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+            await generate_insights(sample_report_data, mode="brief")
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_teaching_suggestions_compact_retry_succeeds(self, mock_gpt, sample_report_data):
@@ -138,7 +138,7 @@ class TestGenerateInsights:
         ]
         from report_insights import generate_insights
 
-        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="brief")
 
         assert mock_gpt.call_count == 3
         assert result["teaching_suggestions"]["error_categories"][0]["category"] == "审题不清"
@@ -171,7 +171,7 @@ class TestGenerateInsights:
         ]
         from report_insights import generate_insights
 
-        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="brief")
 
         assert mock_gpt.call_count == 4
         assert result["teaching_suggestions"]["error_categories"][0]["category"] == "推理错误"
@@ -202,7 +202,7 @@ class TestGenerateInsights:
             valid_teaching,
         ]
         from report_insights import generate_insights
-        result = await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        result = await generate_insights(sample_report_data, mode="brief")
         assert "teaching_suggestions" in result
         budgets = [
             c.kwargs["max_tokens"]
@@ -220,53 +220,7 @@ class TestGenerateInsights:
         mock_gpt.side_effect = RuntimeError("API 超时")
         from report_insights import generate_insights
         with pytest.raises(RuntimeError, match="LLM 分析生成失败"):
-            await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
-
-    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
-    async def test_grounding_enabled_attaches_check_result(self, mock_gpt, sample_report_data):
-        """开启 grounding 后，整卷综合分析需要留下证据校验结果。"""
-        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
-
-        class FakeGateway:
-            def __init__(self):
-                self.calls = []
-
-            async def check_grounding(self, **kwargs):
-                self.calls.append(kwargs)
-                return {
-                    "status": "ok",
-                    "support_score": 0.84,
-                    "threshold": 0.6,
-                    "claim_count": 3,
-                    "cited_chunk_count": 2,
-                    "metadata": {"provider": "evidence_service"},
-                }
-
-        gateway = FakeGateway()
-        from report_insights import generate_insights
-
-        result = await generate_insights(
-            sample_report_data,
-            mode="brief",
-            evidence_gateway=gateway,
-            grounding_enabled=True,
-        )
-
-        assert len(gateway.calls) >= 4
-        assert "本卷难度适中" in gateway.calls[0]["answer"]
-        assert gateway.calls[0]["facts"]
-        grounded_sections = [check["section"] for check in result["_grounding_checks"]]
-        assert "overall_assessment" in grounded_sections
-        assert "difficulty_analysis" in grounded_sections
-        assert "knowledge_analysis" in grounded_sections
-        assert grounded_sections
-        assert len(result["_grounding_checks"]) == len(gateway.calls)
-        assert result["_grounding_checks"][0]["status"] == "ok"
-        assert result["_grounding_checks"][0]["support_score"] == 0.84
-        assert result["_llm_calls"][1]["purpose"] == "report_grounding_check"
-        assert result["_llm_calls"][1]["provider"] == "evidence_service"
-        assert result["_llm_calls"][1]["model"] == "check_grounding"
-        assert result["_llm_calls"][1]["metadata"]["section_count"] == len(gateway.calls)
+            await generate_insights(sample_report_data, mode="brief")
 
     async def test_grounding_facts_are_section_cards_and_traceable(self, sample_report_data):
         from report_insights import _build_grounding_facts
@@ -346,76 +300,6 @@ class TestGenerateInsights:
         assert "主要素养分布中科学思维为10题" in competency_card["factText"]
         assert "主要素养分布中生命观念为11题" in competency_card["factText"]
 
-    async def test_grounding_sections_split_long_analysis_into_short_claims(self):
-        from report_insights import _build_grounding_sections
-
-        sections = _build_grounding_sections({
-            "bloom_analysis": "平均认知层级为6.47。高阶思维占比为58.8%。对难度贡献最大的维度包含认知层级。",
-        })
-
-        names = [section["section"] for section in sections]
-        answers = [section["answer"] for section in sections]
-        assert names == ["bloom_analysis#1", "bloom_analysis#2", "bloom_analysis#3"]
-        assert answers[0] == "平均认知层级为6.47。"
-
-    async def test_grounding_sections_check_recommendation_basis_not_directive(self):
-        from report_insights import _build_grounding_sections
-
-        sections = _build_grounding_sections({
-            "difficulty_analysis": "简单题为0题。建议增加简单题。",
-            "recommendations": [
-                {
-                    "category": "难度调整",
-                    "content": "困难题分值占比为61.2%。建议降低困难题比例或增加低门槛题。",
-                },
-            ],
-        })
-
-        answers = [section["answer"] for section in sections]
-        recommendation_section = next(
-            section for section in sections
-            if section["section"] == "recommendations"
-        )
-
-        assert "建议增加简单题。" not in answers
-        assert recommendation_section["answer"] == "困难题分值占比为61.2%。"
-        assert recommendation_section["kind"] == "policy_basis"
-        assert "建议降低困难题比例" in recommendation_section["policy_text"]
-
-    async def test_grounding_sections_skip_pure_policy_and_low_signal_claims(self):
-        from report_insights import _build_grounding_sections
-
-        sections = _build_grounding_sections({
-            "difficulty_analysis": "\u5efa\u8bae\u5927\u5e45\u8c03\u6574\u56f0\u96be\u9898\u6bd4\u4f8b\uff0c\u589e\u52a0\u7b80\u5355\u9898\u3002",
-            "knowledge_analysis": "\u8584\u5f31\u73af\u8282\u5728\u9009\u62e9\u6027\u5fc5\u4fee3\uff0c\u5982\u57fa\u56e0\u5de5\u7a0b\u3001\u7ec6\u80de\u5de5\u7a0b\u7b49\u6a21\u5757\u8003\u67e5\u4e0d\u8db3\u3002",
-            "bloom_analysis": "\u9ad8\u9636\u601d\u7ef4\uff08\u5206\u6790\u3001\u8bc4\u4ef7\u3001\u521b\u9020\uff09\u5408\u8ba1\u536054.0%\uff0c\u6574\u4f53\u601d\u7ef4\u5c42\u7ea7\u8f83\u9ad8\uff0c\u4f46\u57fa\u7840\u6027\u8bc6\u8bb0\u8003\u67e5\u4e0d\u8db3\uff0c\u53ef\u80fd\u5f71\u54cd\u4f4e\u5c42\u6b21\u8ba4\u77e5\u7684\u8986\u76d6\u9762\u3002",
-        })
-
-        answers = [section["answer"] for section in sections]
-        assert "\u5efa\u8bae\u5927\u5e45\u8c03\u6574\u56f0\u96be\u9898\u6bd4\u4f8b\u3002" not in answers
-        assert not any("\u8584\u5f31\u73af\u8282" in answer for answer in answers)
-        assert any("54.0%" in answer for answer in answers)
-        assert not any("\u53ef\u80fd\u5f71\u54cd" in answer for answer in answers)
-
-    async def test_grounding_sections_rewrite_pronoun_score_claims(self):
-        from report_insights import _build_grounding_sections
-
-        text = (
-            "\u6743\u91cd\u6700\u9ad8\u7684\u77e5\u8bc6\u70b9\u4e3a\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u3002"
-            "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.5\u3002"
-            "\u5176\u6b21\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u3002"
-            "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002"
-        )
-
-        sections = _build_grounding_sections({"knowledge_analysis": text})
-        answers = [section["answer"] for section in sections]
-
-        assert "\u6700\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u3002" in answers
-        assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u3002" in answers
-        assert "\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b\u52a0\u6743\u5206\u503c\u4e3a4.5\u3002" in answers
-        assert "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002" in answers
-        assert "\u5176\u52a0\u6743\u5206\u503c\u4e3a4.1\u3002" not in answers
-
     async def test_grounding_facts_include_ranked_knowledge_detail(self, sample_report_data):
         from report_insights import _build_grounding_facts
 
@@ -444,23 +328,6 @@ class TestGenerateInsights:
         assert "优先使用 Grounding Evidence Cards" in prompt
         assert "不要写“信度”" in prompt
 
-    async def test_grounding_answer_separates_sections_with_blank_lines(self):
-        from report_insights import _build_grounding_answer
-
-        answer = _build_grounding_answer({
-            "overall_assessment": "总评。",
-            "difficulty_analysis": "难度。",
-            "knowledge_analysis": "知识。",
-            "competency_analysis": "素养。",
-            "bloom_analysis": "认知。",
-            "recommendations": [
-                {"content": "建议一。"},
-            ],
-        })
-
-        assert "知识。\n\n素养。" in answer
-        assert "认知。\n\n建议一。" in answer
-
     async def test_grounding_facts_include_exact_zero_primary_summary(self, sample_report_data):
         from report_insights import _build_grounding_facts
 
@@ -475,53 +342,6 @@ class TestGenerateInsights:
         joined = "\n".join(fact["factText"] for fact in facts)
 
         assert "主要素养为0题的维度为科学探究、社会责任" in joined
-
-    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
-    async def test_grounding_low_support_marks_report_needs_review(self, mock_gpt, sample_report_data):
-        """低 supportScore 不伪装成功，应标记报告需复核。"""
-        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
-
-        class FakeGateway:
-            async def check_grounding(self, **kwargs):
-                return {
-                    "status": "needs_review",
-                    "support_score": 0.42,
-                    "threshold": 0.6,
-                    "claim_count": 2,
-                    "cited_chunk_count": 0,
-                    "metadata": {"provider": "evidence_service"},
-                }
-
-        from report_insights import generate_insights
-
-        result = await generate_insights(
-            sample_report_data,
-            mode="brief",
-            evidence_gateway=FakeGateway(),
-            grounding_enabled=True,
-        )
-
-        assert result["_grounding_status"] == "needs_review"
-        assert result["_grounding_checks"][0]["support_score"] == 0.42
-
-    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
-    async def test_grounding_failure_raises_report_generation_error(self, mock_gpt, sample_report_data):
-        """grounding 开启后失败必须中断报告生成，不能静默吞掉。"""
-        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
-
-        class FailingGateway:
-            async def check_grounding(self, **kwargs):
-                raise RuntimeError("grounding permission denied")
-
-        from report_insights import generate_insights
-
-        with pytest.raises(RuntimeError, match="grounding permission denied"):
-            await generate_insights(
-                sample_report_data,
-                mode="brief",
-                evidence_gateway=FailingGateway(),
-                grounding_enabled=True,
-            )
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
     async def test_report_llm_calls_record_actual_provider_model(self, mock_gpt, sample_report_data, monkeypatch):
@@ -543,7 +363,6 @@ class TestGenerateInsights:
         result = await report_insights.generate_insights(
             sample_report_data,
             mode="brief",
-            grounding_enabled=False,
         )
 
         calls = result["_llm_calls"]
@@ -557,7 +376,7 @@ class TestGenerateInsights:
 
         from report_insights import generate_insights
 
-        await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        await generate_insights(sample_report_data, mode="brief")
 
         temperatures = [
             call.kwargs.get("temperature")
@@ -572,27 +391,7 @@ class TestGenerateInsights:
 
         from report_insights import generate_insights
 
-        await generate_insights(sample_report_data, mode="brief", grounding_enabled=False)
+        await generate_insights(sample_report_data, mode="brief")
 
         assert mock_gpt.call_args_list[0].kwargs["purpose"] == "report_insights"
         assert mock_gpt.call_args_list[0].kwargs["max_tokens"] >= 4096
-
-    async def test_formal_grounded_insights_rewrite_unverified_llm_claims(self, sample_report_data):
-        from report_insights import _stabilize_grounded_insights
-
-        sample_report_data["metadata_quality"] = {"llm_call_counts": {"question_analysis": 2}}
-        draft = {
-            "overall_assessment": "UNSUPPORTED claim about unmeasured discrimination.",
-            "recommendations": [],
-            "difficulty_analysis": "",
-            "knowledge_analysis": "",
-            "competency_analysis": "",
-            "bloom_analysis": "",
-        }
-
-        result = _stabilize_grounded_insights(draft, sample_report_data)
-
-        assert result["_stabilized_for_grounding"] is True
-        assert "UNSUPPORTED" not in result["overall_assessment"]
-        assert "平均难度为5" in result["overall_assessment"]
-        assert result["recommendations"]

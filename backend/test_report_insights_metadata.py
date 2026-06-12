@@ -70,7 +70,7 @@ async def test_generate_insights_attaches_report_llm_call_metadata(monkeypatch):
 
     monkeypatch.setattr(report_insights, "send_message_gpt", fake_send_message)
 
-    result = await generate_insights(_report_data(), mode="brief", grounding_enabled=False)
+    result = await generate_insights(_report_data(), mode="brief")
 
     assert len(prompts) == 2
     assert result["_llm_calls"][0]["purpose"] == "report_insights"

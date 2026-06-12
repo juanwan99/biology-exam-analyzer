@@ -41,27 +41,6 @@ def _ready_question(question_id=1):
     }
 
 
-def _ready_question_with_ranked_evidence(question_id=1):
-    question = _ready_question(question_id)
-    question.update({
-        "content": "Question stem",
-        "total_score": 2,
-        "analysis": {"answer": "A", "knowledge_points": ["遗传规律"], "total_score": 2},
-        "difficulty": {"final_difficulty": 5.0, "features": {"_feature_status": "ok"}},
-        "competency": {"primary_competency": "科学思维"},
-    })
-    question["_metadata_envelope"]["llm_calls"][0]["metadata"] = {
-        "evidence_context": {
-            "provider": "evidence_service",
-            "operation": "rank",
-            "question_id": question_id,
-            "ranked_count": 5,
-            "candidate_count": 32,
-        }
-    }
-    return question
-
-
 def _ready_question_with_envelope(question_id=1, *, purposes=None, warnings=None):
     purposes = purposes or ["question_analysis", "feature_extraction", "competency_analysis"]
     calls = [
@@ -132,71 +111,7 @@ class FakeCompetencyAnalyzer:
 
 
 @pytest.mark.asyncio
-async def test_analyze_question_app_builder_channel_enables_evidence_ranking():
-    class RecordingAnalyzer(FakeAnalyzer):
-        def __init__(self):
-            self.calls = []
-
-        async def analyze_question(self, **kwargs):
-            self.calls.append(kwargs)
-            return await super().analyze_question(**kwargs)
-
-    analyzer = RecordingAnalyzer()
-    service = AnalysisService(
-        analyzer=analyzer,
-        difficulty_engine=FakeDifficultyEngine(),
-        competency_analyzer=FakeCompetencyAnalyzer(),
-        knowledge_mapper=None,
-        doc_processor=None,
-        word_splitter=None,
-        pdf_splitter=None,
-    )
-
-    await service.analyze_question(
-        {"id": 1, "content": "question", "total_score": 2},
-        image_bytes=[],
-        mode="deep",
-        exam_review_channel="app_builder",
-    )
-
-    assert analyzer.calls[0]["evidence_ranking_enabled"] is True
-    assert analyzer.calls[0]["agent_search_enabled"] is False
-
-
-@pytest.mark.asyncio
-async def test_analyze_question_agent_search_channel_enables_answer_context():
-    class RecordingAnalyzer(FakeAnalyzer):
-        def __init__(self):
-            self.calls = []
-
-        async def analyze_question(self, **kwargs):
-            self.calls.append(kwargs)
-            return await super().analyze_question(**kwargs)
-
-    analyzer = RecordingAnalyzer()
-    service = AnalysisService(
-        analyzer=analyzer,
-        difficulty_engine=FakeDifficultyEngine(),
-        competency_analyzer=FakeCompetencyAnalyzer(),
-        knowledge_mapper=None,
-        doc_processor=None,
-        word_splitter=None,
-        pdf_splitter=None,
-    )
-
-    await service.analyze_question(
-        {"id": 1, "content": "question", "total_score": 2},
-        image_bytes=[],
-        mode="deep",
-        exam_review_channel="agent_search",
-    )
-
-    assert analyzer.calls[0]["evidence_ranking_enabled"] is True
-    assert analyzer.calls[0]["agent_search_enabled"] is True
-
-
-@pytest.mark.asyncio
-async def test_analyze_question_model_channel_disables_evidence_ranking():
+async def test_analyze_question_does_not_forward_evidence_channel_kwargs():
     class RecordingAnalyzer(FakeAnalyzer):
         def __init__(self):
             self.calls = []
@@ -223,136 +138,8 @@ async def test_analyze_question_model_channel_disables_evidence_ranking():
         exam_review_channel="model",
     )
 
-    assert analyzer.calls[0]["evidence_ranking_enabled"] is False
-    assert analyzer.calls[0]["agent_search_enabled"] is False
-
-
-@pytest.mark.asyncio
-async def test_auto_analysis_blocks_app_builder_when_ranking_usage_missing():
-    class LocalWordSplitter:
-        def split(self, file_path):
-            return {"questions": [{"id": 1, "content": "Question stem", "total_score": 2}]}
-
-    class LocalDocProcessor:
-        def process_docx(self, file_path):
-            return []
-
-    service = AnalysisService(
-        analyzer=None,
-        difficulty_engine=None,
-        competency_analyzer=None,
-        knowledge_mapper=None,
-        doc_processor=LocalDocProcessor(),
-        word_splitter=LocalWordSplitter(),
-        pdf_splitter=None,
-    )
-
-    async def fake_analyze_questions_batch(
-        questions, image_bytes, mode, subject="biology", exam_review_channel=None
-    ):
-        return [_ready_question(1)]
-
-    service.analyze_questions_batch = fake_analyze_questions_batch
-    service.build_competency_summary = lambda questions: {}
-    service.aggregate_statistics = lambda questions, competency_summary: {}
-
-    with pytest.raises(RuntimeError, match="缺少 Ranking 证据"):
-        await service.run_auto_analysis(
-            "exam.docx",
-            "exam.docx",
-            b"",
-            generate_report=False,
-            exam_review_channel="app_builder",
-        )
-
-
-def test_evidence_channel_allows_direct_model_generation_when_ranking_recorded():
-    usage = {
-        "direct_model_call_count": 1,
-        "evidence_generation_count": 0,
-        "evidence_rank_count": 1,
-        "missing_rank_question_ids": [],
-    }
-
-    AnalysisService.assert_channel_usage("app_builder", usage)
-
-
-def test_evidence_channel_blocks_question_missing_ranked_evidence():
-    usage = {
-        "direct_model_call_count": 2,
-        "evidence_rank_count": 1,
-        "missing_rank_question_ids": [21],
-    }
-
-    with pytest.raises(RuntimeError, match="第 21 题缺少 Ranking 证据"):
-        AnalysisService.assert_channel_usage("app_builder", usage)
-
-
-def test_agent_search_channel_requires_answer_query_evidence():
-    usage = {
-        "direct_model_call_count": 1,
-        "evidence_rank_count": 1,
-        "missing_rank_question_ids": [],
-        "agent_search_answer_count": 0,
-    }
-
-    with pytest.raises(RuntimeError, match="answer_query evidence"):
-        AnalysisService.assert_channel_usage("agent_search", usage)
-
-
-def test_agent_search_channel_accepts_rank_and_answer_query_evidence():
-    usage = {
-        "direct_model_call_count": 1,
-        "evidence_rank_count": 1,
-        "missing_rank_question_ids": [],
-        "agent_search_answer_count": 1,
-    }
-
-    AnalysisService.assert_channel_usage("agent_search", usage)
-
-
-@pytest.mark.asyncio
-async def test_auto_analysis_reports_app_builder_channel_usage_when_ranking_recorded():
-    class LocalWordSplitter:
-        def split(self, file_path):
-            return {"questions": [{"id": 1, "content": "Question stem", "total_score": 2}]}
-
-    class LocalDocProcessor:
-        def process_docx(self, file_path):
-            return []
-
-    service = AnalysisService(
-        analyzer=None,
-        difficulty_engine=None,
-        competency_analyzer=None,
-        knowledge_mapper=None,
-        doc_processor=LocalDocProcessor(),
-        word_splitter=LocalWordSplitter(),
-        pdf_splitter=None,
-    )
-
-    async def fake_analyze_questions_batch(
-        questions, image_bytes, mode, subject="biology", exam_review_channel=None
-    ):
-        return [_ready_question_with_ranked_evidence(1)]
-
-    service.analyze_questions_batch = fake_analyze_questions_batch
-    service.build_competency_summary = lambda questions: {}
-    service.aggregate_statistics = lambda questions, competency_summary: {}
-
-    result = await service.run_auto_analysis(
-        "exam.docx",
-        "exam.docx",
-        b"",
-        generate_report=False,
-        exam_review_channel="app_builder",
-    )
-
-    assert result["channel_usage"]["evidence_rank_count"] == 1
-    assert result["channel_usage"]["evidence_rank_question_ids"] == [1]
-    assert result["channel_usage"]["model_call_count"] == 3
-    assert result["channel_usage"]["direct_model_call_count"] == 3
-    assert result["channel_usage"]["evidence_generation_count"] == 0
+    assert "evidence_ranking_enabled" not in analyzer.calls[0]
+    assert "agent_search_enabled" not in analyzer.calls[0]
 
 
 @pytest.mark.asyncio
@@ -968,7 +755,7 @@ async def test_auto_pdf_analysis_propagates_document_failure_events():
 
 
 @pytest.mark.asyncio
-async def test_generate_report_delegates_grounding_to_environment_and_stores_report_insights(monkeypatch, tmp_path):
+async def test_generate_report_stores_report_insights(monkeypatch, tmp_path):
     service = _service_without_dependencies()
     monkeypatch.delenv("EXAM_REVIEW_CHANNEL", raising=False)
     monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
@@ -988,12 +775,10 @@ async def test_generate_report_delegates_grounding_to_environment_and_stores_rep
         }
 
     async def fake_generate_insights(report_data, mode="full", **kwargs):
-        captured["grounding_enabled"] = kwargs.get("grounding_enabled")
+        captured["kwargs"] = kwargs
         return {
             "overall_assessment": "ok",
-            "_grounding_status": "ok",
-            "_grounding_checks": [{"status": "ok", "support_score": 0.9}],
-            "_llm_calls": [_call("report-grounding", "report_grounding_check", "GroundingCheck")],
+            "_llm_calls": [_call("report-insights", "report_insights", "InsightsResult")],
         }
 
     def fake_write_report_artifacts(report_data, insights, mode="full", pdf_path=None):
@@ -1016,158 +801,9 @@ async def test_generate_report_delegates_grounding_to_environment_and_stores_rep
     )
 
     assert result == str(pdf_path)
-    assert captured["grounding_enabled"] is None
-    assert captured["insights"]["_grounding_status"] == "ok"
-    assert service._last_report_insights["_grounding_checks"][0]["support_score"] == 0.9
-
-
-@pytest.mark.asyncio
-async def test_generate_report_app_builder_channel_enables_grounding(monkeypatch, tmp_path):
-    service = _service_without_dependencies()
-    monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
-    captured = {}
-
-    monkeypatch.setattr("report_data.aggregate_report_data", lambda *args, **kwargs: {"questions": [], "exam_info": {}})
-
-    async def fake_generate_insights(report_data, mode="full", **kwargs):
-        captured["grounding_enabled"] = kwargs.get("grounding_enabled")
-        return {
-            "_grounding_status": "ok",
-            "_grounding_checks": [{
-                "support_score": 0.9,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
-            }],
-        }
-
-    monkeypatch.setattr("report_insights.generate_insights", fake_generate_insights)
-    monkeypatch.setattr("report_product_publish.write_report_artifacts", lambda *args, **kwargs: None)
-    monkeypatch.setattr("exam_diagnostics.diagnose_exam", lambda *args, **kwargs: {})
-
-    await service.generate_report(
-        [_ready_question_with_ranked_evidence(1)],
-        {},
-        {},
-        {"name": "exam"},
-        output_path=str(tmp_path / "report.pdf"),
-        exam_review_channel="app_builder",
-    )
-
-    assert captured["grounding_enabled"] is True
-
-
-@pytest.mark.asyncio
-async def test_generate_report_model_channel_disables_grounding(monkeypatch, tmp_path):
-    service = _service_without_dependencies()
-    monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
-    captured = {}
-
-    monkeypatch.setattr("report_data.aggregate_report_data", lambda *args, **kwargs: {"questions": [], "exam_info": {}})
-
-    async def fake_generate_insights(report_data, mode="full", **kwargs):
-        captured["grounding_enabled"] = kwargs.get("grounding_enabled")
-        return {}
-
-    monkeypatch.setattr("report_insights.generate_insights", fake_generate_insights)
-    monkeypatch.setattr("report_product_publish.write_report_artifacts", lambda *args, **kwargs: None)
-    monkeypatch.setattr("exam_diagnostics.diagnose_exam", lambda *args, **kwargs: {})
-
-    await service.generate_report(
-        [_ready_question(1)],
-        {},
-        {},
-        {"name": "exam"},
-        output_path=str(tmp_path / "report.pdf"),
-        exam_review_channel="model",
-    )
-
-    assert captured["grounding_enabled"] is False
-
-
-@pytest.mark.asyncio
-async def test_generate_report_blocks_app_builder_grounding_needs_review(monkeypatch, tmp_path):
-    service = _service_without_dependencies()
-    monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
-    write_called = False
-
-    monkeypatch.setattr("report_data.aggregate_report_data", lambda *args, **kwargs: {"questions": [], "exam_info": {}})
-
-    async def fake_generate_insights(report_data, mode="full", **kwargs):
-        return {
-            "_grounding_status": "needs_review",
-            "_grounding_checks": [{
-                "status": "needs_review",
-                "support_score": 0.42,
-                "threshold": 0.6,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
-            }],
-            "_llm_calls": [_call("report-grounding", "report_grounding_check", "GroundingCheck")],
-        }
-
-    def fake_write_report_artifacts(*args, **kwargs):
-        nonlocal write_called
-        write_called = True
-
-    monkeypatch.setattr("report_insights.generate_insights", fake_generate_insights)
-    monkeypatch.setattr("report_product_publish.write_report_artifacts", fake_write_report_artifacts)
-    monkeypatch.setattr("exam_diagnostics.diagnose_exam", lambda *args, **kwargs: {})
-
-    with pytest.raises(RuntimeError, match="report_grounding"):
-        await service.generate_report(
-            [_ready_question_with_ranked_evidence(1)],
-            {},
-            {},
-            {"name": "exam"},
-            output_path=str(tmp_path / "report.pdf"),
-            exam_review_channel="app_builder",
-        )
-
-    assert write_called is False
-
-
-@pytest.mark.asyncio
-async def test_generate_report_grounding_validation_error_is_readable_block(monkeypatch, tmp_path):
-    service = _service_without_dependencies()
-    monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
-
-    monkeypatch.setattr(
-        "report_data.aggregate_report_data",
-        lambda *args, **kwargs: {"questions": [], "exam_info": {}},
-    )
-
-    grounding_call = _call("report-grounding", "report_grounding_check", "GroundingCheck")
-    grounding_call["validation_errors"] = ["grounding_status=needs_review"]
-
-    async def fake_generate_insights(report_data, mode="full", **kwargs):
-        return {
-            "_grounding_status": "needs_review",
-            "_grounding_checks": [{
-                "section": "recommendations",
-                "status": "needs_review",
-                "support_score": 0.42,
-                "threshold": 0.6,
-                "metadata": {"provider": "evidence_service", "operation": "check_grounding"},
-            }],
-            "_llm_calls": [grounding_call],
-        }
-
-    monkeypatch.setattr("report_insights.generate_insights", fake_generate_insights)
-    monkeypatch.setattr("report_product_publish.write_report_artifacts", lambda *args, **kwargs: None)
-    monkeypatch.setattr("exam_diagnostics.diagnose_exam", lambda *args, **kwargs: {})
-
-    with pytest.raises(RuntimeError, match="report_grounding.grounding_not_ok"):
-        await service.generate_report(
-            [_ready_question_with_ranked_evidence(1)],
-            {},
-            {},
-            {"name": "exam"},
-            output_path=str(tmp_path / "report.pdf"),
-            exam_review_channel="app_builder",
-        )
-
-    assert service._last_report_insights["_grounding_checks"][0]["section"] == "recommendations"
-    assert service._last_pipeline_audit["blockers"][0]["stage"] == "report_grounding"
-    assert service._last_pipeline_audit["blockers"][0]["code"] == "grounding_not_ok"
-    assert "first failed section=recommendations" in service._last_pipeline_audit["blockers"][0]["message"]
+    assert "grounding_enabled" not in captured["kwargs"]
+    assert captured["insights"]["overall_assessment"] == "ok"
+    assert service._last_report_insights["overall_assessment"] == "ok"
 
 
 @pytest.mark.asyncio

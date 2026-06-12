@@ -121,7 +121,6 @@ def _purpose_label(value: Any) -> str:
         "image_inputs": "图像识别",
         "report_insights": "报告综合分析",
         "report_teaching_suggestions": "教学建议生成",
-        "report_grounding_check": "证据核查",
     }.get(str(value), str(value))
 
 

@@ -77,7 +77,6 @@ class AnalysisService:
         self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
         self._last_report_insights = None
         self._last_pipeline_audit = None
-        self._last_channel_usage = None
 
     # ── 单题完整分析 ──────────────────────────────────────────
 
@@ -101,18 +100,12 @@ class AnalysisService:
             if not self.analyzer:
                 raise RuntimeError("AI 分析服务未配置")
 
-            from services.review_channel import (
-                channel_evidence_ranking_enabled,
-                channel_uses_agent_search,
-            )
             analysis = await self.analyzer.analyze_question(
                 question_text=question.get("content", ""),
                 question_images=q_images,
                 question_id=q_id,
                 question_type=question_type,
                 section_header=section_header,
-                evidence_ranking_enabled=channel_evidence_ranking_enabled(exam_review_channel),
-                agent_search_enabled=channel_uses_agent_search(exam_review_channel),
             )
             question["analysis"] = analysis
 
@@ -522,29 +515,17 @@ class AnalysisService:
         )
         rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
             exam_type=exam_info.get("exam_type", "高考"))
-        from services.review_channel import channel_grounding_enabled
         from llm_client import set_llm_review_channel, reset_llm_review_channel
         review_channel_token = set_llm_review_channel(exam_review_channel)
         try:
-            insights = await generate_insights(
-                rdata,
-                mode=mode,
-                grounding_enabled=channel_grounding_enabled(exam_review_channel),
-            )
+            insights = await generate_insights(rdata, mode=mode)
         finally:
             reset_llm_review_channel(review_channel_token)
         self._last_pipeline_audit = self.build_pipeline_audit(
             rdata.get("metadata_quality", {}),
             report_insights=insights,
-            exam_review_channel=exam_review_channel,
         )
         self._last_report_insights = insights
-        self._last_channel_usage = self.build_channel_usage(questions, insights)
-        self.assert_channel_usage(
-            exam_review_channel,
-            self._last_channel_usage,
-            require_grounding=channel_grounding_enabled(exam_review_channel),
-        )
         self.assert_pipeline_ready(self._last_pipeline_audit)
         write_report_artifacts(rdata, insights, mode=mode, pdf_path=output_path)
         return output_path
@@ -716,8 +697,7 @@ class AnalysisService:
 
     @staticmethod
     def build_pipeline_audit(metadata_quality: Dict | None,
-                             report_insights: Dict | None = None,
-                             exam_review_channel: str | None = None) -> Dict:
+                             report_insights: Dict | None = None) -> Dict:
         metadata_quality = metadata_quality or {}
         blockers = []
         warnings = []
@@ -808,113 +788,15 @@ class AnalysisService:
                     add_block("report_llm", "llm_fallback", f"{purpose} used fallback", call)
                 if metadata.get("provider_errors"):
                     add_block("report_llm", "provider_error", f"{purpose} has provider errors", call)
-                if call.get("validation_errors") and purpose != "report_grounding_check":
+                if call.get("validation_errors"):
                     add_block("report_llm", "parse_or_validation_error", f"{purpose} validation failed", call)
-
-            grounding_required = False
-            try:
-                from services.review_channel import channel_grounding_enabled
-                grounding_required = channel_grounding_enabled(exam_review_channel)
-            except Exception:
-                grounding_required = False
-            if grounding_required:
-                checks = report_insights.get("_grounding_checks") or []
-                status = report_insights.get("_grounding_status")
-                if status != "ok" or not checks:
-                    failed_checks = [
-                        check for check in checks
-                        if isinstance(check, dict) and check.get("status") != "ok"
-                    ]
-                    first_failed = failed_checks[0] if failed_checks else {}
-                    detail_message = f"report grounding status is {status or 'missing'}"
-                    if first_failed:
-                        detail_message += (
-                            f"; first failed section={first_failed.get('section') or 'unknown'}"
-                            f", support_score={first_failed.get('support_score')}"
-                            f", threshold={first_failed.get('threshold')}"
-                        )
-                    add_block(
-                        "report_grounding",
-                        "grounding_not_ok",
-                        detail_message,
-                        {"status": status, "checks": checks},
-                    )
 
         return {
             "status": "blocked" if blockers else "ok",
             "blockers": blockers,
             "warnings": warnings,
             "metadata_quality": metadata_quality,
-            "report_grounding_status": (
-                report_insights.get("_grounding_status")
-                if isinstance(report_insights, dict) else None
-            ),
         }
-
-    @staticmethod
-    def build_channel_usage(questions: List[Dict] | None,
-                            report_insights: Dict | None = None) -> Dict:
-        """Summarize which parts of the review used 证据服务 vs model calls."""
-        from services.evidence_audit import summarize_evidence_usage
-
-        return summarize_evidence_usage(questions, report_insights)
-
-    @staticmethod
-    def assert_channel_usage(exam_review_channel: str | None,
-                             channel_usage: Dict | None,
-                             require_grounding: bool = False) -> None:
-        from services.review_channel import channel_uses_agent_search, channel_uses_evidence
-
-        if not channel_uses_evidence(exam_review_channel):
-            return
-        channel_usage = channel_usage or {}
-        if (
-            channel_uses_agent_search(exam_review_channel)
-            and int(channel_usage.get("agent_search_answer_count") or 0) <= 0
-        ):
-            raise RuntimeError(
-                "agent_search channel requested but no Search App answer_query evidence "
-                "was recorded; verify the evidence service configuration and the question evidence context"
-            )
-        if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
-            raise RuntimeError(
-                "证据增强审题失败：检测到不应使用的 证据服务 "
-                "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
-            )
-        rank_count = int(
-            channel_usage.get("evidence_rank_count")
-            or channel_usage.get("evidence_rank_count")
-            or 0
-        )
-        grounding_count = int(
-            channel_usage.get("evidence_grounding_check_count")
-            or channel_usage.get("evidence_grounding_check_count")
-            or 0
-        )
-        if rank_count <= 0:
-            missing = channel_usage.get("missing_rank_question_ids") or []
-            if missing:
-                first = missing[0]
-                raise RuntimeError(
-                    f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                    "（证据服务 Ranking 未记录），不能进入正式报告。"
-                )
-            raise RuntimeError(
-                "证据增强审题失败：缺少 证据服务 Ranking 记录，"
-                "不能进入正式报告。"
-            )
-        missing = channel_usage.get("missing_rank_question_ids") or []
-        if missing:
-            first = missing[0]
-            raise RuntimeError(
-                f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                "（证据服务 Ranking 未记录），不能进入正式报告。"
-            )
-        if require_grounding and grounding_count <= 0:
-            raise RuntimeError(
-                "证据增强审题失败：报告结论缺少 Check Grounding 校验"
-                "（证据服务 Check Grounding 未记录），不能进入正式报告。"
-            )
 
     @staticmethod
     def assert_pipeline_ready(audit: Dict | None) -> None:
@@ -1258,8 +1140,6 @@ class AnalysisService:
         metadata_quality = compute_metadata_quality(questions, exam_statistics=exam_statistics)
         pipeline_audit = self.build_pipeline_audit(metadata_quality)
         self._last_pipeline_audit = pipeline_audit
-        channel_usage = self.build_channel_usage(questions)
-        self.assert_channel_usage(exam_review_channel, channel_usage)
 
         report_url = None
         html_report_url = None
@@ -1282,12 +1162,6 @@ class AnalysisService:
                     html_report_url = f"/api/reports/{exam_id}.html"
                 report_insights = self._last_report_insights
                 pipeline_audit = self._last_pipeline_audit or pipeline_audit
-                channel_usage = self._last_channel_usage or self.build_channel_usage(questions, report_insights)
-                self.assert_channel_usage(
-                    exam_review_channel,
-                    channel_usage,
-                    require_grounding=True,
-                )
             except Exception as e:
                 logger.exception("[报告生成] 自动分析报告生成失败")
                 raise RuntimeError(f"report generation failed: {e}") from e
@@ -1303,7 +1177,6 @@ class AnalysisService:
             "html_report_url": html_report_url,
             "report_error": report_error,
             "report_insights": report_insights,
-            "channel_usage": channel_usage,
         }
 
     async def run_auto_analysis(self, file_path: str, filename: str,
@@ -1368,8 +1241,6 @@ class AnalysisService:
         metadata_quality = compute_metadata_quality(analyzed, exam_statistics=exam_statistics)
         pipeline_audit = self.build_pipeline_audit(metadata_quality)
         self._last_pipeline_audit = pipeline_audit
-        channel_usage = self.build_channel_usage(analyzed)
-        self.assert_channel_usage(exam_review_channel, channel_usage)
 
         report_url = None
         html_report_url = None
@@ -1393,12 +1264,6 @@ class AnalysisService:
                     html_report_url = f"/api/reports/{exam_id}.html"
                 report_insights = self._last_report_insights
                 pipeline_audit = self._last_pipeline_audit or pipeline_audit
-                channel_usage = self._last_channel_usage or self.build_channel_usage(analyzed, report_insights)
-                self.assert_channel_usage(
-                    exam_review_channel,
-                    channel_usage,
-                    require_grounding=True,
-                )
             except Exception as e:
                 logger.exception("[报告生成] 确认拆分报告生成失败")
                 raise RuntimeError(f"report generation failed: {e}") from e
@@ -1415,5 +1280,4 @@ class AnalysisService:
             "html_report_url": html_report_url,
             "report_error": report_error,
             "report_insights": report_insights,
-            "channel_usage": channel_usage,
         }
