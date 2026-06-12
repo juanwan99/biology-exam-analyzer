@@ -5,6 +5,7 @@ v3.1: 大题结构化拆分评估（total_score >= 8 → 结构化提取 → 聚
 设计文档: docs/plans/2026-03-28-difficulty-v3.1-design.md
 """
 import asyncio
+import os
 from feature_extractor import extract_features, extract_big_question_features, DEFAULT_FEATURES
 from rule_scorer import compute_difficulty, score_to_label, aggregate_big_question
 from logger import get_logger
@@ -270,23 +271,29 @@ class DifficultyPipeline:
         calibration_status = "not_configured"
         calibration_error = None
 
-        # 校准修正
-        try:
-            from calibration_service import get_correction
-            correction = get_correction(score)
-            calibration_status = "checked"
-            if correction != 0:
-                score = max(0, min(10, score + correction))
-                calibration_status = "applied"
-                logger.debug(f"[校准] 难度修正 {correction:+.2f} -> {score:.2f}")
-        except ModuleNotFoundError as exc:
-            calibration_error = str(exc)
-            calibration_status = "not_configured"
-        except Exception as exc:
-            calibration_error = str(exc)
-            calibration_status = "failed"
-            flags.append("calibration_failed")
-            logger.error(f"[校准] 难度校准失败: {exc}", exc_info=True)
+        # 校准修正（DIFFICULTY_CALIBRATION_ENABLED 开关，默认关闭）
+        # 关闭原因：当前无校准数据（difficulty_mapping / question_performance.score_rate 均空），
+        # get_correction 恒返回 0，启用只会徒增调用并产生误导性 checked 状态。
+        # 回填真实考试数据后设环境变量 DIFFICULTY_CALIBRATION_ENABLED=true 即可恢复，无需改代码。
+        if os.getenv("DIFFICULTY_CALIBRATION_ENABLED", "false").strip().lower() not in ("1", "true", "yes", "on"):
+            calibration_status = "disabled"
+        else:
+            try:
+                from calibration_service import get_correction
+                correction = get_correction(score)
+                calibration_status = "checked"
+                if correction != 0:
+                    score = max(0, min(10, score + correction))
+                    calibration_status = "applied"
+                    logger.debug(f"[校准] 难度修正 {correction:+.2f} -> {score:.2f}")
+            except ModuleNotFoundError as exc:
+                calibration_error = str(exc)
+                calibration_status = "not_configured"
+            except Exception as exc:
+                calibration_error = str(exc)
+                calibration_status = "failed"
+                flags.append("calibration_failed")
+                logger.error(f"[校准] 难度校准失败: {exc}", exc_info=True)
 
         label = score_to_label(score)
         logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
