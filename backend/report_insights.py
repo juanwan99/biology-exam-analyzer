@@ -72,6 +72,11 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(text)
 
 
+def _data_subject(data: dict):
+    """报告链 subject 真源在 exam_info.subject（report_data.aggregate_report_data 写入），顶层兜底。"""
+    return (data.get("exam_info") or {}).get("subject") or data.get("subject")
+
+
 def _build_overall_prompt(data: dict) -> str:
     """构建整卷综合分析 prompt。"""
     metrics = data["metrics"]
@@ -111,7 +116,7 @@ def _build_overall_prompt(data: dict) -> str:
         for fact in evidence_cards
     )
 
-    return f"""你是一名资深高中{get_subject_name(data.get("subject"))}教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+    return f"""你是一名资深高中{get_subject_name(_data_subject(data))}教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
 
 ## 试卷基本信息
 - 名称: {exam["name"]}
@@ -163,35 +168,6 @@ def _build_overall_prompt(data: dict) -> str:
   "competency_analysis": "素养覆盖分析，指出不足的素养维度，200字内",
   "bloom_analysis": "认知层级分析，高阶思维占比评价，150字内"
 }}"""
-
-
-def _build_comments_prompt(questions: list) -> str:
-    """构建逐题教师点评 prompt。"""
-    BLOOM_MAP = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
-    items = []
-    for q in questions:
-        items.append(
-            f"题目{q['id']}（{q.get('total_score',0)}分，难度{q.get('difficulty',5):.1f}，"
-            f"Bloom={BLOOM_MAP.get(q.get('bloom',3),'应用')}）：\n"
-            f"  知识点: {', '.join(q.get('knowledge_points',[]))}\n"
-            f"  素养: {q.get('primary_competency','')}\n"
-            f"  解析摘要: {(q.get('detailed_analysis',''))[:100]}\n"
-            f"  常见错误: {', '.join(q.get('common_mistakes',[])[:2])}"
-        )
-
-    return f"""你是一名资深高中{get_subject_name(data.get("subject"))}教师。请为以下每道题写 2-3 句教师视角点评。
-点评应包含：考查目的、难点归因、常见失分预警。
-
-{chr(10).join(items)}
-
-请输出严格 JSON：
-{{
-  "question_comments": {{
-    "题号": "点评文本",
-    ...
-  }}
-}}"""
-
 
 
 def _build_teaching_prompt(
@@ -755,7 +731,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
     Raises:
         RuntimeError: GPT 调用失败
     """
-    _subj = normalize_subject(data.get("subject"))
+    _subj = normalize_subject(_data_subject(data))
     logger.info(f"[LLM分析] 开始生成 mode={mode} subject={_subj}")
 
     try:
