@@ -13,10 +13,16 @@ function AnalyzerPage() {
   const [error, setError] = useState(null)
   const [mode, setMode] = useState('deep')
   const [generateReport, setGenerateReport] = useState(false)
+  const [subject, setSubject] = useState('biology')
   const [dragOver, setDragOver] = useState(false)
   const [progress, setProgress] = useState(null)
   const fileInputRef = useRef(null)
   const pollingRef = useRef(false)
+  const SUBJECTS = [
+    { key: 'chinese', name: '语文' }, { key: 'math', name: '数学' }, { key: 'english', name: '英语' },
+    { key: 'physics', name: '物理' }, { key: 'chemistry', name: '化学' }, { key: 'biology', name: '生物' },
+    { key: 'politics', name: '思想政治' }, { key: 'history', name: '历史' }, { key: 'geography', name: '地理' },
+  ]
 
   const [token, setToken] = useState(() => localStorage.getItem('bio_token') || '')
   const [user, setUser] = useState(() => {
@@ -174,6 +180,7 @@ function AnalyzerPage() {
       formData.append('file', file)
       formData.append('mode', mode)
       formData.append('generate_report', generateReport)
+      formData.append('subject', subject)
 
       const response = await axios.post('/api/analyze_auto', formData, {
         headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
@@ -355,6 +362,31 @@ function AnalyzerPage() {
               </div>
             </div>
           )}
+
+          {/* 学科选择 */}
+          <div style={{ marginBottom: '28px' }}>
+            <div style={{ padding: '18px 20px', border: '2px solid var(--color-border-light)', borderRadius: '16px', background: 'var(--color-bg)' }}>
+              <div className="flex items-center justify-between gap-3" style={{ marginBottom: '12px' }}>
+                <span className="font-semibold" style={{ color: 'var(--color-primary)' }}>学科</span>
+                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>当前：{SUBJECTS.find(s => s.key === subject)?.name}</span>
+              </div>
+              <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))' }}>
+                {SUBJECTS.map(s => (
+                  <button key={s.key} type="button" onClick={() => setSubject(s.key)}
+                    className="transition-all"
+                    style={{
+                      minHeight: '44px', padding: '8px 6px', borderRadius: '10px',
+                      border: subject === s.key ? '2px solid var(--color-primary-light)' : '1px solid var(--color-border-light)',
+                      background: subject === s.key ? 'var(--macaron-mint-light)' : '#fff',
+                      color: 'var(--color-primary)',
+                      fontWeight: subject === s.key ? 700 : 500,
+                    }}>
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {/* 报告选项 */}
           <div style={{ marginBottom: '28px' }}>

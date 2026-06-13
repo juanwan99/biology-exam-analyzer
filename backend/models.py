@@ -126,6 +126,7 @@ class ExerciseBank(Base):
     __tablename__ = "exercise_bank"
 
     id = Column(Integer, primary_key=True)
+    subject = Column(String(50), nullable=False, default="biology", index=True)
     source_id = Column(Integer, ForeignKey("exercise_sources.id", ondelete="SET NULL"), index=True)
     question_type = Column(String(50), nullable=False, index=True)
     content = Column(Text, nullable=False)
@@ -252,6 +253,7 @@ class ExamHistory(Base):
     __tablename__ = "exam_history"
 
     id = Column(Integer, primary_key=True)
+    subject = Column(String(50), nullable=False, default="biology", index=True)
     name = Column(String(200), nullable=False)
     exam_date = Column(DateTime)
     grade = Column(String(50), nullable=False, index=True)  # 高一/高二/高三
@@ -281,6 +283,7 @@ class QuestionPerformance(Base):
     __tablename__ = "question_performance"
 
     id = Column(Integer, primary_key=True)
+    subject = Column(String(50), nullable=False, default="biology", index=True)
     exam_id = Column(Integer, ForeignKey("exam_history.id", ondelete="CASCADE"), index=True)
     question_number = Column(Integer, nullable=False)
 
@@ -348,6 +351,7 @@ class ScorePrediction(Base):
     __tablename__ = "score_prediction"
 
     id = Column(Integer, primary_key=True)
+    subject = Column(String(50), nullable=False, default="biology", index=True)
     exam_name = Column(String(200))
     grade = Column(String(50), index=True)
     total_score = Column(DECIMAL(5, 2))
