@@ -31,13 +31,14 @@ function ExamStatistics({ data }) {
   // 知识点数据（取前10）
   const knowledgePointsData = top_knowledge_points ? top_knowledge_points.slice(0, 10) : []
 
-  // 素养分布数据转换
-  const competencyData = competency_distribution ? [
-    { name: '生命观念', count: competency_distribution['生命观念']?.count || 0, fill: '#10b981' },
-    { name: '科学思维', count: competency_distribution['科学思维']?.count || 0, fill: '#3b82f6' },
-    { name: '科学探究', count: competency_distribution['科学探究']?.count || 0, fill: '#8b5cf6' },
-    { name: '社会责任', count: competency_distribution['社会责任']?.count || 0, fill: '#f97316' }
-  ] : []
+  // 素养分布数据转换（学科动态维度：遍历分布实际素养，排除汇总元键）
+  const _competencyColors = ['#10b981', '#3b82f6', '#8b5cf6', '#f97316', '#ec4899', '#14b8a6']
+  const _competencyMetaKeys = ['primary_distribution', 'seu_primary_distribution', 'involved_distribution']
+  const competencyData = competency_distribution
+    ? Object.entries(competency_distribution)
+        .filter(([key, val]) => !_competencyMetaKeys.includes(key) && val && typeof val === 'object' && ('count' in val || '占比' in val || '总权重' in val))
+        .map(([key, val], i) => ({ name: key, count: val.count || 0, fill: _competencyColors[i % _competencyColors.length] }))
+    : []
 
   return (
     <div className="mb-12">

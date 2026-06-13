@@ -144,38 +144,16 @@ function QuestionModal({ question, onClose }) {
                 核心素养
               </h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {question.competency['生命观念']?.涉及 && (
-                  <div className="bg-[#e8f8ee] p-3 rounded-lg border border-[#c8f0d4] text-center">
-                    <div className="text-xs text-[#5a6b5e] mb-1">生命观念</div>
-                    <div className="text-2xl font-bold text-[#2d5a3d]">
-                      {(question.competency['生命观念'].权重 * 100).toFixed(0)}%
+                {Object.entries(question.competency)
+                  .filter(([key, val]) => val && typeof val === 'object' && val.涉及)
+                  .map(([key, val]) => (
+                    <div key={key} className="bg-[#e8f8ee] p-3 rounded-lg border border-[#c8f0d4] text-center">
+                      <div className="text-xs text-[#5a6b5e] mb-1">{key}</div>
+                      <div className="text-2xl font-bold text-[#2d5a3d]">
+                        {((val.权重 || 0) * 100).toFixed(0)}%
+                      </div>
                     </div>
-                  </div>
-                )}
-                {question.competency['科学思维']?.涉及 && (
-                  <div className="bg-[#e8f8ee] p-3 rounded-lg border border-[#b8d1bf] text-center">
-                    <div className="text-xs text-[#5a6b5e] mb-1">科学思维</div>
-                    <div className="text-2xl font-bold text-[#1a2e1f]">
-                      {(question.competency['科学思维'].权重 * 100).toFixed(0)}%
-                    </div>
-                  </div>
-                )}
-                {question.competency['科学探究']?.涉及 && (
-                  <div className="bg-[#f3f0ff] p-3 rounded-lg border border-[#e2e8e4] text-center">
-                    <div className="text-xs text-[#5a6b5e] mb-1">科学探究</div>
-                    <div className="text-2xl font-bold text-[#2d5a3d]">
-                      {(question.competency['科学探究'].权重 * 100).toFixed(0)}%
-                    </div>
-                  </div>
-                )}
-                {question.competency['社会责任']?.涉及 && (
-                  <div className="bg-[#fdf6e3] p-3 rounded-lg border border-[#fef3c7] text-center">
-                    <div className="text-xs text-[#5a6b5e] mb-1">社会责任</div>
-                    <div className="text-2xl font-bold text-[#92400e]">
-                      {(question.competency['社会责任'].权重 * 100).toFixed(0)}%
-                    </div>
-                  </div>
-                )}
+                  ))}
               </div>
             </div>
           )}
