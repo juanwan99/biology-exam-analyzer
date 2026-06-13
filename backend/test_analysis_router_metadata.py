@@ -93,7 +93,6 @@ async def test_analyze_document_route_is_offline_410(monkeypatch, tmp_path):
             file=upload,
             mode=analysis_router.AnalysisMode.DEEP,
             generate_report=False,
-            exam_review_channel="model",
         )
 
     assert exc.value.status_code == 410
@@ -105,8 +104,7 @@ async def test_analysis_pipeline_produces_metadata_quality(monkeypatch):
     经 task_manager.complete 存入 task result（前端轮询 status 取回）。"""
     captured = {}
 
-    async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
-        captured["exam_review_channel"] = exam_review_channel
+    async def fake_analyze_question_full(question, image_bytes, mode):
         return _question(1, overall=0.55)
 
     _skip_score_prediction(monkeypatch)
@@ -119,7 +117,6 @@ async def test_analysis_pipeline_produces_metadata_quality(monkeypatch):
         questions=[{"id": 1, "content": "题干", "_media_for_ai": []}],
         image_bytes=[],
         mode=analysis_router.AnalysisMode.DEEP,
-        effective_review_channel="model",
         competency_analyzer=FakeCompetencyAnalyzer(),
         generate_report=False,
         report_mode="full",
@@ -127,7 +124,6 @@ async def test_analysis_pipeline_produces_metadata_quality(monkeypatch):
         start_time=datetime.now(),
     )
 
-    assert captured["exam_review_channel"] == "model"
     assert captured["metadata_quality"]["low_confidence_questions"] == [1]
     assert captured["metadata_quality"]["warning_questions"] == [
         {"id": 1, "warnings": ["feature_status:partial"]}
@@ -139,12 +135,11 @@ async def test_analysis_pipeline_signs_report_url(monkeypatch):
     """后台管线生成的报告 URL 必须带 HMAC 签名（Phase 2.5 防报告 PII 匿名遍历）。"""
     captured = {}
 
-    async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
+    async def fake_analyze_question_full(question, image_bytes, mode):
         return _question(1, overall=0.9)
 
     async def fake_generate_report_artifacts(
         questions, competency_summary, exam_statistics, exam_info, report_mode, pdf_path,
-        exam_review_channel=None,
     ):
         return {"pdf_path": str(pdf_path), "html_path": str(pdf_path.with_suffix(".html"))}
 
@@ -160,7 +155,6 @@ async def test_analysis_pipeline_signs_report_url(monkeypatch):
         questions=[{"id": 1, "content": "题干", "_media_for_ai": []}],
         image_bytes=[],
         mode=analysis_router.AnalysisMode.DEEP,
-        effective_review_channel="model",
         competency_analyzer=FakeCompetencyAnalyzer(),
         generate_report=True,
         report_mode="full",
@@ -187,8 +181,7 @@ async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_pat
     async def fake_consume(user_id, cost, reason):
         return None
 
-    async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
-        captured["exam_review_channel"] = exam_review_channel
+    async def fake_analyze_question_full(question, image_bytes, mode):
         return _question(1, overall=0.55)
 
     session_file = tmp_path / "session.docx"
@@ -215,12 +208,9 @@ async def test_confirm_split_route_returns_metadata_quality(monkeypatch, tmp_pat
         corrected_questions=json.dumps([{"id": 1, "content": "题干"}]),
         mode=analysis_router.AnalysisMode.DEEP,
         generate_report=False,
-        exam_review_channel="model",
         authorization="Bearer token",
     )
 
-    assert captured["exam_review_channel"] == "model"
-    assert result["exam_review_channel"] == "model"
     assert result["metadata_quality"]["low_confidence_questions"] == [1]
     assert result["metadata_quality"]["warning_questions"] == [
         {"id": 1, "warnings": ["feature_status:partial"]}
@@ -238,12 +228,11 @@ async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path
     async def fake_consume(user_id, cost, reason):
         return None
 
-    async def fake_analyze_question_full(question, image_bytes, mode, exam_review_channel=None):
+    async def fake_analyze_question_full(question, image_bytes, mode):
         return _question(1, overall=0.9)
 
     async def fake_generate_report_artifacts(
         questions, competency_summary, exam_statistics, exam_info, report_mode, pdf_path,
-        exam_review_channel=None,
     ):
         return {"pdf_path": str(pdf_path), "html_path": str(pdf_path.with_suffix(".html"))}
 

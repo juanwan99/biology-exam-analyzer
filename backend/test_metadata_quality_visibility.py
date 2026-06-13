@@ -100,7 +100,6 @@ async def test_auto_analysis_returns_metadata_quality_summary():
         "exam.docx",
         b"",
         generate_report=False,
-        exam_review_channel="model",
     )
 
     assert result["metadata_quality"]["low_confidence_questions"] == [1]
@@ -149,7 +148,6 @@ async def test_auto_analysis_returns_html_report_url_when_report_generated(tmp_p
         generate_report=True,
         reports_dir=str(tmp_path),
         exam_id="exam-1",
-        exam_review_channel="model",
     )
 
     assert result["report_url"] == "/api/reports/exam-1.pdf"

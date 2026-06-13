@@ -83,14 +83,11 @@ class AnalysisService:
 
     async def analyze_question(self, question: Dict, image_bytes: List[bytes],
                                 mode: str = "deep",
-                                subject: str = "biology",
-                                exam_review_channel: str | None = None) -> Dict:
+                                subject: str = "biology") -> Dict:
         q_id = question.get("id", 0)
         subject = normalize_subject(question.get("subject") or subject)
         question.setdefault("subject", subject)
         competency_dims = get_competency_dims(subject)
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
         try:
             from utils import infer_question_type
             question_type = infer_question_type(question)
@@ -289,7 +286,6 @@ class AnalysisService:
                 question["_analysis_warnings"] = analysis_warnings
             self._attach_metadata_envelope(question)
 
-            reset_llm_review_channel(review_channel_token)
             return question
 
         except Exception as e:
@@ -328,7 +324,6 @@ class AnalysisService:
                 },
                 "warnings": ["analysis_failed"],
             }
-            reset_llm_review_channel(review_channel_token)
             return question
 
     # ── 批量并发分析 ──────────────────────────────────────────
@@ -336,8 +331,7 @@ class AnalysisService:
     async def analyze_questions_batch(self, questions: List[Dict],
                                       image_bytes: List[bytes],
                                       mode: str = "deep",
-                                      subject: str = "biology",
-                                      exam_review_channel: str | None = None) -> List[Dict]:
+                                      subject: str = "biology") -> List[Dict]:
         for idx, q in enumerate(questions):
             if not q.get("id"):
                 q["id"] = idx + 1
@@ -346,11 +340,6 @@ class AnalysisService:
 
         async def _analyze_one(q):
             async with sem:
-                if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
-                    return await self.analyze_question(
-                        q, image_bytes, mode, subject=subject,
-                        exam_review_channel=exam_review_channel,
-                    )
                 return await self.analyze_question(q, image_bytes, mode, subject=subject)
 
         originals = [copy.deepcopy(q) for q in questions]
@@ -363,16 +352,7 @@ class AnalysisService:
                 continue
             q_id = result.get("id", idx + 1) if isinstance(result, dict) else idx + 1
             logger.warning(f"[元数据] 题目{q_id} 关键元数据不完整，顺序重试一次")
-            if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
-                retry = await self.analyze_question(
-                    copy.deepcopy(originals[idx]),
-                    image_bytes,
-                    mode,
-                    subject=subject,
-                    exam_review_channel=exam_review_channel,
-                )
-            else:
-                retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode, subject=subject)
+            retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode, subject=subject)
             retry_still_needed = self._metadata_retry_reason(retry)
             if not retry_still_needed:
                 self._mark_recovered_metadata_retry(retry, retry_reason, emit_warning=False)
@@ -446,16 +426,10 @@ class AnalysisService:
     # ── 题目拆分 ──────────────────────────────────────────────
 
     async def split_questions_llm(self, image_bytes: List[bytes],
-                                   extracted_text: str = None,
-                                   exam_review_channel: str | None = None) -> List[Dict]:
+                                   extracted_text: str = None) -> List[Dict]:
         if not self.analyzer:
             raise RuntimeError("AI 分析服务未配置")
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
-        try:
-            return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
-        finally:
-            reset_llm_review_channel(review_channel_token)
+        return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
 
     @staticmethod
     def _main_question_ids_from_text(text: str | None) -> List[int]:
@@ -517,8 +491,7 @@ class AnalysisService:
                                exam_statistics: Dict,
                                exam_info: Dict,
                                mode: str = "full",
-                               output_path: str = None,
-                               exam_review_channel: str | None = None) -> Optional[str]:
+                               output_path: str = None) -> Optional[str]:
         from report_data import aggregate_report_data
         from report_insights import generate_insights
         from report_product_publish import write_report_artifacts
@@ -535,12 +508,7 @@ class AnalysisService:
         )
         rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
             exam_type=exam_info.get("exam_type", "高考"))
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
-        try:
-            insights = await generate_insights(rdata, mode=mode)
-        finally:
-            reset_llm_review_channel(review_channel_token)
+        insights = await generate_insights(rdata, mode=mode)
         self._last_pipeline_audit = self.build_pipeline_audit(
             rdata.get("metadata_quality", {}),
             report_insights=insights,
@@ -1120,8 +1088,7 @@ class AnalysisService:
     async def run_full_analysis(self, file_path: str, filename: str,
                                  mode: str = "deep", generate_report: bool = False,
                                  report_mode: str = "full", reports_dir: str = None,
-                                 exam_id: str = None,
-                                 exam_review_channel: str | None = None) -> Dict:
+                                 exam_id: str = None) -> Dict:
         """完整分析流程：文档→拆分→分析→统计→报告。对应 /api/analyze。"""
         doc = await self.process_document(file_path, filename)
         image_bytes = doc["image_bytes"]
@@ -1137,7 +1104,6 @@ class AnalysisService:
             questions = await self.split_questions_llm(
                 image_bytes,
                 extracted_text,
-                exam_review_channel=exam_review_channel,
             )
 
         self.validate_split_integrity(questions, extracted_text)
@@ -1145,12 +1111,7 @@ class AnalysisService:
         if extracted_elements and self.doc_processor:
             self.doc_processor.match_elements_to_questions(questions, extracted_elements)
 
-        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
-            questions = await self.analyze_questions_batch(
-                questions, image_bytes, mode, exam_review_channel=exam_review_channel
-            )
-        else:
-            questions = await self.analyze_questions_batch(questions, image_bytes, mode)
+        questions = await self.analyze_questions_batch(questions, image_bytes, mode)
 
         competency_summary = self.build_competency_summary(questions)
         exam_statistics = self.aggregate_statistics(questions, competency_summary)
@@ -1175,7 +1136,6 @@ class AnalysisService:
                     {"name": filename, "total": len(questions), "mode": mode},
                     mode=report_mode,
                     output_path=pdf_path,
-                    exam_review_channel=exam_review_channel,
                 )
                 report_url = f"/api/reports/{exam_id}.pdf"
                 if Path(pdf_path).with_suffix(".html").exists():
@@ -1205,8 +1165,7 @@ class AnalysisService:
                                  generate_report: bool = False,
                                  report_mode: str = "full",
                                  reports_dir: str = None,
-                                 exam_id: str = None,
-                                 exam_review_channel: str | None = None) -> Dict:
+                                 exam_id: str = None) -> Dict:
         """规则拆分 + 自动分析。对应 /api/analyze_auto 的核心逻辑。"""
         file_ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
         document_failure_events = []
@@ -1247,12 +1206,7 @@ class AnalysisService:
         else:
             raise ValueError(f"不支持的文件格式: {filename}")
 
-        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
-            analyzed = await self.analyze_questions_batch(
-                questions, image_bytes, mode, subject, exam_review_channel=exam_review_channel
-            )
-        else:
-            analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
+        analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
         competency_summary = self.build_competency_summary(analyzed, subject)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
         if document_failure_events:
@@ -1272,8 +1226,6 @@ class AnalysisService:
                 from pathlib import Path
                 pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
                 report_kwargs = {"mode": report_mode, "output_path": pdf_path}
-                if self._accepts_kwarg(self.generate_report, "exam_review_channel"):
-                    report_kwargs["exam_review_channel"] = exam_review_channel
                 await self.generate_report(
                     analyzed, competency_summary, exam_statistics,
                     {"name": filename, "total": len(analyzed), "mode": mode},

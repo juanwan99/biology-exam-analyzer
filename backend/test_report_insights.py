@@ -222,10 +222,10 @@ class TestGenerateInsights:
         with pytest.raises(RuntimeError, match="LLM 分析生成失败"):
             await generate_insights(sample_report_data, mode="brief")
 
-    async def test_grounding_facts_are_section_cards_and_traceable(self, sample_report_data):
-        from report_insights import _build_grounding_facts
+    async def test_evidence_facts_are_section_cards_and_traceable(self, sample_report_data):
+        from report_insights import _build_evidence_facts
 
-        facts = _build_grounding_facts(sample_report_data)
+        facts = _build_evidence_facts(sample_report_data)
         sources = {
             (fact.get("attributes") or {}).get("source")
             for fact in facts
@@ -281,8 +281,8 @@ class TestGenerateInsights:
         assert "top_difficulty_factor_aliases" in feature_card["factText"]
         assert "对难度贡献最大的维度包含" in feature_card["factText"]
 
-    async def test_grounding_facts_expand_all_primary_competency_counts(self, sample_report_data):
-        from report_insights import _build_grounding_facts
+    async def test_evidence_facts_expand_all_primary_competency_counts(self, sample_report_data):
+        from report_insights import _build_evidence_facts
 
         sample_report_data["competency"]["primary_distribution"] = {
             "生命观念": 11,
@@ -291,7 +291,7 @@ class TestGenerateInsights:
             "社会责任": 0,
         }
 
-        facts = _build_grounding_facts(sample_report_data)
+        facts = _build_evidence_facts(sample_report_data)
         competency_card = next(
             fact for fact in facts
             if (fact.get("attributes") or {}).get("source") == "report.evidence_card.competency"
@@ -300,15 +300,15 @@ class TestGenerateInsights:
         assert "主要素养分布中科学思维为10题" in competency_card["factText"]
         assert "主要素养分布中生命观念为11题" in competency_card["factText"]
 
-    async def test_grounding_facts_include_ranked_knowledge_detail(self, sample_report_data):
-        from report_insights import _build_grounding_facts
+    async def test_evidence_facts_include_ranked_knowledge_detail(self, sample_report_data):
+        from report_insights import _build_evidence_facts
 
         sample_report_data["knowledge"]["top_points"] = [
             {"name": "\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b", "weighted_score": 4.5, "question_count": 3},
             {"name": "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406", "weighted_score": 4.1, "question_count": 2},
         ]
 
-        facts = _build_grounding_facts(sample_report_data)
+        facts = _build_evidence_facts(sample_report_data)
         detail = next(
             fact for fact in facts
             if (fact.get("attributes") or {}).get("source") == "report.evidence_card.knowledge_detail"
@@ -317,19 +317,19 @@ class TestGenerateInsights:
         assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406" in detail["factText"]
         assert "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u52a0\u6743\u5206\u503c\u4e3a4.1" in detail["factText"]
 
-    async def test_overall_prompt_requires_grounded_short_claims(self, sample_report_data):
+    async def test_overall_prompt_requires_data_anchored_short_claims(self, sample_report_data):
         from report_insights import _build_overall_prompt
 
         prompt = _build_overall_prompt(sample_report_data)
 
-        assert "Grounding requirements" in prompt
-        assert "Grounding Evidence Cards" in prompt
+        assert "事实性要求" in prompt
+        assert "数据事实卡片" in prompt
         assert "每句只包含一个主要事实" in prompt
-        assert "优先使用 Grounding Evidence Cards" in prompt
+        assert "优先使用上方数据事实卡片" in prompt
         assert "不要写“信度”" in prompt
 
-    async def test_grounding_facts_include_exact_zero_primary_summary(self, sample_report_data):
-        from report_insights import _build_grounding_facts
+    async def test_evidence_facts_include_exact_zero_primary_summary(self, sample_report_data):
+        from report_insights import _build_evidence_facts
 
         sample_report_data["competency"]["primary_distribution"] = {
             "生命观念": 1,
@@ -338,7 +338,7 @@ class TestGenerateInsights:
             "社会责任": 0,
         }
 
-        facts = _build_grounding_facts(sample_report_data)
+        facts = _build_evidence_facts(sample_report_data)
         joined = "\n".join(fact["factText"] for fact in facts)
 
         assert "主要素养为0题的维度为科学探究、社会责任" in joined

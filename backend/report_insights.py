@@ -110,7 +110,7 @@ def _build_overall_prompt(data: dict) -> str:
 - LLM 调用计数: {json.dumps(metadata_quality.get('llm_call_counts', {}), ensure_ascii=False)}
 """
 
-    evidence_cards = _build_grounding_facts(data)
+    evidence_cards = _build_evidence_facts(data)
     evidence_section = "\n".join(
         f"- {fact.get('factText')}"
         for fact in evidence_cards
@@ -144,17 +144,17 @@ def _build_overall_prompt(data: dict) -> str:
 
 {diag_section}
 {metadata_section}
-## Grounding Evidence Cards
-以下证据卡会用于 证据校验服务。输出中的事实、数字和判断必须能被这些证据卡直接支撑。
+## 数据事实卡片
+以下事实卡片均取自本卷分析数据。输出中的事实、数字和判断必须能被这些卡片直接支撑。
 {evidence_section}
 
-## Grounding requirements
+## 事实性要求
 - 每句只包含一个主要事实；需要同时表达多个事实时，用短句拆开。
 - 只使用上方数据中直接给出的数字、分布、题号和诊断结果。
-- 优先使用 Grounding Evidence Cards 中的原句、数字和术语。
+- 优先使用上方数据事实卡片中的原句、数字和术语。
 - 不要写“信度”“区分度”“质量良好”“有效区分”等未被上方数据直接证明的判断。
 - 如果要写建议，必须先指出对应数据依据，例如“简单题0题”“科学探究10.6%”。
-- 避免空泛评价，优先写可被 Check Grounding 逐句校验的事实句。
+- 避免空泛评价，优先写可被上方数据逐句核对的事实句。
 
 请输出严格 JSON（不要多余解释）：
 {{
@@ -257,7 +257,7 @@ def _build_teaching_prompt(
     )
 
 
-def _build_grounding_facts(data: dict) -> list[dict]:
+def _build_evidence_facts(data: dict) -> list[dict]:
     facts = []
 
     def add_fact(source: str, text: str, **attrs) -> None:

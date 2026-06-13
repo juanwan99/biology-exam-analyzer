@@ -135,7 +135,6 @@ async def test_analyze_question_does_not_forward_evidence_channel_kwargs():
         {"id": 1, "content": "question", "total_score": 2},
         image_bytes=[],
         mode="deep",
-        exam_review_channel="model",
     )
 
     assert "evidence_ranking_enabled" not in analyzer.calls[0]
@@ -746,7 +745,6 @@ async def test_auto_pdf_analysis_propagates_document_failure_events():
         "paper.pdf",
         b"%PDF",
         generate_report=False,
-        exam_review_channel="model",
     )
 
     assert result["document_failure_events"][0]["file_type"] == "pdf"
@@ -757,7 +755,6 @@ async def test_auto_pdf_analysis_propagates_document_failure_events():
 @pytest.mark.asyncio
 async def test_generate_report_stores_report_insights(monkeypatch, tmp_path):
     service = _service_without_dependencies()
-    monkeypatch.delenv("EXAM_REVIEW_CHANNEL", raising=False)
     monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
 
     captured = {}
@@ -801,7 +798,6 @@ async def test_generate_report_stores_report_insights(monkeypatch, tmp_path):
     )
 
     assert result == str(pdf_path)
-    assert "grounding_enabled" not in captured["kwargs"]
     assert captured["insights"]["overall_assessment"] == "ok"
     assert service._last_report_insights["overall_assessment"] == "ok"
 
@@ -850,7 +846,6 @@ async def test_auto_analysis_blocks_report_generation_when_llm_fallback_warning_
             generate_report=True,
             reports_dir=str(tmp_path),
             exam_id="exam-1",
-            exam_review_channel="model",
         )
 
     assert report_called is False

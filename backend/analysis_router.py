@@ -71,7 +71,6 @@ async def analyze_question_full(
     question: Dict[str, Any],
     image_bytes: List[bytes],
     mode: str = "deep",
-    exam_review_channel: Optional[str] = None,
 ) -> Dict[str, Any]:
     """单题完整分析 — 委托给 AnalysisService。"""
     svc = get_analysis_service()
@@ -79,7 +78,6 @@ async def analyze_question_full(
         question,
         image_bytes,
         mode,
-        exam_review_channel=exam_review_channel,
     )
 
 
@@ -132,7 +130,6 @@ async def analyze_document(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
-    exam_review_channel: Optional[str] = Form(None),
 ):
     """主接口：上传文档并完成完整分析流程。
 
@@ -145,7 +142,6 @@ async def analyze_document(
 
     file_path = None
     try:
-        effective_review_channel = exam_review_channel
         file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
         async with aiofiles.open(file_path, 'wb') as f:
             file_content = await file.read()
@@ -162,7 +158,6 @@ async def analyze_document(
             report_mode=report_mode,
             reports_dir=str(REPORTS_DIR),
             exam_id=exam_id,
-            exam_review_channel=effective_review_channel,
         )
 
         elapsed = (datetime.now() - start_time).total_seconds()
@@ -179,7 +174,6 @@ async def analyze_document(
             "html_report_url": result.get("html_report_url"),
             "report_error": result.get("report_error"),
             "mode": mode,
-            "exam_review_channel": effective_review_channel,
         }
 
     except HTTPException:
@@ -270,7 +264,6 @@ async def analyze_auto(
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
     subject: str = Form("biology"),
-    exam_review_channel: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
     """
@@ -313,8 +306,6 @@ async def analyze_auto(
         except Exception as e:
             logger.error(f"[积分] 余额查询失败: {e}")
             raise HTTPException(500, detail="积分查询失败，请稍后重试")
-
-    effective_review_channel = exam_review_channel
 
     doc_processor = get_doc_processor()
     word_splitter = get_word_splitter()
@@ -397,13 +388,12 @@ async def analyze_auto(
         _bg_mode = mode
         _bg_generate_report = generate_report
         _bg_report_mode = report_mode
-        _bg_review_channel = effective_review_channel
         _bg_competency_analyzer = competency_analyzer
         _bg_start_time = start_time
 
         _bg_task = asyncio.create_task(_run_analysis_pipeline(
             task_id, _bg_questions, _bg_image_bytes, _bg_mode,
-            _bg_review_channel, _bg_competency_analyzer,
+            _bg_competency_analyzer,
             _bg_generate_report, _bg_report_mode, _bg_filename,
             _bg_start_time,
         ))
@@ -430,7 +420,7 @@ async def analyze_auto(
 
 async def _run_analysis_pipeline(
     task_id, questions, image_bytes, mode,
-    effective_review_channel, competency_analyzer,
+    competency_analyzer,
     generate_report, report_mode, filename,
     start_time,
 ):
@@ -447,7 +437,6 @@ async def _run_analysis_pipeline(
                 try:
                     result = await analyze_question_full(
                         q, image_bytes, mode,
-                        exam_review_channel=effective_review_channel,
                     )
                     completed[0] += 1
                     task_manager.update(task_id, completed[0], f"已分析 {completed[0]}/{total} 题")
@@ -539,7 +528,6 @@ async def _run_analysis_pipeline(
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
-            "exam_review_channel": effective_review_channel,
         }
         if score_prediction:
             result["score_prediction"] = score_prediction
@@ -699,7 +687,6 @@ async def confirm_split(
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
     subject: str = Form("biology"),
-    exam_review_channel: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
     """
@@ -725,7 +712,6 @@ async def confirm_split(
 
     try:
         # 1. 获取session数据
-        effective_review_channel = exam_review_channel
         session_data = get_session(session_id)
         if not session_data:
             raise HTTPException(404, "Session已过期或不存在")
@@ -844,7 +830,6 @@ async def confirm_split(
                         q,
                         [],
                         mode,
-                        exam_review_channel=effective_review_channel,
                     )
                     if "_media_for_ai" in result:
                         del result["_media_for_ai"]
@@ -925,7 +910,6 @@ async def confirm_split(
             "html_report_url": html_report_url,
             "report_error": report_error,
             "mode": mode,
-            "exam_review_channel": exam_review_channel,
         }
 
     except Exception as e:

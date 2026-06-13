@@ -15,21 +15,11 @@ logger = get_logger()
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
-_review_channel: ContextVar[str | None] = ContextVar("llm_review_channel", default=None)
 
 
 def get_last_llm_call_metadata() -> dict:
     """Return audit metadata for the last llm_call in the current async context."""
     return dict(_last_call_metadata.get({}) or {})
-
-
-def set_llm_review_channel(channel: str | None):
-    """Set the review channel for LLM calls in the current async context."""
-    return _review_channel.set(channel)
-
-
-def reset_llm_review_channel(token) -> None:
-    _review_channel.reset(token)
 
 
 def _provider_error_message(error: Exception) -> str:
@@ -425,7 +415,6 @@ async def llm_call(
             "status": "provider_failed",
             "provider": None,
             "model": None,
-            "review_channel": _review_channel.get(),
             "purpose": purpose,
             "model_role": None,
             "model_policy": None,
@@ -447,7 +436,6 @@ async def llm_call(
                 "status": "ok",
                 "provider": provider.get("name"),
                 "model": provider.get("model"),
-                "review_channel": _review_channel.get(),
                 "purpose": purpose or provider.get("purpose"),
                 "model_role": provider.get("model_role"),
                 "model_policy": provider.get("model_policy"),
@@ -495,7 +483,6 @@ async def llm_call(
         "status": "provider_failed",
         "provider": None,
         "model": None,
-        "review_channel": _review_channel.get(),
         "purpose": purpose,
         "model_role": None,
         "model_policy": None,
