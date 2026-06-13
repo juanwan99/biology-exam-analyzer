@@ -787,9 +787,12 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                 ), teaching_prompt, 0, "none"
             except Exception as first_error:
                 logger.warning(f"[LLM分析] 教学建议生成失败，触发短格式重试: {first_error}")
-                for retry_label, retry_prompt, retry_max_tokens in (
-                    ("compact", _build_teaching_prompt(data, compact=True), 64000),
-                    ("ultra_compact", _build_teaching_prompt(data, ultra_compact=True), 64000),
+                for retry_count, (retry_label, retry_prompt, retry_max_tokens) in enumerate(
+                    (
+                        ("compact", _build_teaching_prompt(data, compact=True), 64000),
+                        ("ultra_compact", _build_teaching_prompt(data, ultra_compact=True), 64000),
+                    ),
+                    start=1,
                 ):
                     try:
                         text = await send_message_gpt(
@@ -798,7 +801,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                             temperature=0.0,
                             purpose="report_teaching_suggestions",
                         )
-                        return text, retry_prompt, 1, retry_label
+                        return text, retry_prompt, retry_count, retry_label
                     except Exception as retry_error:
                         logger.warning(f"[LLM分析] 教学建议短格式重试失败 ({retry_label}): {retry_error}")
                 raise RuntimeError("教学建议生成失败（report_teaching_suggestions）") from first_error
