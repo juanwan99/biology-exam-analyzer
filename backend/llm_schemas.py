@@ -170,24 +170,29 @@ class ScoringEvidenceUnit(BaseModel):
     difficulty_estimate: float = Field(default=5.0, ge=0.0, le=10.0)
     reasoning_brief: str = ""
 
-    def get_competency_weights(self) -> Dict[str, float]:
-        """获取四维素养权重（兼容新旧格式）。"""
+    def get_competency_weights(self, competency_dims: Optional[List[str]] = None) -> Dict[str, float]:
+        """获取素养权重（兼容新旧格式）。
+
+        competency_dims 缺省时退回 COMPETENCY_DIMS（生物四维），保证旧调用零变化。
+        """
+        dims = competency_dims or COMPETENCY_DIMS
+        equal = 1.0 / len(dims) if dims else 0.0
         if self.competency_weights:
-            w = {d: self.competency_weights.get(d, 0.0) for d in COMPETENCY_DIMS}
+            w = {d: self.competency_weights.get(d, 0.0) for d in dims}
             total = sum(w.values())
             if total > 0:
                 return {k: v / total for k, v in w.items()}
-            return {d: 0.25 for d in COMPETENCY_DIMS}
+            return {d: equal for d in dims}
         if self.competency and self.competency.primary:
-            w = {d: 0.0 for d in COMPETENCY_DIMS}
+            w = {d: 0.0 for d in dims}
             if self.competency.primary in w:
                 w[self.competency.primary] = self.competency.weight
                 remaining = 1.0 - self.competency.weight
-                others = [d for d in COMPETENCY_DIMS if d != self.competency.primary]
+                others = [d for d in dims if d != self.competency.primary]
                 for d in others:
-                    w[d] = remaining / len(others)
+                    w[d] = remaining / len(others) if others else 0.0
             return w
-        return {d: 0.25 for d in COMPETENCY_DIMS}
+        return {d: equal for d in dims}
 
 
 class DiagnosticUnit(BaseModel):
@@ -253,8 +258,13 @@ def validate_score_conservation(result: FineGrainedResult, total_score: float) -
     return (len(errors) == 0, errors)
 
 
-def compute_summary_from_units(fg: FineGrainedResult) -> dict:
-    """从 typed units 派生旧格式字段。纯 Python，无 LLM。"""
+def compute_summary_from_units(fg: FineGrainedResult,
+                               competency_dims: Optional[List[str]] = None) -> dict:
+    """从 typed units 派生旧格式字段。纯 Python，无 LLM。
+
+    competency_dims 缺省时退回 COMPETENCY_DIMS（生物四维），保证旧调用零变化。
+    """
+    dims = competency_dims or COMPETENCY_DIMS
     # knowledge_points: 按 score_share * kl.share 加权，取前 5
     _ABILITY_BLACKLIST = {"数据处理", "数据分析", "实验设计", "信息获取", "信息处理",
                           "逻辑推理", "模型建构", "批判性思维", "科学探究能力"}
@@ -271,13 +281,15 @@ def compute_summary_from_units(fg: FineGrainedResult) -> dict:
     # common_mistakes: 从 DU 提取
     common_mistakes = [du.misconception for du in fg.diagnostic_units if du.misconception][:3]
 
-    # primary_competency: 从 SEU 四维权重加权
-    comp_weights = {d: 0.0 for d in COMPETENCY_DIMS}
+    # primary_competency: 从 SEU 素养权重加权
+    comp_weights = {d: 0.0 for d in dims}
     for seu in fg.scoring_units:
-        w = seu.get_competency_weights()
-        for d in COMPETENCY_DIMS:
+        w = seu.get_competency_weights(dims)
+        for d in dims:
             comp_weights[d] += seu.score_share * w.get(d, 0)
-    primary_comp = max(comp_weights, key=comp_weights.get) if any(comp_weights.values()) else "科学思维"
+    # 无权重数据时的默认主素养：生物保持历史值"科学思维"，其余学科取首维
+    default_primary = "科学思维" if dims == COMPETENCY_DIMS else (dims[0] if dims else "")
+    primary_comp = max(comp_weights, key=comp_weights.get) if any(comp_weights.values()) else default_primary
 
     # bloom: 分值加权
     bloom_sum = sum(seu.bloom_level * seu.score_share for seu in fg.scoring_units)
@@ -290,11 +302,11 @@ def compute_summary_from_units(fg: FineGrainedResult) -> dict:
         label = bloom_labels.get(seu.bloom_level, "应用")
         bloom_dist[label] = bloom_dist.get(label, 0) + 1
 
-    # competency details: 四维素养权重加权聚合
-    all_comps = {d: 0.0 for d in COMPETENCY_DIMS}
+    # competency details: 素养权重加权聚合
+    all_comps = {d: 0.0 for d in dims}
     for seu in fg.scoring_units:
-        w = seu.get_competency_weights()
-        for d in COMPETENCY_DIMS:
+        w = seu.get_competency_weights(dims)
+        for d in dims:
             all_comps[d] += seu.score_share * w.get(d, 0)
 
     # allocation confidence

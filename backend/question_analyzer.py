@@ -11,6 +11,8 @@ from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_met
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from vision_context import extract_visual_context
+from prompt_loader import PromptLoader
+from subject_config import normalize_subject
 
 logger = get_logger()
 _split_merge_sem = asyncio.Semaphore(8)  # 全局：限制 split-merge 子问总并发，防网关过载
@@ -753,6 +755,7 @@ class QuestionAnalyzer:
         question_id: int,
         question_type: str = "unknown",
         section_header: str = None,
+        subject: str = "biology",
     ) -> dict:
         """
         第二次调用：分析单道题目
@@ -776,26 +779,25 @@ class QuestionAnalyzer:
         """
         logger.info(f"[分析] 开始分析题目 {question_id}，题型: {question_type}，分节: {section_header}")
 
-        # 优先加载 v2 prompt（细粒度 SEU/DU/SU 分析）
+        # 优先加载 v2 prompt（细粒度 SEU/DU/SU 分析），按学科取模板。
+        # 仅替换"取模板字符串"这一步；模板变量仍在下方用 .replace 注入（与历史一致）。
+        normalized_subject = normalize_subject(subject)
+        loader = PromptLoader(normalized_subject)
         use_v2 = False
-        v2_path = PROMPT_DIR / "analysis_prompt_v2.txt"
-        v1_path = PROMPT_DIR / "analysis_prompt.txt"
         try:
-            if v2_path.exists():
-                with open(str(v2_path), 'r', encoding='utf-8') as f:
-                    analysis_prompt_template = f.read()
+            if loader.exists("analysis_prompt_v2"):
+                analysis_prompt_template = loader.load("analysis_prompt_v2")
                 use_v2 = True
-                logger.info(f"[分析] 题目{question_id} 使用 v2 prompt（细粒度分析）")
+                logger.info(f"[分析] 题目{question_id} 使用 {normalized_subject} v2 prompt（细粒度分析）")
             else:
-                with open(str(v1_path), 'r', encoding='utf-8') as f:
-                    analysis_prompt_template = f.read()
-                logger.debug(f"[分析] 题目{question_id} 使用 v1 prompt")
+                analysis_prompt_template = loader.load("analysis_prompt")
+                logger.debug(f"[分析] 题目{question_id} 使用 {normalized_subject} v1 prompt")
         except FileNotFoundError:
             analysis_prompt_template = self._get_default_analysis_prompt()
             logger.warning(f"[分析] 使用默认Prompt")
 
         prompt_hash = sha256(analysis_prompt_template.encode("utf-8")).hexdigest()
-        analysis_prompt_id = "biology.question_analysis." + ("v" + "2" if use_v2 else "v1")
+        analysis_prompt_id = f"{normalized_subject}.question_analysis." + ("v" + "2" if use_v2 else "v1")
         question_media_items = _question_images_to_media_items(question_images)
         question_media_refs = media_input_refs(question_media_items)
         visual_context_text = ""

@@ -12,9 +12,12 @@ from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_met
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from vision_context import extract_visual_context
+from prompt_loader import PromptLoader
+from subject_config import normalize_subject, get_competency_dims, get_subject_name
 
 logger = get_logger()
 
+# 生物默认四维（保留作旧调用 / 缺省 subject 的兜底；学科动态维度走 get_competency_dims）
 COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任"]
 NORMALIZABLE_WEIGHT_MIN = 0.75
 NORMALIZABLE_WEIGHT_MAX = 1.25
@@ -74,13 +77,17 @@ def _is_length_provider_failure(exc: Exception) -> bool:
 
 
 def _build_compact_competency_prompt(question: Dict[str, Any],
-                                     visual_context_text: str = "") -> str:
+                                     visual_context_text: str = "",
+                                     subject: str = "biology") -> str:
     knowledge_points = ", ".join(question.get("knowledge_points", []))
+    dims = get_competency_dims(subject)
+    subject_name = get_subject_name(subject)
+    dims_text = "、".join(dims)
     parts = [
-        "你是高中生物核心素养分析器。上一次输出过长或不可解析，现在只做紧凑恢复。",
+        f"你是高中{subject_name}核心素养分析器。上一次输出过长或不可解析，现在只做紧凑恢复。",
         "只返回一个合法 JSON 对象，不要 markdown，不要解释，不要省略号。",
-        "必须包含：生命观念、科学思维、科学探究、社会责任、primary_competency、competency_level。",
-        "四个素养对象必须包含：涉及、具体维度、权重、分析说明。",
+        f"必须包含：{dims_text}、primary_competency、competency_level。",
+        f"{len(dims)}个素养对象必须包含：涉及、具体维度、权重、分析说明。",
         "权重总和必须等于 1.0；未涉及的素养用 涉及=false、具体维度=[]、权重=0、分析说明=\"\"。",
         "每个具体维度最多 2 个；分析说明不超过 35 个汉字。",
         "primary_competency 必须是权重最高的素养；competency_level 只能是 低/中/高。",
@@ -107,9 +114,10 @@ def _parse_competency_response(response_text: str, question_id) -> tuple[dict, f
     return result, ext_conf, val_errors
 
 
-def _competency_weight_sum(result: dict) -> float:
+def _competency_weight_sum(result: dict, competency_dims: list | None = None) -> float:
+    dims = competency_dims or COMPETENCY_DIMS
     total = 0.0
-    for dim in COMPETENCY_DIMS:
+    for dim in dims:
         value = (result.get(dim) or {}).get("权重", 0)
         try:
             total += float(value)
@@ -118,8 +126,9 @@ def _competency_weight_sum(result: dict) -> float:
     return total
 
 
-def _normalise_competency_weights(result: dict) -> dict:
-    total = _competency_weight_sum(result)
+def _normalise_competency_weights(result: dict, competency_dims: list | None = None) -> dict:
+    dims = competency_dims or COMPETENCY_DIMS
+    total = _competency_weight_sum(result, dims)
     metadata = {"total_weight_raw": round(total, 4)}
     if abs(total - 1.0) <= 0.01:
         return metadata
@@ -127,7 +136,7 @@ def _normalise_competency_weights(result: dict) -> dict:
         metadata["weight_sum_error"] = f"competency_weight_sum_mismatch:{total:.4f}"
         return metadata
 
-    for dim in COMPETENCY_DIMS:
+    for dim in dims:
         payload = result.get(dim)
         if not isinstance(payload, dict):
             continue
@@ -139,14 +148,14 @@ def _normalise_competency_weights(result: dict) -> dict:
     primary = result.get("primary_competency")
     valid_weights = {
         dim: (result.get(dim) or {}).get("权重", 0)
-        for dim in COMPETENCY_DIMS
+        for dim in dims
         if isinstance(result.get(dim), dict)
     }
-    if primary not in COMPETENCY_DIMS and valid_weights:
+    if primary not in dims and valid_weights:
         result["primary_competency"] = max(valid_weights, key=valid_weights.get)
 
     metadata["weight_sum_normalized_from"] = round(total, 4)
-    metadata["weight_sum_normalized_to"] = round(_competency_weight_sum(result), 4)
+    metadata["weight_sum_normalized_to"] = round(_competency_weight_sum(result, dims), 4)
     return metadata
 
 
@@ -183,7 +192,8 @@ class CompetencyAnalyzer:
             logger.error(f"素养库JSON解析失败: {e}")
             raise
 
-    async def analyze_competency(self, question: Dict[str, Any]) -> Dict[str, Any]:
+    async def analyze_competency(self, question: Dict[str, Any],
+                                 subject: str = "biology") -> Dict[str, Any]:
         """
         分析题目的核心素养
 
@@ -205,25 +215,23 @@ class CompetencyAnalyzer:
                 "competency_level": "高"
             }
         """
-        logger.info(f"[素养分析] 开始分析题目 {question.get('id')}")
+        normalized_subject = normalize_subject(subject)
+        competency_dims = get_competency_dims(normalized_subject)
+        logger.info(f"[素养分析] 开始分析题目 {question.get('id')} (学科={normalized_subject})")
         prompt = ""
         response_text = ""
 
         try:
-            # 加载Prompt
-            prompt_path = str(PROMPT_DIR / "competency_analysis_prompt.txt")
+            # 按学科加载并渲染 Prompt（PromptLoader 内部用 str.replace 注入变量，兼容 JSON 花括号）
             try:
-                with open(prompt_path, 'r', encoding='utf-8') as f:
-                    prompt_template = f.read()
-            except FileNotFoundError:
-                logger.error(f"[素养分析] Prompt文件未找到: {prompt_path}")
-                raise RuntimeError(f"competency prompt missing: {prompt_path}")
-
-            # 填充Prompt
-            prompt = prompt_template.format(
-                question_text=question.get("content", ""),
-                knowledge_points=", ".join(question.get("knowledge_points", []))
-            )
+                prompt = PromptLoader(normalized_subject).load(
+                    "competency_prompt",
+                    question_text=question.get("content", ""),
+                    knowledge_points=", ".join(question.get("knowledge_points", [])),
+                )
+            except FileNotFoundError as e:
+                logger.error(f"[素养分析] Prompt文件未找到: {e}")
+                raise RuntimeError(f"competency prompt missing for subject={normalized_subject}: {e}")
             media_items = question.get("media_items") or question.get("_media_for_ai") or []
             input_refs = {
                 "question_id": question.get("id"),
@@ -276,6 +284,7 @@ class CompetencyAnalyzer:
                 selected_prompt = _build_compact_competency_prompt(
                     question,
                     visual_context_text if visual_call_record else "",
+                    subject=normalized_subject,
                 )
                 response_text = await llm_call(
                     messages=messages_with_media(selected_prompt, []),
@@ -289,8 +298,8 @@ class CompetencyAnalyzer:
                     question.get("id"),
                 )
 
-            weight_metadata = _normalise_competency_weights(result)
-            total_weight = _competency_weight_sum(result)
+            weight_metadata = _normalise_competency_weights(result, competency_dims)
+            total_weight = _competency_weight_sum(result, competency_dims)
 
             if weight_metadata.get("weight_sum_normalized_from") is not None:
                 logger.warning(
@@ -319,7 +328,7 @@ class CompetencyAnalyzer:
                 call_id=f"question-{question.get('id')}-competency",
                 question_id=question.get("id"),
                 purpose="competency_analysis",
-                prompt_id="biology.competency_analysis",
+                prompt_id=f"{normalized_subject}.competency_analysis",
                 prompt_hash=sha256(selected_prompt.encode("utf-8")).hexdigest(),
                 provider=provider,
                 model=model,
@@ -356,7 +365,7 @@ class CompetencyAnalyzer:
                 call_id=f"question-{question.get('id')}-competency",
                 question_id=question.get("id"),
                 purpose="competency_analysis",
-                prompt_id="biology.competency_analysis",
+                prompt_id=f"{normalized_subject}.competency_analysis",
                 prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
                 provider=provider,
                 model=model,
@@ -373,13 +382,17 @@ class CompetencyAnalyzer:
                 "_llm_calls": [call.model_dump()],
             }
 
-    def aggregate_exam_competencies(self, questions_competencies: List[Dict]) -> Dict:
+    def aggregate_exam_competencies(self, questions_competencies: List[Dict],
+                                    subject: str = "biology") -> Dict:
         """
-        聚合整份试卷的素养覆盖情况
+        聚合整份试卷的素养覆盖情况（按学科动态维度）
         """
-        logger.info(f"[素养聚合] 开始聚合 {len(questions_competencies)} 道题目的素养数据")
+        competencies = get_competency_dims(subject)
+        logger.info(
+            f"[素养聚合] 开始聚合 {len(questions_competencies)} 道题目的素养数据 "
+            f"(学科={normalize_subject(subject)}, 维度={len(competencies)})"
+        )
 
-        competencies = ["生命观念", "科学思维", "科学探究", "社会责任"]
         aggregated = {}
 
         # V1: 分值加权，从显式 _total_score 字段读取；缺分值记 0，不等权补 1。

@@ -35,6 +35,7 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
 from utils import infer_question_type
 from analysis_statistics import generate_exam_statistics, _build_competency_list
+from subject_config import normalize_subject
 from deps import (
     get_analysis_service,
     get_analyzer,
@@ -262,6 +263,7 @@ async def analyze_auto(
     mode: AnalysisMode = Form(AnalysisMode.DEEP),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
+    subject: str = Form("biology"),
     exam_review_channel: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
@@ -361,6 +363,11 @@ async def analyze_auto(
             # PDF的图片已包含在 _media_for_ai 中
             image_bytes = []
 
+        # 注入学科：service/analyzer/competency/difficulty 链路均从 question["subject"] 取学科
+        _subject = normalize_subject(subject)
+        for _q in questions:
+            _q["subject"] = _subject
+
         # 3.5 文件拆分成功，扣除积分（评审模式跳过）
         if not _review_mode:
             try:
@@ -452,7 +459,8 @@ async def _run_analysis_pipeline(
 
         try:
             competency_list = _build_competency_list(questions)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+            _subj = normalize_subject(questions[0].get("subject") if questions else None)
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list, _subj)
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {}
@@ -684,6 +692,7 @@ async def confirm_split(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
+    subject: str = Form("biology"),
     exam_review_channel: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
@@ -727,7 +736,11 @@ async def confirm_split(
                 raise HTTPException(400, f"第{i+1}项不是有效的题目对象")
             if "id" not in q:
                 raise HTTPException(400, f"第{i+1}项缺少 id 字段")
-        logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目")
+        # 注入学科（下游链路从 question["subject"] 取）
+        _subject = normalize_subject(subject)
+        for q in corrected_questions_list:
+            q["subject"] = _subject
+        logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目 (subject={_subject})")
 
         # 题目校验通过，扣除积分（评审模式跳过；同 session 幂等，防刷新/重试重复扣费 DR-01）
         if not review_mode:
@@ -842,7 +855,8 @@ async def confirm_split(
         # 6. 聚合素养统计（分值加权）
         try:
             competency_list = _build_competency_list(questions_with_media)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+            _subj = normalize_subject(questions_with_media[0].get("subject") if questions_with_media else None)
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list, _subj)
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {"error": str(e)}

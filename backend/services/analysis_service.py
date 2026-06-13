@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from logger import get_logger
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
+from subject_config import get_competency_dims, normalize_subject
 
 logger = get_logger()
 
@@ -82,8 +83,12 @@ class AnalysisService:
 
     async def analyze_question(self, question: Dict, image_bytes: List[bytes],
                                 mode: str = "deep",
+                                subject: str = "biology",
                                 exam_review_channel: str | None = None) -> Dict:
         q_id = question.get("id", 0)
+        subject = normalize_subject(question.get("subject") or subject)
+        question.setdefault("subject", subject)
+        competency_dims = get_competency_dims(subject)
         from llm_client import set_llm_review_channel, reset_llm_review_channel
         review_channel_token = set_llm_review_channel(exam_review_channel)
         try:
@@ -106,6 +111,7 @@ class AnalysisService:
                 question_id=q_id,
                 question_type=question_type,
                 section_header=section_header,
+                subject=subject,
             )
             question["analysis"] = analysis
 
@@ -155,7 +161,7 @@ class AnalysisService:
                         diagnostic_units=fine_grained.get("diagnostic_units", []),
                         stimulus_units=fine_grained.get("stimulus_units", []),
                     )
-                    summary = compute_summary_from_units(fg)
+                    summary = compute_summary_from_units(fg, competency_dims)
                     # R2-002 + R2R-001 修复：归一化权重严格合计=1.0
                     raw_weights = summary["competency_details"]
                     weight_sum = sum(raw_weights.values())
@@ -191,12 +197,12 @@ class AnalysisService:
                 difficulty_result, supplement = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(
                         question=difficulty_q, mode=mode, analysis_result=analysis),
-                    self.competency_analyzer.analyze_competency(question=competency_q),
+                    self.competency_analyzer.analyze_competency(question=competency_q, subject=subject),
                 )
                 question["difficulty"] = difficulty_result
                 merged = dict(v2_seu_competency)
                 if isinstance(supplement, dict) and "error" not in supplement:
-                    for dim in ["生命观念", "科学思维", "科学探究", "社会责任"]:
+                    for dim in competency_dims:
                         sup_dim = supplement.get(dim, {})
                         if isinstance(sup_dim, dict) and isinstance(merged.get(dim), dict):
                             if sup_dim.get("具体维度"):
@@ -218,7 +224,7 @@ class AnalysisService:
                 # v1 路径：尝试合并素养或独立调用
                 merged_competency = analysis.get("competency")
                 if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
-                    weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
+                    weights = [merged_competency.get(k, {}).get("权重", 0) for k in competency_dims]
                     weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
                     if weight_sum >= 0.9:
                         question["competency"] = merged_competency
@@ -238,7 +244,7 @@ class AnalysisService:
                 }
                 difficulty_result, competency_result = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(question=difficulty_q, mode=mode, analysis_result=analysis),
-                    self.competency_analyzer.analyze_competency(question=competency_q),
+                    self.competency_analyzer.analyze_competency(question=competency_q, subject=subject),
                 )
                 question["difficulty"] = difficulty_result
                 question["competency"] = competency_result
@@ -342,9 +348,10 @@ class AnalysisService:
             async with sem:
                 if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
                     return await self.analyze_question(
-                        q, image_bytes, mode, exam_review_channel=exam_review_channel
+                        q, image_bytes, mode, subject=subject,
+                        exam_review_channel=exam_review_channel,
                     )
-                return await self.analyze_question(q, image_bytes, mode)
+                return await self.analyze_question(q, image_bytes, mode, subject=subject)
 
         originals = [copy.deepcopy(q) for q in questions]
         tasks = [_analyze_one(q) for q in questions]
@@ -361,10 +368,11 @@ class AnalysisService:
                     copy.deepcopy(originals[idx]),
                     image_bytes,
                     mode,
+                    subject=subject,
                     exam_review_channel=exam_review_channel,
                 )
             else:
-                retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
+                retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode, subject=subject)
             retry_still_needed = self._metadata_retry_reason(retry)
             if not retry_still_needed:
                 self._mark_recovered_metadata_retry(retry, retry_reason, emit_warning=False)
@@ -385,7 +393,14 @@ class AnalysisService:
         from analysis_statistics import generate_exam_statistics
         return generate_exam_statistics(questions, competency_summary)
 
-    def build_competency_summary(self, questions: List[Dict]) -> Dict:
+    def build_competency_summary(self, questions: List[Dict],
+                                 subject: str = "biology") -> Dict:
+        # subject 优先取题目内注入值（穿线结果），其次取入参，最终归一化兜底 biology
+        for q in questions:
+            if q.get("subject"):
+                subject = q["subject"]
+                break
+        subject = normalize_subject(subject)
         competency_list = []
         for q in questions:
             if "error" not in q.get("competency", {}):
@@ -396,7 +411,7 @@ class AnalysisService:
                 if fg:
                     comp["_fine_grained"] = fg
                 competency_list.append(comp)
-        return self.competency_analyzer.aggregate_exam_competencies(competency_list)
+        return self.competency_analyzer.aggregate_exam_competencies(competency_list, subject)
 
     # ── 文档处理 ──────────────────────────────────────────────
 
@@ -1233,7 +1248,7 @@ class AnalysisService:
             )
         else:
             analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
-        competency_summary = self.build_competency_summary(analyzed)
+        competency_summary = self.build_competency_summary(analyzed, subject)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
         if document_failure_events:
             exam_statistics["document_failure_events"] = document_failure_events
