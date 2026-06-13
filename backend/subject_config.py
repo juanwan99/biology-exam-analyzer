@@ -63,3 +63,45 @@ def list_subjects() -> list[dict[str, str | int]]:
 
 def is_valid_subject(subject: str | None) -> bool:
     return bool(subject) and str(subject).strip().lower() in SUBJECT_COMPETENCIES
+
+
+# 素养聚合结果（competency_summary / competency.distribution）里除维度键外还混入的元键，
+# 数据驱动提取维度时需排除。
+_COMPETENCY_META_KEYS = frozenset({
+    "primary_distribution",
+    "seu_primary_distribution",
+    "involved_distribution",
+})
+
+# 生物四维 → 既有英文 slug（雷达图 CSS class / data-active）。
+# 保证生物零回归（既有测试断言这些 slug），其余维度走 dim{index} 兜底。
+_LEGACY_COMPETENCY_SLUGS = {
+    "生命观念": "life-concept",
+    "科学思维": "scientific-thinking",
+    "科学探究": "scientific-inquiry",
+    "社会责任": "social-responsibility",
+}
+
+
+def competency_dims_from_distribution(distribution: Any,
+                                      subject: str | None = None) -> list[str]:
+    """从素养分布字典（competency_summary）按数据实际维度提取维度名（保持出现顺序）。
+
+    维度判定：值为 dict 且含 '占比' 或 '总权重'（真实维度条目），排除 primary_distribution
+    等元键。无可用维度时回退 get_competency_dims(subject)，保证渲染不空。
+    """
+    dims: list[str] = []
+    if isinstance(distribution, dict):
+        for key, value in distribution.items():
+            if key in _COMPETENCY_META_KEYS:
+                continue
+            if isinstance(value, dict) and ("占比" in value or "总权重" in value):
+                dims.append(str(key))
+    if dims:
+        return dims
+    return get_competency_dims(subject)
+
+
+def competency_slug(name: str, index: int = 0) -> str:
+    """素养维度名 → 稳定 CSS slug。生物四维用既有英文 slug（零回归），其余用 dim{index}。"""
+    return _LEGACY_COMPETENCY_SLUGS.get(str(name), f"dim{index}")

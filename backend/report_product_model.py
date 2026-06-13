@@ -26,6 +26,11 @@ from report_teacher_review_narrative import (
     summarize_student_fit,
     summarize_teacher_priorities,
 )
+from subject_config import (
+    competency_dims_from_distribution,
+    get_competency_dims,
+    normalize_subject,
+)
 
 
 PARSED_FIELDS = [
@@ -378,8 +383,11 @@ BLOOM_LEVEL_LABELS = {
     6: "创造",
 }
 
+# 生物四维：仅作 subject 缺省时的兜底（get_competency_dims("biology") 等价同序）。
+# 报告动态维度走 _active_competency_dims()，不再直接迭代该常量。
 CORE_COMPETENCIES = ("生命观念", "科学思维", "科学探究", "社会责任")
 
+# 生物专属二级细分规则（仅生物用）。非生物维度查不到 → 返回空 → 二级面板自动跳过。
 COMPETENCY_SUBDIMENSION_RULES = {
     "生命观念": [
         ("稳态与平衡观", ("稳态", "平衡", "调节", "反馈", "内环境", "激素", "神经", "homeostasis", "balance")),
@@ -1121,8 +1129,9 @@ def _competency_pct(value: Any) -> float:
 
 def _missing_competency_dims(competency: Dict) -> List[str]:
     distribution = _as_dict(competency.get("distribution"))
+    # 学科动态维度：从分布实际维度判缺口（兼容九科），无数据回退生物四维
     missing = []
-    for name in ("生命观念", "科学思维", "科学探究", "社会责任"):
+    for name in competency_dims_from_distribution(distribution, None):
         if _competency_pct(distribution.get(name)) <= 0:
             missing.append(name)
     return missing
@@ -1520,17 +1529,20 @@ def _aggregate_competency_detail_rows(rows: List[Dict]) -> List[Dict]:
 
 
 def _competency_distribution_scores(distribution: Dict, detail_rows: List[Dict]) -> Dict[str, float]:
+    distribution = _as_dict(distribution)
+    # 学科动态维度：从分布实际维度取（生物4/化学5/数学6…），无分布回退生物四维
     scores = {}
-    for name in CORE_COMPETENCIES:
-        value = _competency_pct(_as_dict(distribution).get(name))
+    for name in competency_dims_from_distribution(distribution, None):
+        value = _competency_pct(distribution.get(name))
         scores[name] = round(value * 100, 1) if 0 < value <= 1 else value
     if any(value > 0 for value in scores.values()):
         return scores
-    totals = {name: 0.0 for name in CORE_COMPETENCIES}
+    # 兜底：从 detail_rows 实际素养统计（不预设维度，兼容任意学科）
+    totals: Dict[str, float] = {}
     for row in detail_rows:
         competency = str(row.get("competency") or "")
-        if competency in totals:
-            totals[competency] += _num(row.get("score_contribution"))
+        if competency:
+            totals[competency] = totals.get(competency, 0.0) + _num(row.get("score_contribution"))
     total = sum(totals.values())
     return {name: round(value / total * 100, 1) if total else 0.0 for name, value in totals.items()}
 
@@ -1544,7 +1556,7 @@ def _build_competency_gap_rows(distribution: Dict, detail_rows: List[Dict]) -> L
         "社会责任": "可引入健康生活、生态治理、生物安全或技术伦理情境。",
     }
     rows = []
-    for name in CORE_COMPETENCIES:
+    for name in scores:
         value = scores.get(name, 0.0)
         if value <= 0:
             status = "缺失"
@@ -1556,7 +1568,7 @@ def _build_competency_gap_rows(distribution: Dict, detail_rows: List[Dict]) -> L
             "competency": name,
             "share": round(value, 1),
             "status": status,
-            "recommendation": recommendations[name],
+            "recommendation": recommendations.get(name, f"可增加显性考查「{name}」的采分点与情境设计。"),
         })
     return rows
 

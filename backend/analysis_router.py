@@ -108,6 +108,12 @@ async def _generate_route_report_artifacts(
     from report_insights import generate_insights
     from report_product_publish import write_report_artifacts
 
+    # 学科贯通：把首题 subject 注入 exam_info，供报告层动态素养维度与学科文案使用。
+    if isinstance(exam_info, dict) and not exam_info.get("subject") and questions:
+        first_q = questions[0] if isinstance(questions[0], dict) else {}
+        if first_q.get("subject"):
+            exam_info = {**exam_info, "subject": first_q.get("subject")}
+
     rdata = aggregate_report_data(
         questions, competency_summary, exam_statistics, exam_info
     )

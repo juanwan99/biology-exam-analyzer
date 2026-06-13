@@ -525,6 +525,11 @@ class AnalysisService:
         from exam_diagnostics import diagnose_exam
 
         self.validate_report_metadata(questions)
+        # 学科贯通：把首题 subject 注入 exam_info，供报告层动态素养维度与学科文案使用。
+        if isinstance(exam_info, dict) and not exam_info.get("subject") and questions:
+            _fq = questions[0] if isinstance(questions[0], dict) else {}
+            if _fq.get("subject"):
+                exam_info = {**exam_info, "subject": _fq.get("subject")}
         rdata = aggregate_report_data(
             questions, competency_summary, exam_statistics, exam_info
         )

@@ -10,6 +10,7 @@ import math
 from html import escape
 from math import cos, pi, sin
 from typing import Any, Dict, Iterable, List
+from subject_config import competency_dims_from_distribution, competency_slug
 
 
 PALETTE = {
@@ -109,7 +110,8 @@ def _svg(chart_id: str, width: int, height: int, body: str) -> str:
     desc = f"{label}，用于展示试卷质量报告中的结构化指标。"
     extra_attrs = ""
     if chart_id == "competency-distribution":
-        extra_attrs = ' data-mode="coverage" data-active="life-concept"'
+        # 不写死 data-active（首面板由 CSS .panel-{首维} 默认显示，兼容非生物多维）
+        extra_attrs = ' data-mode="coverage"'
     canvas = (
         "<defs>"
         f'<style>text {{ font-family: {FONT_STACK}; }}</style>'
@@ -475,13 +477,13 @@ def render_competency_radar(data: Dict[str, Any]) -> str:
         key=lambda row: -_num(row.get("score_contribution")),
     )
     gap_rows = [_dict(row) for row in _items(source.get("gap_rows"))]
+    # 学科动态维度：从 distribution 实际键提取（生物4/化学5/数学6…），slug 生物保旧、其余 dim{i}
+    _dim_names = competency_dims_from_distribution(distribution, source.get("subject"))
     dimensions = [
-        ("life-concept", "生命观念", _pct(distribution.get("生命观念"))),
-        ("scientific-thinking", "科学思维", _pct(distribution.get("科学思维"))),
-        ("scientific-inquiry", "科学探究", _pct(distribution.get("科学探究"))),
-        ("social-responsibility", "社会责任", _pct(distribution.get("社会责任"))),
+        (competency_slug(name, i), name, _pct(distribution.get(name)))
+        for i, name in enumerate(_dim_names)
     ]
-    if not any(value > 0 for _, _, value in dimensions):
+    if not dimensions or not any(value > 0 for _, _, value in dimensions):
         return _empty_chart("competency-distribution", "核心素养结构诊断")
     width, height = 720, 470
     cx, cy, radius = 188, 264, 104
@@ -543,7 +545,7 @@ def render_competency_radar(data: Dict[str, Any]) -> str:
         "svg[data-mode=\"load\"] .mode-coverage rect{stroke:#d2d3d1;}"
         "svg[data-mode=\"load\"] .mode-load rect{stroke:#cc0000;}"
         ".competency-panel{display:none;}"
-        ".panel-life-concept{display:inline;}"
+        f".panel-{dimensions[0][0]}{{display:inline;}}"
         ".competency-hit{cursor:pointer;pointer-events:all;}"
         ".competency-hit:focus{outline:none;}"
         ".mode-button rect:focus{outline:none;}"
@@ -563,12 +565,19 @@ def render_competency_radar(data: Dict[str, Any]) -> str:
             pts.append(f"{cx + radius * level * cos(angle):.1f},{cy + radius * level * sin(angle):.1f}")
         rings.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="{PALETTE["line"]}" opacity=".74"/>')
     axis_parts = []
-    label_positions = {
-        "生命观念": (cx, cy - radius - 22, "middle"),
-        "科学思维": (cx + radius - 8, cy - 22, "end"),
-        "科学探究": (cx, cy + radius + 34, "middle"),
-        "社会责任": (cx - radius + 8, cy - 22, "start"),
-    }
+    # 标签位置按维度角度动态计算（支持任意维数 N），text-anchor 依水平分量定 start/middle/end
+    label_positions = {}
+    for _idx, (_, _label, _) in enumerate(dimensions):
+        _ang = -pi / 2 + 2 * pi * _idx / len(dimensions)
+        _ca, _sa = cos(_ang), sin(_ang)
+        _lx = cx + (radius + 24) * _ca
+        _ly = cy + (radius + 24) * _sa
+        _anchor = "middle" if abs(_ca) < 0.34 else ("start" if _ca > 0 else "end")
+        if _sa > 0.34:
+            _ly += 12  # 下方标签下移避免压住轴点
+        elif _sa < -0.34:
+            _ly -= 6
+        label_positions[_label] = (_lx, _ly, _anchor)
     hit_parts = []
     for index, (key, label, value) in enumerate(dimensions):
         angle = -pi / 2 + 2 * pi * index / len(dimensions)
@@ -652,7 +661,7 @@ def render_competency_radar(data: Dict[str, Any]) -> str:
         is_strongest = competency == strongest[1]
         is_gap = any(str(row.get("competency")) == competency for row in gap_rows)
         accent = PALETTE["accent"] if is_strongest or is_gap else PALETTE["ink"]
-        eyebrow = "默认：生命观念" if key == "life-concept" else f"指向：{competency}"
+        eyebrow = f"默认：{dimensions[0][1]}" if key == dimensions[0][0] else f"指向：{competency}"
         coverage_q_count = coverage_counts.get(competency, 0)
         coverage_seu_count = int(coverage.get(competency, {}).get("seu_count", 0))
         total_score = sum(_num(row.get("score_contribution")) for row in rows)
@@ -719,7 +728,7 @@ def render_competency_radar(data: Dict[str, Any]) -> str:
             f'<div><strong>{_e(competency)}</strong><span>触达 {coverage_q_count}题</span></div>'
             f'<p>主负荷 {pct:.0f}%；二级聚类覆盖 {coverage_seu_count} 个采分点。</p>'
             f'<ul>{"".join(top_rows)}</ul>'
-            f'<small>{"默认显示" if key == "life-concept" else "雷达指向"}：{_e(competency)}</small>'
+            f'<small>{"默认显示" if key == dimensions[0][0] else "雷达指向"}：{_e(competency)}</small>'
             '</article>'
         )
 
@@ -864,8 +873,13 @@ def render_seu_competency_matrix(rows: Any) -> str:
         matrix.setdefault(knowledge, {})
         matrix[knowledge][competency] = matrix[knowledge].get(competency, 0) + _num(row.get("weighted_score"))
     knowledge_rows = sorted(matrix.items(), key=lambda item: -sum(item[1].values()))[:8]
-    CORE_COMPETENCIES = ("生命观念", "科学思维", "科学探究", "社会责任")
-    competencies = list(CORE_COMPETENCIES)
+    # 学科动态素养列：从矩阵实际出现的素养按承载分值降序取（兼容九科任意维数），回退生物四维
+    _seen: Dict[str, float] = {}
+    for _, _vals in matrix.items():
+        for _c, _v in _vals.items():
+            if _c and _c != "未标注素养":
+                _seen[_c] = _seen.get(_c, 0) + _v
+    competencies = [c for c, _ in sorted(_seen.items(), key=lambda x: -x[1])] or list(competency_dims_from_distribution(None, None))
     max_value = max((values.get(c, 0) for _, values in knowledge_rows for c in competencies), default=1) or 1
     width, height = 920, 162 + len(knowledge_rows) * 44
     left, top = 210, 122

@@ -139,8 +139,10 @@ def _analyze_coverage(questions: List[Dict], exam_scope: Optional[Dict]) -> Dict
 
 
 def _analyze_competency_balance(questions: List[Dict]) -> Dict:
-    """素养均衡度分析。"""
-    competencies = {"生命观念": 0, "科学思维": 0, "科学探究": 0, "社会责任": 0}
+    """素养均衡度分析（学科动态维度）。"""
+    from subject_config import get_competency_dims, normalize_subject
+    _subj = normalize_subject(questions[0].get("subject") if questions else None)
+    competencies = {name: 0 for name in get_competency_dims(_subj)}
     valid_count = 0
 
     for q in questions:

@@ -618,12 +618,20 @@ def aggregate_report_data(
     total_score = sum(_get_score(q) for q in questions)
     curve = exam_statistics.get("difficulty_curve", [])
 
+    # 学科贯通报告链：优先 exam_info.subject，回退首题 subject，normalize 兜底 biology。
+    from subject_config import normalize_subject
+    _subject_raw = exam_info.get("subject")
+    if not _subject_raw and questions:
+        _subject_raw = (questions[0] or {}).get("subject") if isinstance(questions[0], dict) else None
+    report_subject = normalize_subject(_subject_raw)
+
     data = {
         "exam_info": {
             "name": exam_info.get("name", "未命名"),
             "total_questions": exam_info.get("total", len(questions)),
             "total_score": total_score,
             "mode": exam_info.get("mode", "fast"),
+            "subject": report_subject,
         },
         "metrics": {
             "avg_difficulty": exam_statistics.get("avg_difficulty", 0),

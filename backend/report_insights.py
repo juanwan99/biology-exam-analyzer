@@ -11,6 +11,7 @@ from hashlib import sha256
 from llm_client import send_message_gpt, get_last_llm_call_metadata as get_last_call_metadata
 from logger import get_logger
 from metadata_contracts import LLMCallRecord
+from subject_config import get_subject_name, normalize_subject
 
 logger = get_logger()
 
@@ -110,7 +111,7 @@ def _build_overall_prompt(data: dict) -> str:
         for fact in evidence_cards
     )
 
-    return f"""你是一名资深高中生物教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
+    return f"""你是一名资深高中{get_subject_name(data.get("subject"))}教研员。请基于以下试卷分析数据，撰写专业的试卷质量评估。
 
 ## 试卷基本信息
 - 名称: {exam["name"]}
@@ -178,7 +179,7 @@ def _build_comments_prompt(questions: list) -> str:
             f"  常见错误: {', '.join(q.get('common_mistakes',[])[:2])}"
         )
 
-    return f"""你是一名资深高中生物教师。请为以下每道题写 2-3 句教师视角点评。
+    return f"""你是一名资深高中{get_subject_name(data.get("subject"))}教师。请为以下每道题写 2-3 句教师视角点评。
 点评应包含：考查目的、难点归因、常见失分预警。
 
 {chr(10).join(items)}
@@ -754,7 +755,8 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
     Raises:
         RuntimeError: GPT 调用失败
     """
-    logger.info(f"[LLM分析] 开始生成 mode={mode}")
+    _subj = normalize_subject(data.get("subject"))
+    logger.info(f"[LLM分析] 开始生成 mode={mode} subject={_subj}")
 
     try:
         llm_calls = []
@@ -816,7 +818,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
         llm_calls.append(_call_record(
             call_id="report-overall-insights",
             purpose="report_insights",
-            prompt_id="biology.report_insights",
+            prompt_id=f"{_subj}.report_insights",
             prompt=overall_prompt,
             input_refs=input_refs,
             parsed_schema="InsightsResult",
@@ -844,7 +846,7 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
         llm_calls.append(_call_record(
             call_id="report-teaching-suggestions",
             purpose="report_teaching_suggestions",
-            prompt_id="biology.report_teaching_suggestions",
+            prompt_id=f"{_subj}.report_teaching_suggestions",
             prompt=teaching_prompt_used,
             input_refs=input_refs,
             parsed_schema="TeachingSuggestions",
