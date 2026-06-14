@@ -7,10 +7,7 @@ import asyncio
 import base64
 import copy
 import inspect
-import json
 import re
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
@@ -1084,80 +1081,6 @@ class AnalysisService:
 
 
     # ── 完整端点编排（从 router 提取）────────────────────────
-
-    async def run_full_analysis(self, file_path: str, filename: str,
-                                 mode: str = "deep", generate_report: bool = False,
-                                 report_mode: str = "full", reports_dir: str = None,
-                                 exam_id: str = None) -> Dict:
-        """完整分析流程：文档→拆分→分析→统计→报告。对应 /api/analyze。"""
-        doc = await self.process_document(file_path, filename)
-        image_bytes = doc["image_bytes"]
-        extracted_text = doc["extracted_text"]
-        extracted_elements = doc["extracted_elements"]
-        document_failure_events = doc.get("failure_events") or []
-
-        if filename.lower().endswith(".docx") and self.word_splitter:
-            loop = asyncio.get_event_loop()
-            split_result = await loop.run_in_executor(None, self.word_splitter.split, file_path)
-            questions = split_result.get("questions", [])
-        else:
-            questions = await self.split_questions_llm(
-                image_bytes,
-                extracted_text,
-            )
-
-        self.validate_split_integrity(questions, extracted_text)
-
-        if extracted_elements and self.doc_processor:
-            self.doc_processor.match_elements_to_questions(questions, extracted_elements)
-
-        questions = await self.analyze_questions_batch(questions, image_bytes, mode)
-
-        competency_summary = self.build_competency_summary(questions)
-        exam_statistics = self.aggregate_statistics(questions, competency_summary)
-        if document_failure_events:
-            exam_statistics["document_failure_events"] = document_failure_events
-        from report_data import compute_metadata_quality
-        metadata_quality = compute_metadata_quality(questions, exam_statistics=exam_statistics)
-        pipeline_audit = self.build_pipeline_audit(metadata_quality)
-        self._last_pipeline_audit = pipeline_audit
-
-        report_url = None
-        html_report_url = None
-        report_error = None
-        report_insights = None
-        if generate_report and reports_dir:
-            self.assert_pipeline_ready(pipeline_audit)
-            try:
-                from pathlib import Path
-                pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
-                await self.generate_report(
-                    questions, competency_summary, exam_statistics,
-                    {"name": filename, "total": len(questions), "mode": mode},
-                    mode=report_mode,
-                    output_path=pdf_path,
-                )
-                report_url = f"/api/reports/{exam_id}.pdf"
-                if Path(pdf_path).with_suffix(".html").exists():
-                    html_report_url = f"/api/reports/{exam_id}.html"
-                report_insights = self._last_report_insights
-                pipeline_audit = self._last_pipeline_audit or pipeline_audit
-            except Exception as e:
-                logger.exception("[报告生成] 自动分析报告生成失败")
-                raise RuntimeError(f"report generation failed: {e}") from e
-
-        return {
-            "questions": questions,
-            "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,
-            "metadata_quality": metadata_quality,
-            "pipeline_audit": pipeline_audit,
-            "document_failure_events": document_failure_events,
-            "report_url": report_url,
-            "html_report_url": html_report_url,
-            "report_error": report_error,
-            "report_insights": report_insights,
-        }
 
     async def run_auto_analysis(self, file_path: str, filename: str,
                                  file_bytes: bytes, mode: str = "deep",

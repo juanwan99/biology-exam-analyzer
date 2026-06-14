@@ -232,51 +232,51 @@ class TestGenerateInsights:
         }
 
         assert 5 <= len(facts) <= 20
-        assert "report.evidence_card.overall" in sources
-        assert "report.evidence_card.difficulty" in sources
-        assert "report.evidence_card.difficulty_distribution_detail" in sources
-        assert "report.evidence_card.bloom" in sources
-        assert "report.evidence_card.knowledge" in sources
-        assert "report.evidence_card.competency" in sources
-        assert "report.evidence_card.feature_profile" in sources
-        assert "report.evidence_card.summary" in sources
-        assert "report.evidence_card.recommendation_basis" in sources
-        assert "report.evidence_card.recommendation_policy" in sources
+        assert "report.data_card.overall" in sources
+        assert "report.data_card.difficulty" in sources
+        assert "report.data_card.difficulty_distribution_detail" in sources
+        assert "report.data_card.bloom" in sources
+        assert "report.data_card.knowledge" in sources
+        assert "report.data_card.competency" in sources
+        assert "report.data_card.feature_profile" in sources
+        assert "report.data_card.summary" in sources
+        assert "report.data_card.recommendation_basis" in sources
+        assert "report.data_card.recommendation_policy" in sources
         assert all(len(str(fact.get("factText") or "")) <= 1200 for fact in facts)
         assert "report.metrics" not in sources
         difficulty_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.difficulty"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.difficulty"
         )
         assert "avg_difficulty" in difficulty_card["factText"]
         assert "difficulty_gradient" in difficulty_card["factText"]
         difficulty_detail_card = next(
             fact for fact in facts
             if (fact.get("attributes") or {}).get("source")
-            == "report.evidence_card.difficulty_distribution_detail"
+            == "report.data_card.difficulty_distribution_detail"
         )
         assert "简单题为1题。" in difficulty_detail_card["factText"]
         assert "中等题为1题。" in difficulty_detail_card["factText"]
         assert "困难题为0题。" in difficulty_detail_card["factText"]
         summary_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.summary"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.summary"
         )
         assert "top_difficulty_factors" in summary_card["factText"]
         recommendation_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.recommendation_basis"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.recommendation_basis"
         )
         assert "recommendation_basis" in recommendation_card["factText"]
         policy_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.recommendation_policy"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.recommendation_policy"
         )
         assert "recommendation_policy" in policy_card["factText"]
         assert "hard_score_share" in policy_card["factText"]
         feature_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.feature_profile"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.feature_profile"
         )
         assert "top_difficulty_factor_aliases" in feature_card["factText"]
         assert "对难度贡献最大的维度包含" in feature_card["factText"]
@@ -294,7 +294,7 @@ class TestGenerateInsights:
         facts = _build_evidence_facts(sample_report_data)
         competency_card = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.competency"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.competency"
         )
 
         assert "主要素养分布中科学思维为10题" in competency_card["factText"]
@@ -311,7 +311,7 @@ class TestGenerateInsights:
         facts = _build_evidence_facts(sample_report_data)
         detail = next(
             fact for fact in facts
-            if (fact.get("attributes") or {}).get("source") == "report.evidence_card.knowledge_detail"
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.knowledge_detail"
         )
 
         assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406" in detail["factText"]

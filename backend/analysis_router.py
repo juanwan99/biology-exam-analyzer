@@ -14,7 +14,6 @@
 - generate_exam_statistics   — 整卷统计（从 analysis_statistics 导入，SEU 精确聚合）
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body
-from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +23,6 @@ import os
 import json
 import re
 import aiofiles
-import base64
 
 from logger import get_logger
 from config import UPLOAD_DIR, REPORTS_DIR
@@ -33,15 +31,11 @@ import credits_service
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
-from utils import infer_question_type
 from analysis_statistics import generate_exam_statistics, _build_competency_list
 from subject_config import normalize_subject
 from deps import (
     get_analysis_service,
-    get_analyzer,
-    get_difficulty_engine,
     get_competency_analyzer,
-    get_knowledge_mapper,
     get_doc_processor,
     get_word_splitter,
     get_pdf_splitter,
@@ -136,63 +130,6 @@ async def analyze_document(
     【已下线】此端点无认证无计费，已被 /api/analyze_auto（带认证+计费）取代，
     前端无任何调用方，保留路由仅返回 410，杜绝绕过付费墙的免费分析。"""
     raise HTTPException(410, detail="此接口已下线，请使用 /api/analyze_auto")
-    svc = get_analysis_service()
-    start_time = datetime.now()
-    logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
-
-    file_path = None
-    try:
-        file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-        async with aiofiles.open(file_path, 'wb') as f:
-            file_content = await file.read()
-            if len(file_content) > MAX_UPLOAD_SIZE:
-                raise HTTPException(413, detail=f"文件过大，上限 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
-            await f.write(file_content)
-
-        exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result = await svc.run_full_analysis(
-            file_path=str(file_path),
-            filename=file.filename,
-            mode=mode,
-            generate_report=generate_report,
-            report_mode=report_mode,
-            reports_dir=str(REPORTS_DIR),
-            exam_id=exam_id,
-        )
-
-        elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info(f"完整流程完成，总耗时: {elapsed:.2f}秒")
-
-        return {
-            "questions": result["questions"],
-            "total_count": len(result["questions"]),
-            "processing_time": elapsed,
-            "competency_summary": result["competency_summary"],
-            "exam_statistics": result["exam_statistics"],
-            "metadata_quality": result.get("metadata_quality") or _compute_route_metadata_quality(result["questions"]),
-            "report_url": result.get("report_url"),
-            "html_report_url": result.get("html_report_url"),
-            "report_error": result.get("report_error"),
-            "mode": mode,
-        }
-
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.warning(f"分析参数错误: {e}")
-        raise HTTPException(400, detail=str(e))
-    except RuntimeError as e:
-        if "未配置" in str(e):
-            raise HTTPException(503, detail=str(e))
-        logger.error(f"分析运行时错误: {e}", exc_info=True)
-        raise HTTPException(500, detail="服务器内部错误")
-    except Exception as e:
-        logger.error(f"分析流程失败: {str(e)}", exc_info=True)
-        raise HTTPException(500, detail="服务器内部错误")
-    finally:
-        if file_path and file_path.exists():
-            file_path.unlink()
-            logger.debug(f"已删除临时文件: {file_path}")
 
 
 # ============ 积分查询 ============

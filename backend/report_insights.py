@@ -293,7 +293,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     exam_info = data.get("exam_info") or {}
     if exam_info:
         add_fact(
-            "report.evidence_card.exam_info",
+            "report.data_card.exam_info",
             "exam_info: "
             f"名称={exam_info.get('name')}; "
             f"题目数={exam_info.get('total_questions')}; "
@@ -309,7 +309,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     competency_diag = diagnostics.get("competency_balance") or {}
     if metrics or diagnostics:
         add_fact(
-            "report.evidence_card.overall",
+            "report.data_card.overall",
             "overall_evidence: "
             f"题目数={exam_info.get('total_questions')}；"
             f"总分={exam_info.get('total_score')}；"
@@ -355,7 +355,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         if item.get("id")
     )
     add_fact(
-        "report.evidence_card.difficulty_distribution_detail",
+        "report.data_card.difficulty_distribution_detail",
         "difficulty_distribution_detail: "
         f"简单题为{simple_count}题。"
         f"中等题为{medium_count}题。"
@@ -363,7 +363,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         f"{''.join(score_share_parts)}",
     )
     add_fact(
-        "report.evidence_card.difficulty",
+        "report.data_card.difficulty",
         "difficulty_evidence: "
         f"avg_difficulty={metrics.get('avg_difficulty')}，"
         f"难度分布为简单{simple_count}题、"
@@ -394,7 +394,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     bloom_highest = bloom_rank[0][0] if bloom_rank else ""
     bloom_lowest = bloom_rank[-1][0] if bloom_rank else ""
     add_fact(
-        "report.evidence_card.bloom",
+        "report.data_card.bloom",
         "bloom_evidence: "
         f"avg_cognitive_level={metrics.get('avg_cognitive_level')}；"
         f"识记层级占比为{number_text(bloom_distribution.get('识记', 0))}（{pct(bloom_distribution.get('识记', 0))}）；"
@@ -410,7 +410,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
 
     if bloom_lowest:
         add_fact(
-            "report.evidence_card.bloom_extremes",
+            "report.data_card.bloom_extremes",
             "bloom_extreme_evidence: "
             f"\u9ad8\u9636\u601d\u7ef4\u5360\u6bd4={pct(high_order)}; "
             f"{bloom_lowest}\u5c42\u7ea7\u5360\u6bd4\u6700\u4f4e\uff0c\u4e3a{pct(bloom_distribution.get(bloom_lowest, 0))}\u3002",
@@ -467,7 +467,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
             continue
 
     add_fact(
-        "report.evidence_card.knowledge",
+        "report.data_card.knowledge",
         "knowledge_evidence: "
         f"top_points={top_points_text}；"
         f"textbook_distribution={textbook_text}。",
@@ -476,12 +476,12 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         if textbook_rank:
             lowest_textbook, lowest_textbook_value = min(textbook_rank, key=lambda item: item[1])
             add_fact(
-                "report.evidence_card.knowledge_extremes",
+                "report.data_card.knowledge_extremes",
                 "knowledge_extreme_evidence: "
                 f"{lowest_textbook}\u5360\u6bd4\u6700\u4f4e\uff0c\u4e3a{pct(lowest_textbook_value)}\u3002",
             )
         add_fact(
-            "report.evidence_card.knowledge_detail",
+            "report.data_card.knowledge_detail",
             "knowledge_detail_evidence: " + "；".join(knowledge_detail_parts) + "。",
         )
 
@@ -526,7 +526,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
             f"{lowest_name}占比最低，为{pct(lowest_ratio)}；"
         )
     add_fact(
-        "report.evidence_card.competency",
+        "report.data_card.competency",
         "competency_evidence: "
         f"素养均衡度={competency_diag.get('balance')}；"
         f"方差={competency_diag.get('variance')}；"
@@ -546,7 +546,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
             continue
     if zero_primary:
         add_fact(
-            "report.evidence_card.competency_primary_gaps",
+            "report.data_card.competency_primary_gaps",
             "competency_primary_gap_evidence: "
             + "\uff1b".join(
                 f"\u4e3b\u8981\u7d20\u517b\u4e2d{name}\u4e3a0\u9898"
@@ -556,7 +556,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         )
     zero_primary_text = "\u3001".join(map(str, zero_primary)) if zero_primary else "\u65e0"
     add_fact(
-        "report.evidence_card.competency_primary_gap_summary",
+        "report.data_card.competency_primary_gap_summary",
         f"competency_primary_gap_summary: \u4e3b\u8981\u7d20\u517b\u4e3a0\u9898\u7684\u7ef4\u5ea6\u4e3a{zero_primary_text}\u3002",
     )
 
@@ -586,7 +586,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         for factor in top_factors
     )
     add_fact(
-        "report.evidence_card.feature_profile",
+        "report.data_card.feature_profile",
         "feature_profile_evidence: "
         f"avg_per_dimension={avg_dims_text}；"
         f"对难度贡献最大的维度包含{top_factor_names_text}；"
@@ -595,7 +595,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     )
 
     add_fact(
-        "report.evidence_card.summary",
+        "report.data_card.summary",
         "summary_evidence: "
         f"exam_name={exam_info.get('name')}; "
         f"question_count={exam_info.get('total_questions')}; "
@@ -609,7 +609,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     )
 
     add_fact(
-        "report.evidence_card.recommendation_basis",
+        "report.data_card.recommendation_basis",
         "recommendation_basis: "
         f"difficulty_distribution={compact_json(diff_distribution)}; "
         f"difficulty_distribution_by_score={by_score_text}; "
@@ -670,7 +670,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
         and _float_or(value.get("percentage"), 1.0) < 0.15
     ]
     add_fact(
-        "report.evidence_card.recommendation_policy",
+        "report.data_card.recommendation_policy",
         "recommendation_policy: "
         f"hard_score_share={pct(hard_score_share)}; "
         f"hard_count={hard_count}; "
@@ -693,7 +693,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
 
     if diagnostics:
         add_fact(
-            "report.evidence_card.diagnostics",
+            "report.data_card.diagnostics",
             "diagnostics_evidence: "
             f"overall_rating={diagnostics.get('overall_rating')}；"
             f"gradient_rating={gradient_diag.get('rating')}，"
@@ -706,7 +706,7 @@ def _build_evidence_facts(data: dict) -> list[dict]:
     metadata_quality = data.get("metadata_quality") or {}
     if metadata_quality:
         add_fact(
-            "report.evidence_card.metadata_quality",
+            "report.data_card.metadata_quality",
             "metadata_quality_evidence: "
             f"blocked_questions={compact_json(metadata_quality.get('blocked_questions') or [])}; "
             f"warning_questions={compact_json(metadata_quality.get('warning_questions') or [])}; "
