@@ -2,7 +2,7 @@
 用户认证和操作日志API
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict
 from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession

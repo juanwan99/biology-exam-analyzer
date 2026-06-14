@@ -28,8 +28,6 @@ from report_teacher_review_narrative import (
 )
 from subject_config import (
     competency_dims_from_distribution,
-    get_competency_dims,
-    normalize_subject,
 )
 
 

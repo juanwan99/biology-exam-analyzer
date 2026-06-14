@@ -3,7 +3,7 @@
 校验失败不阻断流程，而是标记 extraction_confidence 和 validation_errors。
 """
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from logger import get_logger
 
 logger = get_logger()

@@ -2,7 +2,6 @@
 数据库模型定义
 """
 from datetime import datetime
-from typing import List, Optional
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, DECIMAL, ARRAY, JSON, Index
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector

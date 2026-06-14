@@ -8,7 +8,6 @@ sys.modules['weasyprint'] = MagicMock()
 
 from report_generator import (
     _render_html, _render_difficulty_section, _render_knowledge_section,
-    _render_bloom_section, _render_competency_section,
     _render_questions_section, _render_recommendations_section,
 )
 

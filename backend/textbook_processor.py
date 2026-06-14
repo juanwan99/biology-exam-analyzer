@@ -7,9 +7,8 @@ import json
 import base64
 import asyncio
 import fitz  # PyMuPDF
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
-from io import BytesIO
 import httpx
 
 from config import UPLOAD_DIR

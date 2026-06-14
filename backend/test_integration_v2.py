@@ -8,11 +8,9 @@
 5. 空/异常响应 → 降级结果
 """
 import asyncio
-import json
 import sys
 import types
 
-import pytest
 
 # ── 补充 conftest 中未 stub 的模块 ──────────────────────────────────
 
@@ -46,10 +44,6 @@ except ImportError:
         sys.modules["llm_client"] = _llm_mod
 
 from services.analysis_service import AnalysisService
-from llm_schemas import (
-    FineGrainedResult, compute_summary_from_units, validate_llm_output,
-    AnalysisResult, CompetencyResult,
-)
 
 
 # ── 测试数据 ─────────────────────────────────────────────────────────
@@ -312,7 +306,6 @@ class TestF003CompetencySubDimensions:
 
     def test_v2_merged_feeds_aggregator(self):
         """F-003: 合并后的素养数据可被 aggregate_exam_competencies 消费"""
-        from competency_analyzer import CompetencyAnalyzer
         service = _build_service(V2_LLM_RESPONSE, COMPETENCY_LLM_RESPONSE)
         question = {"id": 1, "content": "关于细胞膜的说法正确的是"}
         result = asyncio.get_event_loop().run_until_complete(

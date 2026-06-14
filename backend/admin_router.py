@@ -14,7 +14,6 @@
 import hmac
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from enum import Enum
 

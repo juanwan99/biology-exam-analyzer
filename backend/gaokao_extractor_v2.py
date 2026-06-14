@@ -13,7 +13,6 @@ from openai import OpenAI
 import time
 
 from logger import get_logger
-from config import PROMPT_DIR
 from word_parser_v2 import WordParserV2, ParsedDocument
 
 logger = get_logger()

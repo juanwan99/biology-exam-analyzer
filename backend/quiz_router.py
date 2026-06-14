@@ -3,7 +3,7 @@
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List
 
 from quiz_service import quiz_service
 from logger import get_logger

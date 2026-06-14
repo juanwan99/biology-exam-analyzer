@@ -10,7 +10,6 @@ pytestmark = pytest.mark.skipif(
 
 """多学科端到端验证脚本 — 直接调用 pipeline，跳过 API/认证层。"""
 import asyncio
-import json
 import sys
 
 # 在 backend 目录运行

@@ -3,7 +3,7 @@ import json
 import asyncio
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

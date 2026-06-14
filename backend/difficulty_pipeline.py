@@ -55,7 +55,6 @@ class DifficultyPipeline:
 
     def __init__(self, **kwargs):
         """初始化。接受 kwargs 以兼容旧调用方 DifficultyEngine(analyzer=...) 签名。"""
-        pass
 
     async def _evaluate_single(self, question: dict, **kwargs) -> dict:
         """评估单道题难度。

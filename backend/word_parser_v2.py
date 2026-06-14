@@ -4,14 +4,10 @@ Word 文档精确解析器 v2
 - 精确定位图片和表格位置
 - 保持图文关联关系
 """
-import os
-import base64
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from docx import Document
-from docx.table import Table
-from lxml import etree
 
 from logger import get_logger
 

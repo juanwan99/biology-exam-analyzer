@@ -3,8 +3,7 @@
 知识库API路由 - 基于Vision处理的新数据结构
 """
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker

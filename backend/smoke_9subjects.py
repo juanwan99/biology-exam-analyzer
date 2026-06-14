@@ -4,7 +4,7 @@
 """
 import asyncio
 from deps import get_competency_analyzer
-from subject_config import get_competency_dims, get_subject_name, SUBJECT_COMPETENCIES
+from subject_config import get_competency_dims, get_subject_name
 from test_9subjects import QUESTIONS
 
 ORDER = ["chinese", "math", "english", "physics", "chemistry",

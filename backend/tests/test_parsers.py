@@ -1,5 +1,4 @@
 """Golden tests for document parsers."""
-import pytest
 from parsers.document_parsers import chinese_to_num, parse_docx, parse_pdf
 
 

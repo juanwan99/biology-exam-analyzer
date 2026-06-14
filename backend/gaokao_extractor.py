@@ -4,15 +4,13 @@
 """
 import os
 import json
-import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass
 from docx import Document
 from docx.table import Table
 from openai import OpenAI
 import base64
-import io
 import time
 
 from logger import get_logger

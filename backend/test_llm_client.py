@@ -1,6 +1,5 @@
 """LLM 统一客户端测试 — fallback 链 + 格式转换。"""
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 

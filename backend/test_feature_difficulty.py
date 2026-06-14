@@ -1,5 +1,4 @@
 """特征分析难度评估测试（v3: 难度预测模型）。"""
-import pytest
 from rule_scorer import compute_difficulty, score_to_label
 
 

@@ -2,21 +2,15 @@
 教材资料管理API路由
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from pydantic import BaseModel
-import os
-import re
-import docx
-import pdfplumber
-from io import BytesIO
 
-from database import get_db, init_db
+from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from textbook_service import TextbookService
-from pdf_parser import PDFParser, parse_pdf as parse_pdf_advanced
+from pdf_parser import parse_pdf as parse_pdf_advanced
 from logger import get_logger
-from parsers.document_parsers import chinese_to_num, parse_docx, parse_pdf, parse_docx_with_chapters, parse_pdf_with_chapters
+from parsers.document_parsers import parse_docx, parse_pdf, parse_docx_with_chapters
 from auth_router import require_auth, log_operation
 
 logger = get_logger()

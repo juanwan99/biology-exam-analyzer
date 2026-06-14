@@ -7,7 +7,7 @@
 3. 映射失败时返回LLM原始内容
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from logger import get_logger
 
 logger = get_logger()

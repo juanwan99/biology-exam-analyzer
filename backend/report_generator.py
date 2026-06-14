@@ -4,19 +4,15 @@
 SVG 图表（svg_charts 模块）在可用时优先内联，兼容 WeasyPrint。
 """
 import plotly.graph_objects as go
-import plotly.express as px
 from typing import List, Dict, Any
-import json
 from datetime import datetime
-from pathlib import Path
 import base64
-from io import BytesIO
-from weasyprint import HTML, CSS
+from weasyprint import HTML
 from logger import get_logger
 
 try:
-    from svg_charts import (render_radar_chart, render_heatmap, render_horizontal_bars,
-                            render_line_scatter, render_donut_chart, render_grouped_bars)
+    from svg_charts import (render_radar_chart, render_horizontal_bars, render_line_scatter,
+                            render_donut_chart)
     HAS_SVG_CHARTS = True
 except ImportError:
     HAS_SVG_CHARTS = False

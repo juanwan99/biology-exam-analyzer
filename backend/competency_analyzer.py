@@ -7,7 +7,7 @@ import json
 from hashlib import sha256
 from typing import Dict, List, Any
 from logger import get_logger
-from config import RULES_DIR, PROMPT_DIR
+from config import RULES_DIR
 from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord

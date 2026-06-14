@@ -10,7 +10,6 @@ from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 import pdfplumber
 from pdf2image import convert_from_path
-from PIL import Image
 from logger import get_logger
 
 logger = get_logger()

@@ -1,32 +1,23 @@
 # -*- coding: utf-8 -*-
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
-from pathlib import Path
-from enum import Enum
 import os
-import aiofiles
 
 from logger import get_logger
 from middleware import RequestIdMiddleware
-from config import UPLOAD_DIR, LOG_DIR, PROMPT_DIR, RULES_DIR, REPORTS_DIR
-from deps import get_analyzer
 from llm_config import get_providers
 from exceptions import (
     BiologyAnalyzerError,
-    ConfigurationError,
-    FileProcessingError,
-    AnalysisError,
     ValidationError,
     AuthenticationError
 )
 
 # 数据库和教材路由（可选加载，数据库不可用时不影响主功能）
 try:
-    from database import init_db
     from textbook_router import router as textbook_router
     from knowledge_router import router as knowledge_router
     from exercise_router import router as exercise_router
