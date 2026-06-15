@@ -1695,6 +1695,25 @@ async def _extract_big_question_features_uncached(question_text: str, options: s
 
 
 
+def _renormalize_cached_media(cached: dict, media_items: list | None) -> dict:
+    """缓存命中复用首次特征结果，但 input_refs 的 media 派生字段须按本次真实 media_items 归一化。
+    media_count 是‘本次是否把图传给 LLM’的审计标记，缓存命中=本次零 LLM 调用，不应回放旧值。
+    修复 media_not_passed 假阳性：带图题命中早先 media-less 缓存条目时回放出无 media_count 的 call。"""
+    if not isinstance(cached, dict):
+        return cached
+    refs_patch = media_input_refs(media_items)
+    if not refs_patch:  # 本次无媒体，无需修正（也不清除缓存里可能存在的反向字段，无害）
+        return cached
+    for call in cached.get("_llm_calls") or []:
+        if isinstance(call, dict) and call.get("purpose") in (
+            "feature_extraction", "big_question_feature_extraction",
+        ):
+            ir = call.get("input_refs")
+            if isinstance(ir, dict):
+                ir.update(refs_patch)
+    return cached
+
+
 async def extract_features(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
@@ -1707,7 +1726,7 @@ async def extract_features(question_text: str, options: str = "",
     cached = feature_cache.get(question_text, options, correct_answer, question_type, subject)
     if cached is not None:
         logger.info(f"[特征缓存] 命中，复用特征（零 LLM 调用）: {question_text[:30]}...")
-        return cached
+        return _renormalize_cached_media(cached, media_items)
     result = await _extract_features_uncached(
         question_text, options, correct_answer, question_type, subject, media_items)
     if isinstance(result, dict) and result.get("_feature_status") in ("ok", "partial"):
@@ -1731,7 +1750,7 @@ async def extract_big_question_features(question_text: str, options: str = "",
     cached = feature_cache.get(question_text, options, correct_answer, question_type, cache_subject)
     if cached is not None:
         logger.info(f"[大题特征缓存] 命中，复用结构化特征（零 LLM 调用）: {question_text[:30]}...")
-        return cached
+        return _renormalize_cached_media(cached, media_items)
     result = await _extract_big_question_features_uncached(
         question_text, options, correct_answer, question_type, subject,
         total_score, return_failure, media_items)

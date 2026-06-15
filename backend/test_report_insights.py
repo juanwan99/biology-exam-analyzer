@@ -105,14 +105,39 @@ class TestGenerateInsights:
         assert len(ts["remedial_exercises"]) == 1
 
     @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
-    async def test_teaching_suggestions_failure_raises(self, mock_gpt, sample_report_data):
-        """教学建议失败必须阻断，不能用空结构伪装成功。"""
+    async def test_teaching_suggestions_only_failure_degrades_not_raises(self, mock_gpt, sample_report_data):
+        """改动C：仅教学建议三级重试全失败（综合分析成功）→ 板块降级，不 raise。
+        返回占位空结构 + _degraded_sections 标注，综合分析与统计数据不受影响。"""
         mock_gpt.side_effect = [
             MOCK_OVERALL_RESPONSE,
             RuntimeError("API timeout"),
             RuntimeError("compact timeout"),
             RuntimeError("ultra compact timeout"),
         ]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        # 综合分析正常
+        assert result["overall_assessment"] == "本卷难度适中，知识覆盖较全面。"
+        # 教学建议降级为占位空结构（不 raise、不伪装成功内容）
+        assert result["teaching_suggestions"] == {
+            "error_categories": [], "lecture_outline": [], "remedial_exercises": []
+        }
+        # 降级板块被标注
+        assert "report_teaching_suggestions" in result["_degraded_sections"]
+        assert "report_insights" not in result["_degraded_sections"]
+        # 降级 call 不泄漏 provider_errors，metadata.degraded=True，prompt_hash=degraded
+        teaching_call = next(
+            c for c in result["_llm_calls"] if c["purpose"] == "report_teaching_suggestions"
+        )
+        assert teaching_call["metadata"]["degraded"] is True
+        assert teaching_call["prompt_hash"] == "degraded"
+        assert "provider_errors" not in teaching_call["metadata"]
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_both_sections_failure_fail_closed_raises(self, mock_gpt, sample_report_data):
+        """改动C fail-closed 护栏：综合分析与教学建议均不可用（疑似 provider 整体不可用）
+        → raise，不出空壳报告。"""
+        mock_gpt.side_effect = RuntimeError("All LLM providers failed")
         from report_insights import generate_insights
         with pytest.raises(RuntimeError, match="LLM .*生成失败"):
             await generate_insights(sample_report_data, mode="brief")

@@ -202,24 +202,29 @@ def _call_has_retry_or_parse_failure(call: Dict) -> bool:
         or recovery_status in {"degraded", "failed"}
         or recovery_mode == "deterministic_length_fallback"
     )
-    if call.get("purpose") == "missing_evidence_repair" and not has_final_failure_signal:
+    # 护栏：终态失败信号无条件计 failure（哪怕有 parsed_schema 也不放，避免假成功）
+    if has_final_failure_signal:
+        return True
+    # 既有豁免：成功的 missing_evidence_repair（无终态失败信号）不计 failure
+    if call.get("purpose") == "missing_evidence_repair":
         return False
-    successful_model_recovery = (
+    # 既有豁免：成功的模型恢复（重试后 recovery_status=ok、无终态失败信号）不计 failure。
+    # 这类成功恢复的 call 不一定带 parsed_schema 字段（recovery_status 本身即成功信号）。
+    if retry_count > 0 and recovery_status == "ok":
+        return False
+    # 软信号：发生过重试类抖动（重试 / 各类 compact retry / initial_parse_error）。
+    # 仅当缺最终产物才计 failure：parsed_schema 或 recovery_status==ok 任一存在即视为成功恢复 → 放行。
+    had_retry_soft_signal = (
         retry_count > 0
-        and recovery_status == "ok"
-        and not has_final_failure_signal
-    )
-    if successful_model_recovery:
-        return False
-    return (
-        "compact_retry" in prompt_id
+        or "compact_retry" in prompt_id
         or "json_repair" in prompt_id
         or "ultra_compact_retry" in prompt_id
         or "length_recovery" in prompt_id
-        or retry_count > 0
-        or has_final_failure_signal
         or bool(metadata.get("initial_parse_error"))
     )
+    if had_retry_soft_signal:
+        return not (call.get("parsed_schema") or recovery_status == "ok")
+    return False
 
 
 def _purpose_satisfied(expected: str, purposes: set[str], q: Dict) -> bool:

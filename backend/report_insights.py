@@ -748,12 +748,18 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
         teaching_prompt = _build_teaching_prompt(data)
 
         async def _run_overall():
-            return await send_message_gpt(
-                prompt=overall_prompt,
-                max_tokens=64000,
-                temperature=0.0,
-                purpose="report_insights",
-            )
+            # 改动C：综合分析板块级降级保护。成功 → (text, False)；失败 → (None, True) 不 raise。
+            try:
+                text = await send_message_gpt(
+                    prompt=overall_prompt,
+                    max_tokens=64000,
+                    temperature=0.0,
+                    purpose="report_insights",
+                )
+                return text, False
+            except Exception as overall_error:
+                logger.warning(f"[LLM分析] 综合分析生成失败，板块降级: {overall_error}")
+                return None, True
 
         async def _run_teaching():
             try:
@@ -782,27 +788,71 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                         return text, retry_prompt, retry_count, retry_label
                     except Exception as retry_error:
                         logger.warning(f"[LLM分析] 教学建议短格式重试失败 ({retry_label}): {retry_error}")
-                raise RuntimeError("教学建议生成失败（report_teaching_suggestions）") from first_error
+                # 改动C：教学建议三级重试全失败 → 板块降级（不 raise）。strategy="degraded" 供上层识别。
+                logger.warning("[LLM分析] 教学建议三级重试全失败，板块降级")
+                return None, teaching_prompt, retry_count, "degraded"
 
-        overall_text, teaching_result = await asyncio.gather(_run_overall(), _run_teaching())
+        (overall_text, overall_degraded), teaching_result = await asyncio.gather(
+            _run_overall(), _run_teaching())
         teaching_text, teaching_prompt_used, teaching_retry_count, teaching_retry_strategy = teaching_result
-        result = _parse_json_response(overall_text)
+        teaching_degraded = teaching_text is None or teaching_retry_strategy == "degraded"
+
         from llm_schemas import validate_llm_output, InsightsResult
-        result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
-        if val_errors:
-            logger.warning(f"[LLM分析] 整卷分析 schema 校验: {val_errors[:3]}")
-        llm_calls.append(_call_record(
-            call_id="report-overall-insights",
-            purpose="report_insights",
-            prompt_id=f"{_subj}.report_insights",
-            prompt=overall_prompt,
-            input_refs=input_refs,
-            parsed_schema="InsightsResult",
-            confidence=ext_conf,
-            validation_errors=val_errors,
-            metadata={"response_length": len(overall_text)},
-        ))
-        logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议 (confidence={ext_conf})")
+
+        # 改动C fail-closed 护栏：综合分析与教学建议均降级 → 疑似 provider 整体不可用，
+        # 不出空壳报告（这是 generate_insights 唯一保留的整篇失败）。
+        if overall_degraded and teaching_degraded:
+            raise RuntimeError(
+                "LLM 分析生成失败: 综合分析与教学建议均不可用（疑似 provider 整体不可用），"
+                "fail-closed 不出空壳报告"
+            )
+
+        degraded_sections = []
+
+        # ── 综合分析（overall）──
+        if overall_degraded:
+            # 占位 result：各项统计数据由 report_data 提供、不受影响；仅 LLM 文本缺失。
+            result = {
+                "overall_assessment": "本次综合分析因模型暂时不可用未能生成，下列各项统计数据不受影响。",
+                "recommendations": [],
+                "difficulty_analysis": "",
+                "knowledge_analysis": "",
+                "competency_analysis": "",
+                "bloom_analysis": "",
+            }
+            ext_conf, val_errors = 0.0, []
+            degraded_sections.append("report_insights")
+            # 降级 call 不走 _call_record（避免 contextvar provider_errors 泄漏被审计二次毙）
+            llm_calls.append({
+                "call_id": "report-overall-insights",
+                "purpose": "report_insights",
+                "prompt_id": f"{_subj}.report_insights",
+                "prompt_hash": "degraded",
+                "provider": "n/a",
+                "model": "n/a",
+                "input_refs": input_refs,
+                "parsed_schema": "InsightsResult",
+                "confidence": 0.0,
+                "metadata": {"degraded": True, "reason": "provider_unavailable"},
+            })
+            logger.warning("[LLM分析] 综合分析板块降级，使用占位文案")
+        else:
+            result = _parse_json_response(overall_text)
+            result, ext_conf, val_errors = validate_llm_output(result, InsightsResult, "整卷分析")
+            if val_errors:
+                logger.warning(f"[LLM分析] 整卷分析 schema 校验: {val_errors[:3]}")
+            llm_calls.append(_call_record(
+                call_id="report-overall-insights",
+                purpose="report_insights",
+                prompt_id=f"{_subj}.report_insights",
+                prompt=overall_prompt,
+                input_refs=input_refs,
+                parsed_schema="InsightsResult",
+                confidence=ext_conf,
+                validation_errors=val_errors,
+                metadata={"response_length": len(overall_text)},
+            ))
+            logger.info(f"[LLM分析] 整卷分析完成，{len(result.get('recommendations',[]))} 条建议 (confidence={ext_conf})")
 
         # 逐题点评和质量审查已移入 feature_extractor（v3 合并优化）
         # 从 report_data 的 questions 中提取 teacher_comment
@@ -816,31 +866,60 @@ async def generate_insights(data: dict, mode: str = "brief") -> dict:
                 result["question_comments"] = question_comments
                 logger.info(f"[LLM分析] 逐题点评从特征提取复用，{len(question_comments)} 题")
 
-
-        # 教学建议已在上方并行获取，这里只解析结果
-        teaching = _parse_json_response(teaching_text)
-        llm_calls.append(_call_record(
-            call_id="report-teaching-suggestions",
-            purpose="report_teaching_suggestions",
-            prompt_id=f"{_subj}.report_teaching_suggestions",
-            prompt=teaching_prompt_used,
-            input_refs=input_refs,
-            parsed_schema="TeachingSuggestions",
-            confidence=1.0,
-            metadata={
-                "response_length": len(teaching_text),
-                "retry_count": teaching_retry_count,
-                "compact_retry": teaching_retry_count > 0,
-                "retry_strategy": teaching_retry_strategy,
-            },
-        ))
-        logger.info(f"[LLM分析] 教学建议生成完成")
+        # ── 教学建议（teaching）──
+        empty_teaching = {"error_categories": [], "lecture_outline": [], "remedial_exercises": []}
+        if teaching_degraded:
+            teaching = dict(empty_teaching)
+            degraded_sections.append("report_teaching_suggestions")
+            llm_calls.append({
+                "call_id": "report-teaching-suggestions",
+                "purpose": "report_teaching_suggestions",
+                "prompt_id": f"{_subj}.report_teaching_suggestions",
+                "prompt_hash": "degraded",
+                "provider": "n/a",
+                "model": "n/a",
+                "input_refs": input_refs,
+                "parsed_schema": "TeachingSuggestions",
+                "confidence": 0.0,
+                "metadata": {"degraded": True, "reason": "provider_unavailable"},
+            })
+            logger.warning("[LLM分析] 教学建议板块降级，使用占位空结构")
+        else:
+            # 教学建议已在上方并行获取，这里只解析结果；非法 JSON 也兜底为空结构（不 raise）
+            try:
+                teaching = _parse_json_response(teaching_text)
+            except Exception as parse_error:
+                logger.warning(f"[LLM分析] 教学建议解析失败，兜底空结构: {parse_error}")
+                teaching = dict(empty_teaching)
+                degraded_sections.append("report_teaching_suggestions")
+            llm_calls.append(_call_record(
+                call_id="report-teaching-suggestions",
+                purpose="report_teaching_suggestions",
+                prompt_id=f"{_subj}.report_teaching_suggestions",
+                prompt=teaching_prompt_used,
+                input_refs=input_refs,
+                parsed_schema="TeachingSuggestions",
+                confidence=1.0,
+                metadata={
+                    "response_length": len(teaching_text),
+                    "retry_count": teaching_retry_count,
+                    "compact_retry": teaching_retry_count > 0,
+                    "retry_strategy": teaching_retry_strategy,
+                },
+            ))
+            logger.info(f"[LLM分析] 教学建议生成完成")
 
         result["teaching_suggestions"] = teaching
         result["_llm_calls"] = llm_calls
+        if degraded_sections:
+            result.setdefault("_degraded_sections", []).extend(degraded_sections)
 
         return result
 
+    except RuntimeError:
+        # 改动C fail-closed 护栏抛出的 RuntimeError（两板块全降级）原样上抛，避免消息双重包裹
+        logger.error("[LLM分析] fail-closed：综合分析与教学建议均不可用，整篇失败", exc_info=True)
+        raise
     except Exception as e:
         logger.error(f"[LLM分析] 失败，不使用静默降级: {e}", exc_info=True)
         raise RuntimeError(f"LLM 分析生成失败: {e}") from e

@@ -733,10 +733,10 @@ class AnalysisService:
         hard_warning_prefixes = (
             "analysis_failed:",
             "difficulty_blocked:",
-            "llm_fallback:",
             "invalid_llm_call:",
-            "llm_parse_failure:",
-            "llm_provider_error:",
+            # 已移除 llm_fallback: / llm_parse_failure: / llm_provider_error:（改动B2）：
+            # 成功 fallback / parse-retry 有有效产物，不再因报告侧软信号误杀报告；
+            # 真失败仍由 analysis_failed: / B1 retry 判据 / missing_purpose / validate_report_metadata 兜住。
             "media_not_passed:",
             "seu_derivation_failed:",
             "competency_supplement_failed:",
@@ -769,12 +769,17 @@ class AnalysisService:
                     continue
                 purpose = call.get("purpose") or "report_llm"
                 metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+                # 改动C 配套：板块级降级的 call 已是 fail-closed 护栏放行的安全占位，跳过审计
+                if metadata.get("degraded"):
+                    continue
+                # 改动B3：报告 LLM 单次抖动（fallback / provider_error / validation）降为普通 warning，
+                # 不再 add_block 杀报告——成功恢复有有效产物；真整体失败由 report_insights fail-closed 护栏 raise。
                 if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
-                    add_block("report_llm", "llm_fallback", f"{purpose} used fallback", call)
+                    warnings.append({"stage": "report_llm", "code": "llm_fallback", "detail": call})
                 if metadata.get("provider_errors"):
-                    add_block("report_llm", "provider_error", f"{purpose} has provider errors", call)
+                    warnings.append({"stage": "report_llm", "code": "provider_error", "detail": call})
                 if call.get("validation_errors"):
-                    add_block("report_llm", "parse_or_validation_error", f"{purpose} validation failed", call)
+                    warnings.append({"stage": "report_llm", "code": "parse_or_validation_error", "detail": call})
 
         return {
             "status": "blocked" if blockers else "ok",

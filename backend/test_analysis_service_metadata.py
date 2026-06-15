@@ -316,7 +316,7 @@ async def test_analysis_service_retries_questions_with_missing_metadata_envelope
             )
             self.calls = 0
 
-        async def analyze_question(self, question, image_bytes, mode="deep"):
+        async def analyze_question(self, question, image_bytes, mode="deep", subject="biology"):
             self.calls += 1
             if self.calls == 1:
                 return {"id": question["id"], "analysis": {"error": "transient"}}
@@ -724,7 +724,7 @@ async def test_auto_pdf_analysis_propagates_document_failure_events():
             assert image_bytes == [b"image"]
             return [_ready_question(1)]
 
-        def build_competency_summary(self, questions):
+        def build_competency_summary(self, questions, subject="biology"):
             return {}
 
         def aggregate_statistics(self, questions, competency_summary):
@@ -803,7 +803,9 @@ async def test_generate_report_stores_report_insights(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_auto_analysis_blocks_report_generation_when_llm_fallback_warning_exists(tmp_path):
+async def test_auto_analysis_allows_report_generation_when_llm_fallback_warning_exists(tmp_path):
+    """改动B2：llm_fallback:（及 llm_provider_error: / llm_parse_failure:）成功恢复有有效产物，
+    降为普通 warning，不再 add_block 杀报告——报告照出，warning 仍对老师可见。"""
     class LocalWordSplitter:
         def split(self, file_path):
             return {"questions": [{"id": 1, "content": "Question stem"}]}
@@ -828,32 +830,42 @@ async def test_auto_analysis_blocks_report_generation_when_llm_fallback_warning_
         report_called = True
 
     q = _ready_question(1)
+    # 补全 fixture：给有效分数，避免 score_issue 阻断（原测试在 llm_fallback 硬阻断处即 raise，
+    # B2 放行后流程会推进到分数校验，fixture 须自洽）
+    q["total_score"] = 6
+    q["_metadata_envelope"]["question"]["total_score"] = 6
     q["_metadata_envelope"]["warnings"] = ["llm_fallback:question_analysis"]
 
     async def fake_analyze_questions_batch_with_fallback(questions, image_bytes, mode, subject="biology"):
         return [q]
 
     service.analyze_questions_batch = fake_analyze_questions_batch_with_fallback
-    service.build_competency_summary = lambda questions: {}
+    service.build_competency_summary = lambda questions, subject="biology": {}
     service.aggregate_statistics = lambda questions, competency_summary: {}
     service.generate_report = fake_generate_report
 
-    with pytest.raises(RuntimeError, match="pipeline gate failed"):
-        await service.run_auto_analysis(
-            "exam.docx",
-            "exam.docx",
-            b"",
-            generate_report=True,
-            reports_dir=str(tmp_path),
-            exam_id="exam-1",
-        )
+    # 不再 raise pipeline gate failed：报告应正常生成
+    await service.run_auto_analysis(
+        "exam.docx",
+        "exam.docx",
+        b"",
+        generate_report=True,
+        reports_dir=str(tmp_path),
+        exam_id="exam-1",
+    )
 
-    assert report_called is False
-    assert service._last_pipeline_audit["status"] == "blocked"
-    assert any(
-        blocker["stage"] == "question_metadata"
-        and blocker["code"] == "hard_warning"
+    assert report_called is True
+    assert service._last_pipeline_audit["status"] == "ok"
+    # llm_fallback: 不再进 blockers
+    assert not any(
+        blocker["code"] == "hard_warning"
         for blocker in service._last_pipeline_audit["blockers"]
+    )
+    # 但仍作为可见 warning 保留
+    assert any(
+        str(w.get("warning")) == "llm_fallback:question_analysis"
+        for w in service._last_pipeline_audit["warnings"]
+        if isinstance(w, dict)
     )
 
 
