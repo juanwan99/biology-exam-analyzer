@@ -1275,6 +1275,16 @@ def _unit_competency_weights(unit: Dict, question: Dict) -> Dict[str, float]:
     if weighted:
         total = sum(value for value in weighted.values() if value > 0)
         return {key: round(value / total, 4) for key, value in weighted.items()} if total > 0 else weighted
+    # A1.5：采分点无自身权重时（典型为大题/构答题采分点），回退到题目级四维素养权重
+    # competency_details，而非单一 primary——保留"多素养都涉及"的信息，避免矩阵塌成单列。
+    detail_weights = {}
+    for dim, info in _as_dict(question.get("competency_details")).items():
+        share = _as_dict(info).get("权重")
+        if isinstance(share, (int, float)) and share > 0:
+            detail_weights[str(dim)] = float(share)
+    if detail_weights:
+        total = sum(detail_weights.values())
+        return {key: round(value / total, 4) for key, value in detail_weights.items()} if total > 0 else detail_weights
     primary = _unit_competency(unit, question)
     return {primary: 1.0} if primary and primary != "未标注素养" else {}
 

@@ -433,7 +433,17 @@ class DifficultyPipeline:
                         or high_order_share >= 0.35
                     )
                 )
-                if high_order_share < 0.35 and not strong_construct_signal:
+                # B：推理链耦合明确高难的综合判断题（高工作记忆+强耦合+多步推理）——
+                # 采分点均分天然低估"整合难度"（整体>部分之和，如多图联读综合选择题），
+                # 豁免均分天花板，仅由下方 seu_extreme_rule_moderation 提供软压制避免爆表。
+                # 阈值从严（rs≥7）：简单/常规题不满足，仅真正的综合推理题触发。
+                strong_reasoning_signal = (
+                    features.get("working_memory", 3) >= 4
+                    and features.get("chain_coupling", 1) >= 2
+                    and features.get("reasoning_steps", 4) >= 7
+                )
+                if (high_order_share < 0.35 and not strong_construct_signal
+                        and not strong_reasoning_signal):
                     objective_ceiling = (
                         average_score
                         + 0.95
@@ -443,6 +453,8 @@ class DifficultyPipeline:
                     if adjusted > objective_ceiling:
                         adjusted = objective_ceiling
                         flags.append("bounded_item_seu_ceiling")
+                elif strong_reasoning_signal and adjusted > average_score + 0.95:
+                    flags.append("seu_ceiling_waived_high_reasoning")
 
                 # Keep the older two-point moderation for choice items that
                 # still sit noticeably above their SEU estimate after capping.

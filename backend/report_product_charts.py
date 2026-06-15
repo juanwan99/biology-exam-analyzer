@@ -869,9 +869,23 @@ def render_seu_competency_matrix(rows: Any) -> str:
     matrix: Dict[str, Dict[str, float]] = {}
     for row in items:
         knowledge = str(row.get("knowledge_point") or "未标注知识点")
-        competency = str(row.get("competency") or "未标注素养")
+        weighted = _num(row.get("weighted_score"))
         matrix.setdefault(knowledge, {})
-        matrix[knowledge][competency] = matrix[knowledge].get(competency, 0) + _num(row.get("weighted_score"))
+        # 按 competency_weights 把采分点分值 fan-out 到各素养（与核心素养覆盖诊断图同口径），
+        # 避免 argmax 把多素养采分点塌成单列，掩盖科学思维/科学探究的真实承载。
+        weights = row.get("competency_weights")
+        valid = {}
+        if isinstance(weights, dict):
+            valid = {str(k): float(v) for k, v in weights.items()
+                     if isinstance(v, (int, float)) and v > 0}
+        total = sum(valid.values())
+        if total > 0:
+            for comp, weight in valid.items():
+                matrix[knowledge][comp] = matrix[knowledge].get(comp, 0) + weighted * (weight / total)
+        else:
+            # 无权重单元：回退到单一主素养（已含题目级 primary_competency 兜底）
+            competency = str(row.get("competency") or "未标注素养")
+            matrix[knowledge][competency] = matrix[knowledge].get(competency, 0) + weighted
     knowledge_rows = sorted(matrix.items(), key=lambda item: -sum(item[1].values()))[:8]
     # 学科动态素养列：从矩阵实际出现的素养按承载分值降序取（兼容九科任意维数），回退生物四维
     _seen: Dict[str, float] = {}
@@ -905,7 +919,7 @@ def render_seu_competency_matrix(rows: Any) -> str:
             if value > 0:
                 body.append(f'<text x="{x + (cell_w - 6) / 2:.1f}" y="{y + 21}" text-anchor="middle" font-size="14" font-weight="700" fill="{PALETTE["ink"]}">{value:.1f}</text>')
     body.append(_callout(f"主承载：{max_cell[0]} × {max_cell[1]}", width - 34, 66, "end"))
-    body.append(_note("口径：采分点分值按知识点与核心素养交叉聚合；红色为最大承载组合；空格表示本卷采分点未显性承载该素养。", left, height - 18, "start"))
+    body.append(_note("口径：采分点分值按其素养权重分摊到各素养（同一采分点可同时计入多个素养）；红色为最大承载组合；空格表示本卷采分点未承载该素养。", left, height - 18, "start"))
     return _svg("seu-competency-matrix", width, height, "".join(body))
 
 
