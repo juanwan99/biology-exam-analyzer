@@ -2,11 +2,54 @@
 
 校验失败不阻断流程，而是标记 extraction_confidence 和 validation_errors。
 """
+import re
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from logger import get_logger
 
 logger = get_logger()
+
+
+# ── Bloom 层次容错 ───────────────────────────────────────────────
+# LLM 偶尔把 bloom 输出成名字串（如 "application"）或越界值，pydantic 的 int 校验会拒绝，
+# 导致整份 scoring_units 解析失败、整题返回 None（HANDOFF-2026-06-15 §10.1）。
+# before-validator 统一把名字串/越界值/杂类型容错成 1-6 整数，绝不让整题因 bloom 而 None。
+_BLOOM_NAME_TO_INT = {
+    "识记": 1, "记忆": 1, "remember": 1, "knowledge": 1, "recall": 1,
+    "理解": 2, "领会": 2, "understand": 2, "comprehension": 2, "comprehend": 2,
+    "应用": 3, "运用": 3, "apply": 3, "application": 3, "applying": 3,
+    "分析": 4, "analyze": 4, "analyse": 4, "analysis": 4, "analyzing": 4,
+    "评价": 5, "评估": 5, "evaluate": 5, "evaluation": 5, "evaluating": 5,
+    "创造": 6, "创建": 6, "create": 6, "creation": 6, "creating": 6,
+    "synthesis": 6, "synthesize": 6,
+}
+
+
+def _coerce_bloom(v):
+    """把 Bloom 名字串 / 越界值 / 杂类型容错成 1-6 整数。
+
+    None 与 bool 原样交回（保持各字段 Optional/default 的既有语义）；无法识别 → 回退 3 + warning。
+    """
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = int(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        if s:
+            if s.lstrip("-").isdigit():
+                n = int(s)
+            else:
+                n = _BLOOM_NAME_TO_INT.get(s.lower()) or _BLOOM_NAME_TO_INT.get(s)
+                if n is None:
+                    m = re.search(r"[1-6]", s)
+                    if m:
+                        n = int(m.group())
+    if n is None:
+        logger.warning(f"[bloom_coerce] 无法识别 bloom 值 {v!r}，回退默认 3")
+        return 3
+    return max(1, min(6, n))
 
 
 # ── 1. 主分析（question_analyzer）────────────────────────────────
@@ -22,6 +65,11 @@ class AnalysisResult(BaseModel):
     competency: Optional[Dict[str, Any]] = None
     sub_questions: Optional[List[Dict]] = None
     option_difficulty_breakdown: Optional[Dict] = None
+
+    @field_validator("bloom_level", mode="before")
+    @classmethod
+    def _vld_bloom_level(cls, v):
+        return _coerce_bloom(v)
 
     class Config:
         extra = "allow"
@@ -39,6 +87,11 @@ class FeatureResult(BaseModel):
     bloom: int = Field(default=3, ge=1, le=6)
     info_density: int = Field(default=2, ge=1, le=3)
     representation_complexity: int = Field(default=1, ge=1, le=3)
+
+    @field_validator("bloom", mode="before")
+    @classmethod
+    def _vld_bloom(cls, v):
+        return _coerce_bloom(v)
 
     class Config:
         extra = "allow"
@@ -169,6 +222,11 @@ class ScoringEvidenceUnit(BaseModel):
     competency_weights: Optional[Dict[str, float]] = None
     difficulty_estimate: float = Field(default=5.0, ge=0.0, le=10.0)
     reasoning_brief: str = ""
+
+    @field_validator("bloom_level", mode="before")
+    @classmethod
+    def _vld_bloom_level(cls, v):
+        return _coerce_bloom(v)
 
     def get_competency_weights(self, competency_dims: Optional[List[str]] = None) -> Dict[str, float]:
         """获取素养权重（兼容新旧格式）。
