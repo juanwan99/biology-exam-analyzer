@@ -560,6 +560,68 @@ class TestAggregateReportData:
 
         assert result["metadata_quality"]["retry_questions"] == []
 
+    def test_metadata_quality_allows_successful_provider_fallback(self):
+        """2026-06-15 E2E 实证修复：成功的 provider 兜底（DeepSeek 抖→Qwen 成功）带
+        fallback_count>0 + provider_errors，但最终有有效产物（status=ok、parsed_schema 在），
+        不应判 retry_or_parse_failure 杀报告——否则与改动B2 放行成功 fallback 自相矛盾，
+        且在真实 provider 抖动下间歇性杀报告（清缓存首跑实测复现）。"""
+        q = _make_question(14, 5.9, 4, 4)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {
+                    "purpose": "question_analysis",
+                    "prompt_id": "biology.question_analysis.v2",
+                    "parsed_schema": "FineGrainedResult",
+                    "fallback_count": 2,
+                    "retry_count": 0,
+                    "validation_errors": [],
+                    "metadata": {
+                        "provider_errors": ["deepseek: 403 transient"],
+                        "status": "ok",
+                    },
+                },
+                {"purpose": "feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(5.9), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert result["metadata_quality"]["retry_questions"] == []
+
+    def test_metadata_quality_blocks_call_without_valid_product(self):
+        """护栏：最终没拿到可用产物（无 parsed_schema + 显式 provider_failed）仍计 retry_failure。
+        确保放松 fallback/provider 噪声后，真正的终态失败不被漏放。"""
+        q = _make_question(15, 5.9, 4, 4)
+        q["question_text"] = "stem"
+        q["correct_answer"] = "answer"
+        q["_metadata_envelope"] = {
+            "confidence": {"overall": 0.95},
+            "llm_calls": [
+                {
+                    "purpose": "question_analysis",
+                    "prompt_id": "biology.question_analysis.v2",
+                    "fallback_count": 3,
+                    "retry_count": 3,
+                    "metadata": {
+                        "provider_errors": ["deepseek down", "qwen down"],
+                        "status": "provider_failed",
+                    },
+                },
+                {"purpose": "feature_extraction"},
+                {"purpose": "competency_analysis"},
+            ],
+            "warnings": [],
+        }
+
+        result = aggregate_report_data([q], {}, _minimal_statistics(5.9), {"name": "t", "total": 1, "mode": "deep"})
+
+        assert any(rq.get("id") == 15 for rq in result["metadata_quality"]["retry_questions"])
+
     def test_metadata_quality_blocks_degraded_length_recovery(self):
         q = _make_question(21, 5.0, 3, 14)
         q["question_text"] = "stem"
