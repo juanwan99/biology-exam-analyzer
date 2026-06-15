@@ -13,6 +13,10 @@ TEXT_REVIEW_PURPOSES = {
     "big_question_feature_extraction",
     "competency_analysis",
     "feature_extraction",
+    # 方案B 特征提取拆分子任务：deepseek 主审优先（与 feature_extraction 同口径）
+    "feature_difficulty",
+    "feature_quality",
+    "feature_teaching",
     "missing_evidence_repair",
     "question_analysis",
     "question_analysis_retry",
@@ -26,6 +30,16 @@ LIGHTWEIGHT_PURPOSES = {
     "report_insights",
     "report_teaching_suggestions",
 }
+
+# 方案B：特征提取拆分子任务的 max_tokens 提额白名单。
+# 给足 16384（= provider 硬上限），让每组 reasoning 收敛后仍留出 output；
+# 绝不超过 16384（provider 端 _build_request_body 也会 min-cap 兜底）。
+FEATURE_SPLIT_PURPOSES = {
+    "feature_difficulty",
+    "feature_quality",
+    "feature_teaching",
+}
+FEATURE_SPLIT_MAX_TOKENS = 16384
 
 PROVIDERS = [
     {
@@ -193,6 +207,9 @@ def get_providers(
         p = dict(template)
         if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions") and p.get("subq_max_tokens"):
             p["max_tokens"] = p["subq_max_tokens"]
+        elif purpose in FEATURE_SPLIT_PURPOSES:
+            # 提额到 16384（不超过 provider 硬上限），保证拆分后每组留出 output。
+            p["max_tokens"] = min(FEATURE_SPLIT_MAX_TOKENS, p.get("max_tokens", FEATURE_SPLIT_MAX_TOKENS))
         if p.get("vision_only") and not requires_images:
             continue
         if requires_images and not p.get("supports_images", False):

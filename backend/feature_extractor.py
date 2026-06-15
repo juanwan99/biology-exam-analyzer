@@ -79,6 +79,74 @@ _QUALITY_KEYS = [
 # Bloom 中文标签
 _BLOOM_LABELS = {"识记", "理解", "应用", "分析", "评价", "创造"}
 
+# ── 方案B：巨型特征任务拆分为独立 LLM 组 ──────────────────────────
+# 每组只问自己那点字段，使 reasoning 能自然收敛、留出 output（避免 v3
+# 三合一巨型任务 reasoning 吃满 max_tokens、output=0、finish=length）。
+#
+# 「难度核心组」= 雷达图依赖的难度6维 + bloom，字段最少、最可靠收敛，
+# 这是最高优先级：该组成功即保住雷达/难度，即使其它组失败也不全降级。
+_DIFFICULTY_CORE_KEYS = [
+    "working_memory", "reasoning_steps", "chain_coupling",
+    "trap_density", "novelty", "knowledge_breadth",
+]  # = SCORING_RANGES 的 6 维
+_DIFFICULTY_REASON_KEYS = [
+    "working_memory_reason", "steps_detail", "coupling_reason",
+    "trap_reason", "novelty_reason", "breadth_reason", "bloom_reason",
+]
+_DIFFICULTY_REPORT_KEYS = ["bloom"]
+
+# 「质量+教学」其余字段。仍偏大时再切成质量组 / 教学组（已分两组）。
+_QUALITY_GROUP_REPORT_KEYS = ["info_density", "representation_complexity"]
+_QUALITY_GROUP_REASON_KEYS = ["density_reason", "representation_reason"]
+_QUALITY_GROUP_QUALITY_KEYS = [
+    "quality_scientific", "quality_normative", "quality_language",
+    "quality_context", "quality_sensitivity",
+]
+_TEACHING_GROUP_QUALITY_KEYS = ["teacher_comment"]
+
+# 各组：prompt 文件名（prompts/biology/ 内）、purpose、产出键集合
+_FEATURE_GROUPS = {
+    "difficulty": {
+        "prompt_name": "feature_difficulty",
+        "purpose": "feature_difficulty",
+        "core_keys": _DIFFICULTY_CORE_KEYS,
+        "report_keys": _DIFFICULTY_REPORT_KEYS,
+        "reason_keys": _DIFFICULTY_REASON_KEYS,
+        "quality_keys": [],
+        "wants_bloom_distribution": False,
+        "wants_quality_score": False,
+    },
+    "quality": {
+        "prompt_name": "feature_quality",
+        "purpose": "feature_quality",
+        "core_keys": [],
+        "report_keys": _QUALITY_GROUP_REPORT_KEYS,
+        "reason_keys": _QUALITY_GROUP_REASON_KEYS,
+        "quality_keys": _QUALITY_GROUP_QUALITY_KEYS,
+        "wants_bloom_distribution": True,
+        "wants_quality_score": True,
+    },
+    "teaching": {
+        "prompt_name": "feature_teaching",
+        "purpose": "feature_teaching",
+        "core_keys": [],
+        "report_keys": [],
+        "reason_keys": [],
+        "quality_keys": _TEACHING_GROUP_QUALITY_KEYS,
+        "wants_bloom_distribution": False,
+        "wants_quality_score": False,
+    },
+}
+
+# 子调用 max_tokens：拆分后每组小而快，给足但 ≤ provider 硬上限 16384。
+_GROUP_MAX_TOKENS = 16384
+
+
+def _is_length_provider_failure(exc: Exception) -> bool:
+    """子调用 finish=length / provider_incomplete 判定（与 competency_analyzer 同口径）。"""
+    text = str(exc)
+    return "finish_reason=length" in text or "provider_incomplete_response" in text
+
 
 def _input_refs(question_text: str, options: str, correct_answer: str,
                 question_type: str, subject: str, media_items: list | None = None) -> dict:
@@ -206,39 +274,94 @@ def build_feature_prompt(question_text: str, options: str = "",
 """
 
 
-def build_compact_feature_retry_prompt(question_text: str, options: str = "",
-                                       correct_answer: str = "",
-                                       question_type: str = "",
-                                       visual_context_text: str = "") -> str:
-    parts = [question_text[:1800]]
+def _question_block(question_text: str, options: str, correct_answer: str) -> str:
+    parts = [question_text]
     if options:
-        parts.append(f"选项：{options[:800]}")
+        parts.append(f"选项：{options}")
     if correct_answer:
-        parts.append(f"正确答案：{correct_answer[:300]}")
-    if visual_context_text:
-        parts.append(f"视觉信息：{visual_context_text[:1200]}")
-    question_block = "\n".join(parts)
-    return f"""你是高中生物命题审查专家。上一次特征提取 JSON 不可解析，现在只做紧凑重试。
-只返回一个合法 JSON 对象，不要 markdown，不要解释，不要省略号。
+        parts.append(f"正确答案：{correct_answer}")
+    return "\n".join(parts)
+
+
+def build_feature_difficulty_prompt(question_text: str, options: str = "",
+                                    correct_answer: str = "", question_type: str = "") -> str:
+    """方案B 难度核心组 fallback prompt（仅当 prompts/biology/feature_difficulty.txt 缺失时用）。"""
+    question_block = _question_block(question_text, options, correct_answer)
+    qtype_hint = f"\n题型：{question_type}" if question_type else ""
+    return f"""你是一名资深高中生物命题审查专家。只做难度预测分析，不评质量、不写教学点评。
 
 题目：
-{question_block}
-题型：{question_type or "unknown"}
+{question_block}{qtype_hint}
 
-必须输出这些键：
-working_memory, working_memory_reason, reasoning_steps, steps_detail,
-chain_coupling, coupling_reason, trap_density, trap_reason, novelty,
-novelty_reason, knowledge_breadth, breadth_reason, bloom, bloom_distribution,
-bloom_reason, info_density, density_reason, representation_complexity,
-representation_reason, quality_score, quality_scientific, quality_normative,
-quality_language, quality_context, quality_sensitivity, teacher_comment。
-
-数值范围：
-working_memory 1-5；reasoning_steps 1-10；chain_coupling 1-3；
-trap_density 1-3；novelty 1-3；knowledge_breadth 1-3；bloom 1-6；
-info_density 1-3；representation_complexity 1-3；quality_score 1-5。
-所有 reason/quality 字段不超过 40 个汉字，teacher_comment 不超过 120 个汉字。
+只输出严格 JSON（不要 markdown、不要解释、不要省略号），且只包含以下键：
+{{
+  "working_memory": 1-5（解题关键步骤中需同时在脑中保持的信息元素数量），
+  "working_memory_reason": "列出关键步骤需同时处理的具体信息元素(≤40字)",
+  "reasoning_steps": 正整数（从题目信息到答案的最少认知操作数，不含读题/看选项），
+  "steps_detail": "简述推理链(≤50字)",
+  "chain_coupling": 1-3（1=独立，选择题选项天然独立通常=1；2=部分依赖；3=全链依赖），
+  "coupling_reason": "说明为什么是该耦合度(≤30字)",
+  "trap_density": 1-3（看似正确但实际错误的推理路径或选项数量），
+  "trap_reason": "指出主要陷阱是什么(≤30字)",
+  "novelty": 1-3（1教材原文 2变式 3全新情境），
+  "novelty_reason": "一句话(≤20字)",
+  "knowledge_breadth": 1-3（1单知识点 2跨考点 3跨模块），
+  "breadth_reason": "一句话(≤20字)",
+  "bloom": 1-6（最高认知层级，仅用于报告标签，不影响难度评分），
+  "bloom_reason": "描述最高层级对应的具体认知操作(≤30字)"
+}}
 """
+
+
+def build_feature_quality_prompt(question_text: str, options: str = "",
+                                 correct_answer: str = "", question_type: str = "") -> str:
+    """方案B 质量审查组 fallback prompt。"""
+    question_block = _question_block(question_text, options, correct_answer)
+    qtype_hint = f"\n题型：{question_type}" if question_type else ""
+    return f"""你是一名资深高中生物命题审查专家。只做命题质量审查与报告维度标注，不预测难度、不写教学点评。
+
+题目：
+{question_block}{qtype_hint}
+
+只输出严格 JSON（不要 markdown、不要解释、不要省略号），且只包含以下键：
+{{
+  "info_density": 1-3（1低≤2条 2中3-5条 3高>5条或含图表），
+  "density_reason": "一句话(≤20字)",
+  "representation_complexity": 1-3（1纯文字 2简单图表 3复杂系谱图/多图联读/装置图），
+  "representation_reason": "一句话(≤20字)",
+  "bloom_distribution": {{"识记": 0, "理解": 0, "应用": 0, "分析": 0, "评价": 0, "创造": 0}},
+  "quality_score": 1-5（1严重缺陷 5优秀，5分极少），
+  "quality_scientific": "先指出问题再评价：知识准确性、答案唯一性、有无歧义或事实错误。无问题写'无明显问题'(≤60字)",
+  "quality_normative": "先指出问题再评价：题干完整性、选项平行性、分值合理性、干扰项有效性(≤60字)",
+  "quality_language": "先指出问题再评价：有无冗余/口语化/歧义/术语错误/表述过绝对(≤60字)",
+  "quality_context": "先指出问题再评价：素材真实性、与考查内容关联度、背景知识门槛(≤60字)",
+  "quality_sensitivity": "先指出问题再评价：政治/民族宗教/伦理敏感与舆论风险。无问题写'无舆情风险'(≤60字)"
+}}
+"""
+
+
+def build_feature_teaching_prompt(question_text: str, options: str = "",
+                                  correct_answer: str = "", question_type: str = "") -> str:
+    """方案B 教学点评组 fallback prompt。"""
+    question_block = _question_block(question_text, options, correct_answer)
+    qtype_hint = f"\n题型：{question_type}" if question_type else ""
+    return f"""你是一名资深高中生物教师。只做教学视角的深度点评，不打分、不做难度或质量评级。
+
+题目：
+{question_block}{qtype_hint}
+
+只输出严格 JSON（不要 markdown、不要解释、不要省略号），且只包含以下键：
+{{
+  "teacher_comment": "教师视角深度点评(≤150字)：考查目的、各小问难点归因、学生典型错误路径（具体写出学生会怎么错）、针对性教学建议"
+}}
+"""
+
+
+_GROUP_FALLBACK_BUILDERS = {
+    "difficulty": build_feature_difficulty_prompt,
+    "quality": build_feature_quality_prompt,
+    "teaching": build_feature_teaching_prompt,
+}
 
 
 def _decode_json_candidate(candidate: str):
@@ -470,29 +593,199 @@ def parse_features(raw: str, include_status: bool = False) -> dict:
     return result
 
 
+# ── 方案B：单组解析 + 单组提取（顺序执行、部分降级） ──────────────
+
+def _decode_group_payload(raw: str) -> dict | None:
+    """从单组 LLM 输出解析出 dict（含截断修复回退），失败返回 None。"""
+    if not isinstance(raw, str):
+        return None
+    for index, candidate in enumerate(_json_object_candidates(raw)):
+        decoded = _decode_json_candidate(candidate)
+        if isinstance(decoded, dict):
+            return decoded
+    # 截断修复（与 parse_features 同口径）
+    if raw.count('{') > raw.count('}'):
+        last_brace = raw.rfind('}')
+        if last_brace > 0:
+            try:
+                candidate = raw[:last_brace + 1]
+                candidate = re.sub(r',\s*"[^"]*":\s*"?[^"{}]*$', '', candidate)
+                if not candidate.endswith('}'):
+                    candidate += '}'
+                decoded = json.loads(candidate, strict=False)
+                if isinstance(decoded, dict):
+                    return decoded
+            except (json.JSONDecodeError, Exception):
+                pass
+    salvaged = _salvage_feature_fields(raw)
+    return salvaged if isinstance(salvaged, dict) else None
+
+
+def _parse_group(raw: str, group: dict) -> tuple[dict, int]:
+    """只解析该组负责的字段，范围裁剪/长度截断。
+
+    返回 (该组字段 dict, 解析到的该组核心维度数)。解析完全失败时返回 ({}, 0)。
+    """
+    data = _decode_group_payload(raw)
+    if not isinstance(data, dict):
+        return {}, 0
+
+    partial: dict = {}
+    core_present = 0
+
+    for key in group["core_keys"]:
+        lo, hi = FEATURE_RANGES[key]
+        if key in data:
+            try:
+                partial[key] = max(lo, min(hi, int(data[key])))
+                core_present += 1
+            except (ValueError, TypeError):
+                pass
+
+    for key in group["report_keys"]:
+        lo, hi = FEATURE_RANGES[key]
+        if key in data:
+            try:
+                partial[key] = max(lo, min(hi, int(data[key])))
+            except (ValueError, TypeError):
+                pass
+
+    for key in group["reason_keys"]:
+        if key in data:
+            partial[key] = str(data[key])[:50]
+
+    for key in group["quality_keys"]:
+        if key in data:
+            limit = 400 if key == "teacher_comment" else 120
+            partial[key] = str(data[key])[:limit]
+
+    if group["wants_quality_score"]:
+        qs = data.get("quality_score")
+        if qs is not None:
+            try:
+                partial["quality_score"] = max(1, min(5, int(qs)))
+            except (ValueError, TypeError):
+                pass
+
+    if group["wants_bloom_distribution"]:
+        bloom_dist = data.get("bloom_distribution")
+        if isinstance(bloom_dist, dict):
+            cleaned = {}
+            for label, count in bloom_dist.items():
+                if label in _BLOOM_LABELS:
+                    try:
+                        cleaned[label] = max(0, int(count))
+                    except (ValueError, TypeError):
+                        pass
+            if sum(cleaned.values()) > 0:
+                partial["bloom_distribution"] = cleaned
+
+    return partial, core_present
+
+
+def _group_defaults(group: dict) -> dict:
+    """该组失败时只对「本组字段」填默认值（绝不全字段 DEFAULT_FEATURES）。"""
+    defaults: dict = {}
+    for key in group["core_keys"]:
+        defaults[key] = DEFAULT_FEATURES[key]
+    for key in group["report_keys"]:
+        defaults[key] = DEFAULT_FEATURES[key]
+    # reason / quality / quality_score / bloom_distribution 无默认值——缺就缺，
+    # 下游报告层按缺失处理，不伪造点评/质量结论。
+    return defaults
+
+
+async def _extract_group(group_key: str, *, loader: PromptLoader,
+                         question_text: str, options: str, correct_answer: str,
+                         question_type: str, visual_context_text: str) -> dict:
+    """提取单个特征组。顺序执行（不在单题内并发，避免叠加放大并发触发超时红线）。
+
+    返回 {fields, core_present, ok, retry_count, response_length, degraded, error}。
+    length finish 先 retry 一次；仍 length → 该组降级（只默认本组字段）+ WARNING 告警。
+    """
+    group = _FEATURE_GROUPS[group_key]
+    prompt_name = group["prompt_name"]
+    purpose = group["purpose"]
+
+    if loader.exists(prompt_name):
+        question_block = _question_block(question_text, options, correct_answer)
+        qtype_hint = f"\n题型：{question_type}" if question_type else ""
+        prompt = loader.load(prompt_name,
+                             question_block=question_block, qtype_hint=qtype_hint)
+    else:
+        prompt = _GROUP_FALLBACK_BUILDERS[group_key](
+            question_text, options, correct_answer, question_type)
+
+    if visual_context_text:
+        prompt = "\n\n".join([prompt, visual_context_text])
+
+    outcome = {
+        "fields": {}, "core_present": 0, "ok": False,
+        "retry_count": 0, "response_length": 0, "degraded": False, "error": None,
+    }
+
+    last_err = None
+    # 最多 2 次：首发 + length finish 后重试一次。
+    for attempt in range(2):
+        try:
+            raw = await _send_prompt(
+                prompt,
+                max_tokens=_GROUP_MAX_TOKENS,
+                temperature=0,
+                purpose=purpose,
+                media_items=None,
+            )
+            outcome["retry_count"] = attempt
+            outcome["response_length"] = len(raw) if isinstance(raw, str) else 0
+            fields, core_present = _parse_group(raw, group)
+            outcome["fields"] = fields
+            outcome["core_present"] = core_present
+            # 难度核心组要求拿到全部 6 维才算 ok；其它组拿到任意字段即 ok。
+            if group["core_keys"]:
+                outcome["ok"] = core_present >= len(group["core_keys"])
+            else:
+                outcome["ok"] = bool(fields)
+            if not outcome["ok"]:
+                logger.warning(
+                    f"[特征提取/{group_key}] 解析字段不足 core={core_present}/"
+                    f"{len(group['core_keys'])} fields={len(fields)} raw前80={str(raw)[:80]}")
+            return outcome
+        except Exception as exc:
+            last_err = exc
+            if _is_length_provider_failure(exc) and attempt == 0:
+                logger.warning(
+                    f"[特征提取/{group_key}] 子调用 finish=length，retry 一次")
+                continue
+            break
+
+    # 重试后仍 length / 其它失败 → 该组降级（只默认本组字段）+ 告警
+    outcome["error"] = str(last_err) if last_err else "group_failed"
+    outcome["degraded"] = True
+    if last_err is not None and _is_length_provider_failure(last_err):
+        logger.warning(
+            f"[特征提取/{group_key}] 子调用 retry 后仍 finish=length，降级为本组默认值: "
+            f"{outcome['error'][:120]}")
+    else:
+        logger.warning(
+            f"[特征提取/{group_key}] 子调用失败，降级为本组默认值: {outcome['error'][:120]}")
+    return outcome
+
+
 async def _extract_features_uncached(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
                            subject: str = "biology",
                            media_items: list | None = None) -> dict:
-    """调用 LLM 提取题目特征（v3: 难度预测维度 + 报告维度 + 质量审查）。"""
-    # 尝试从 PromptLoader 加载学科专用 prompt
+    """调用 LLM 提取题目特征（方案B: 巨型任务拆为 难度核心 / 质量 / 教学 三组顺序调用）。
+
+    部分降级：各组结果合并成下游期望的统一 dict；某组失败只对「该组字段」用
+    DEFAULT，绝不再走全字段 DEFAULT_FEATURES。难度核心组成功即保住雷达/难度，
+    即使质量/教学组失败。成功判据以「难度核心组成功」为主。
+    """
     loader = PromptLoader(subject)
-    if loader.exists("feature_extractor"):
-        parts = [question_text]
-        if options:
-            parts.append(f"选项：{options}")
-        if correct_answer:
-            parts.append(f"正确答案：{correct_answer}")
-        question_block = "\n".join(parts)
-        qtype_hint = f"\n题型：{question_type}" if question_type else ""
-        prompt = loader.load("feature_extractor",
-                            question_block=question_block, qtype_hint=qtype_hint)
-    else:
-        prompt = build_feature_prompt(question_text, options, correct_answer, question_type)
+
     visual_call_record = None
     visual_context_text = ""
-    prompt_for_llm = prompt
     try:
         if media_input_refs(media_items):
             visual_context_text, visual_call_record = await extract_visual_context(
@@ -501,209 +794,213 @@ async def _extract_features_uncached(question_text: str, options: str = "",
                 question_type=question_type,
                 call_id=f"{subject}-feature-visual-context",
             )
-            prompt_for_llm = "\n\n".join([prompt, visual_context_text])
 
-        raw = await _send_prompt(
-            prompt_for_llm,
-            max_tokens=8192,
-            temperature=0,
-            purpose="feature_extraction",
-            media_items=None,
-        )
-        selected_raw = raw
-        selected_prompt = prompt_for_llm
-        retry_count = 0
-        result = parse_features(raw, include_status=True)
+        # 三组「顺序」执行（不在单题内并发，避免叠加放大并发触发 22-30min 超时红线）；
+        # 各组本身小而快。
+        group_outcomes = {}
+        for group_key in ("difficulty", "quality", "teaching"):
+            group_outcomes[group_key] = await _extract_group(
+                group_key,
+                loader=loader,
+                question_text=question_text,
+                options=options,
+                correct_answer=correct_answer,
+                question_type=question_type,
+                visual_context_text=visual_context_text,
+            )
 
-        # 核心字段不足时用短 prompt 再试一次；DeepSeek 仍是唯一文本主审。
-        raw_core = result.get("_raw_core_count", 0)
-        if raw_core < 6:
-            logger.warning(f"[特征提取] raw_core={raw_core} 不足，触发紧凑重试（raw前100: {raw[:100]}）")
-            try:
-                retry_count = 1
-                retry_prompt = build_compact_feature_retry_prompt(
-                    question_text,
-                    options,
-                    correct_answer,
-                    question_type,
-                    visual_context_text if visual_call_record else "",
-                )
-                raw2 = await _send_prompt(
-                    retry_prompt,
-                    max_tokens=4096,
-                    temperature=0,
-                    purpose="feature_extraction",
-                    media_items=None,
-                )
-                result2 = parse_features(raw2, include_status=True)
-                if result2.get("_raw_core_count", 0) > raw_core:
-                    result = result2
-                    selected_raw = raw2
-                    selected_prompt = retry_prompt
-                    logger.info(f"[特征提取] 重试成功 raw_core={result2.get('_raw_core_count', 0)}")
-                else:
-                    logger.warning(f"[特征提取] 重试后 raw_core 仍不足: {result2.get('_raw_core_count', 0)}")
-            except Exception as retry_err:
-                logger.warning(f"[特征提取] 重试失败: {retry_err}")
-
-        # Schema 校验 + 一致性检查
-        from llm_schemas import validate_llm_output, FeatureResult, check_consistency
-        validated, ext_conf, val_errors = validate_llm_output(result, FeatureResult, "特征提取")
-        for k, v in validated.items():
-            if k in result or k in FEATURE_RANGES:
-                result[k] = v
-
-        consistency_score, consistency_flags = check_consistency(result)
-        result["_extraction_confidence"] = ext_conf
-        result["_consistency_confidence"] = consistency_score
-        if val_errors:
-            result["_validation_errors"] = val_errors
-        if consistency_flags:
-            result["_consistency_flags"] = consistency_flags
-
-        # 完整性评分
-        completeness = len([k for k in FEATURE_RANGES if k in result])
-        completeness += len([k for k in _REASON_KEYS if k in result])
-        completeness += len([k for k in _QUALITY_KEYS if k in result])
-        completeness += (1 if "bloom_distribution" in result else 0)
-        completeness += (1 if "quality_score" in result else 0)
-
-        raw_core_count = result.get("_raw_core_count", 0)
-
-        if raw_core_count >= 6 and completeness >= 18:
-            result["_feature_status"] = "ok"
-            logger.info(f"[特征提取] 完整度={completeness}/29, raw_core={raw_core_count}, "
-                        f"ext_conf={ext_conf}, consistency={consistency_score}")
-        elif raw_core_count >= 4:
-            result["_feature_status"] = "partial"
-            logger.warning(f"[特征提取] 部分可用 raw_core={raw_core_count}/6, completeness={completeness}/29")
-        else:
-            result["_feature_status"] = "failed"
-            result["_feature_failed"] = True
-            logger.error(f"[特征提取] 不可用 raw_core={raw_core_count}/6, completeness={completeness}/29, 原始长度={len(raw)}")
-
-        return _attach_llm_call(
-            result,
-            call_id=f"{subject}-feature-extraction",
-            purpose="feature_extraction",
-            prompt_id=f"{subject}.feature_extraction",
-            prompt=selected_prompt,
-            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
-            parsed_schema="FeatureResult",
-            confidence=ext_conf,
-            validation_errors=val_errors,
-            retry_count=retry_count,
-            existing_calls=[visual_call_record] if visual_call_record else None,
-            metadata={
-                "response_length": len(selected_raw),
-                "feature_status": result.get("_feature_status"),
-                "raw_core_count": raw_core_count,
-                "parse_recovery": result.get("_parse_recovery"),
-                **({"recovery_status": "ok"} if retry_count and result.get("_feature_status") == "ok" else {}),
-                **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
-            },
+        return _assemble_feature_result(
+            group_outcomes,
+            question_text=question_text,
+            options=options,
+            correct_answer=correct_answer,
+            question_type=question_type,
+            subject=subject,
+            media_items=media_items,
+            visual_call_record=visual_call_record,
         )
     except Exception as e:
-        logger.error(f"特征提取 API 调用失败: {e}")
-        try:
-            retry_prompt = build_compact_feature_retry_prompt(
-                question_text,
-                options,
-                correct_answer,
-                question_type,
-                visual_context_text if visual_call_record else "",
-            )
-            raw_retry = await _send_prompt(
-                retry_prompt,
-                max_tokens=4096,
-                temperature=0,
-                purpose="feature_extraction",
-                media_items=None,
-            )
-            result = parse_features(raw_retry, include_status=True)
-
-            from llm_schemas import validate_llm_output, FeatureResult, check_consistency
-            validated, ext_conf, val_errors = validate_llm_output(result, FeatureResult, "特征提取API失败重试")
-            for k, v in validated.items():
-                if k in result or k in FEATURE_RANGES:
-                    result[k] = v
-
-            consistency_score, consistency_flags = check_consistency(result)
-            result["_extraction_confidence"] = ext_conf
-            result["_consistency_confidence"] = consistency_score
-            if val_errors:
-                result["_validation_errors"] = val_errors
-            if consistency_flags:
-                result["_consistency_flags"] = consistency_flags
-
-            completeness = len([k for k in FEATURE_RANGES if k in result])
-            completeness += len([k for k in _REASON_KEYS if k in result])
-            completeness += len([k for k in _QUALITY_KEYS if k in result])
-            completeness += (1 if "bloom_distribution" in result else 0)
-            completeness += (1 if "quality_score" in result else 0)
-            raw_core_count = result.get("_raw_core_count", 0)
-            if raw_core_count >= 6 and completeness >= 18:
-                result["_feature_status"] = "ok"
-                logger.info(f"[特征提取] API失败后紧凑重试成功 raw_core={raw_core_count}")
-            elif raw_core_count >= 4:
-                result["_feature_status"] = "partial"
-                logger.warning(f"[特征提取] API失败后紧凑重试部分可用 raw_core={raw_core_count}/6")
-            else:
-                raise RuntimeError(f"compact retry incomplete raw_core={raw_core_count}")
-
-            return _attach_llm_call(
-                result,
-                call_id=f"{subject}-feature-extraction",
-                purpose="feature_extraction",
-                prompt_id=f"{subject}.feature_extraction",
-                prompt=retry_prompt,
-                input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
-                parsed_schema="FeatureResult",
-                confidence=ext_conf,
-                validation_errors=val_errors,
-                retry_count=1,
-                existing_calls=[visual_call_record] if visual_call_record else None,
-                metadata={
-                    "response_length": len(raw_retry),
-                    "feature_status": result.get("_feature_status"),
-                    "raw_core_count": raw_core_count,
-                    "parse_recovery": result.get("_parse_recovery"),
-                    "recovery_mode": "api_failure_compact_retry",
-                    "recovery_status": "ok" if result.get("_feature_status") == "ok" else "partial",
-                    "original_error": str(e)[:200],
-                    **({"visual_context_source": "qwen_vision"} if visual_call_record else {}),
-                },
-            )
-        except Exception as retry_err:
-            retry_error_text = str(retry_err)
-            logger.warning(f"[特征提取] API失败后的紧凑重试失败: {retry_error_text}")
+        logger.error(f"特征提取编排失败: {e}")
         result = dict(DEFAULT_FEATURES)
         result["_feature_failed"] = True
         result["_feature_status"] = "failed"
         result["_extraction_confidence"] = 0.0
         result["_consistency_confidence"] = 0.0
-        result["_validation_errors"] = [
-            f"API失败: {str(e)}",
-            f"compact_retry_failed: {retry_error_text}",
-        ]
+        result["_validation_errors"] = [f"orchestration_failed: {str(e)}"]
         return _attach_llm_call(
             result,
             call_id=f"{subject}-feature-extraction",
             purpose="feature_extraction",
             prompt_id=f"{subject}.feature_extraction",
-            prompt=prompt,
+            prompt="(orchestration failed before any group prompt)",
             input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
             parsed_schema="FeatureResult",
             confidence=0.0,
             validation_errors=result["_validation_errors"],
-            retry_count=1,
+            retry_count=0,
             existing_calls=[visual_call_record] if visual_call_record else None,
             metadata={
                 "feature_status": "failed",
-                "recovery_mode": "api_failure_compact_retry_failed",
+                "recovery_mode": "orchestration_failed",
                 "recovery_status": "failed",
             },
         )
+
+
+def _assemble_feature_result(group_outcomes: dict, *, question_text: str,
+                             options: str, correct_answer: str, question_type: str,
+                             subject: str, media_items: list | None,
+                             visual_call_record: dict | None) -> dict:
+    """合并三组结果为下游统一 dict，并附 canonical feature_extraction 审计记录 + 各组审计记录。"""
+    difficulty = group_outcomes["difficulty"]
+    quality = group_outcomes["quality"]
+    teaching = group_outcomes["teaching"]
+
+    result: dict = {}
+
+    # 1) 难度核心组：成功则用其值，失败则只默认「难度组字段」（绝不全字段默认）。
+    if difficulty["ok"]:
+        result.update(difficulty["fields"])
+    else:
+        result.update(_group_defaults(_FEATURE_GROUPS["difficulty"]))
+        result.update(difficulty["fields"])  # 拿到几维补几维，其余维已被默认填上
+
+    # 2) 质量组：成功合并；失败只默认「质量组的难度报告维度 info_density/representation」，
+    #    quality_* / quality_score / bloom_distribution 缺就缺。
+    if quality["ok"]:
+        result.update(quality["fields"])
+    else:
+        result.update(_group_defaults(_FEATURE_GROUPS["quality"]))
+        result.update(quality["fields"])
+
+    # 3) 教学组：成功合并 teacher_comment；失败缺失即可（无伪造点评）。
+    result.update(teaching["fields"])
+
+    # 补全 FEATURE_RANGES 里仍缺的维度（极端：难度组拿到 partial、质量组也缺
+    # info_density/representation 时），保证下游 compute_difficulty 不 KeyError。
+    for key, (lo, hi) in FEATURE_RANGES.items():
+        if key not in result:
+            result[key] = DEFAULT_FEATURES[key]
+        else:
+            try:
+                result[key] = max(lo, min(hi, int(result[key])))
+            except (ValueError, TypeError):
+                result[key] = DEFAULT_FEATURES[key]
+
+    # raw_core_count：以难度核心 6 维实际拿到数为准（雷达/难度可靠性的真值）。
+    raw_core_count = difficulty["core_present"]
+    result["_raw_core_count"] = raw_core_count
+
+    # Schema 校验 + 一致性检查（保持与旧路径一致）。
+    from llm_schemas import validate_llm_output, FeatureResult, check_consistency
+    validated, ext_conf, val_errors = validate_llm_output(result, FeatureResult, "特征提取")
+    for k, v in validated.items():
+        if k in result or k in FEATURE_RANGES:
+            result[k] = v
+
+    consistency_score, consistency_flags = check_consistency(result)
+    result["_extraction_confidence"] = ext_conf
+    result["_consistency_confidence"] = consistency_score
+    if val_errors:
+        result["_validation_errors"] = val_errors
+    if consistency_flags:
+        result["_consistency_flags"] = consistency_flags
+
+    # 完整性评分（按组评估；总键数随拆分变化，但口径与旧 completeness 同维度集合）。
+    completeness = len([k for k in FEATURE_RANGES if k in result])
+    completeness += len([k for k in _REASON_KEYS if k in result])
+    completeness += len([k for k in _QUALITY_KEYS if k in result])
+    completeness += (1 if "bloom_distribution" in result else 0)
+    completeness += (1 if "quality_score" in result else 0)
+
+    # 成功判据：以「难度核心组成功」为主——核心 6 维齐 → 保住雷达/难度。
+    # 不再因字段总数变化误判（旧阈值 raw_core>=6 且 completeness>=18 是对 29 字段
+    # 巨型单任务的口径；拆分后核心组单独评估）。
+    degraded_groups = [k for k in ("difficulty", "quality", "teaching")
+                       if group_outcomes[k]["degraded"] or not group_outcomes[k]["ok"]]
+    if difficulty["ok"]:
+        # 难度核心齐全：质量/教学是否齐全决定 ok / partial。
+        if not degraded_groups:
+            result["_feature_status"] = "ok"
+            logger.info(f"[特征提取] 三组全成功 完整度={completeness}, raw_core={raw_core_count}, "
+                        f"ext_conf={ext_conf}, consistency={consistency_score}")
+        else:
+            result["_feature_status"] = "partial"
+            logger.warning(f"[特征提取] 难度核心组成功、保住雷达；降级组={degraded_groups}, "
+                           f"raw_core={raw_core_count}, completeness={completeness}")
+    elif raw_core_count >= 4:
+        result["_feature_status"] = "partial"
+        logger.warning(f"[特征提取] 难度核心组部分可用 raw_core={raw_core_count}/6, "
+                       f"completeness={completeness}, 降级组={degraded_groups}")
+    else:
+        result["_feature_status"] = "failed"
+        result["_feature_failed"] = True
+        logger.error(f"[特征提取] 难度核心组不可用 raw_core={raw_core_count}/6, "
+                     f"completeness={completeness}, 降级组={degraded_groups}")
+
+    # canonical feature_extraction 审计记录（下游 report 元数据门控/可见性依赖
+    # purpose=feature_extraction + prompt_id=biology.feature_extraction），
+    # 排在 visual 记录之后、各组记录之前，保持既有 _llm_calls 顺序契约。
+    group_retry_total = sum(group_outcomes[k]["retry_count"] for k in group_outcomes)
+    canonical_metadata = {
+        "feature_status": result.get("_feature_status"),
+        "raw_core_count": raw_core_count,
+        "split_groups": {
+            k: {
+                "ok": group_outcomes[k]["ok"],
+                "degraded": group_outcomes[k]["degraded"],
+                "core_present": group_outcomes[k]["core_present"],
+                "retry_count": group_outcomes[k]["retry_count"],
+                "response_length": group_outcomes[k]["response_length"],
+                "purpose": _FEATURE_GROUPS[k]["purpose"],
+                **({"error": group_outcomes[k]["error"]} if group_outcomes[k]["error"] else {}),
+            }
+            for k in ("difficulty", "quality", "teaching")
+        },
+        "degraded_groups": degraded_groups,
+    }
+    if visual_call_record:
+        canonical_metadata["visual_context_source"] = "qwen_vision"
+
+    result = _attach_llm_call(
+        result,
+        call_id=f"{subject}-feature-extraction",
+        purpose="feature_extraction",
+        prompt_id=f"{subject}.feature_extraction",
+        prompt=f"feature_split_v4::difficulty+quality+teaching::{subject}",
+        input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
+        parsed_schema="FeatureResult",
+        confidence=ext_conf,
+        validation_errors=val_errors,
+        retry_count=group_retry_total,
+        existing_calls=[visual_call_record] if visual_call_record else None,
+        metadata=canonical_metadata,
+    )
+
+    # 各组审计记录（排在 canonical 之后，便于追踪每组 provider/finish 行为）。
+    for group_key in ("difficulty", "quality", "teaching"):
+        oc = group_outcomes[group_key]
+        result = _attach_llm_call(
+            result,
+            call_id=f"{subject}-feature-{group_key}",
+            purpose=_FEATURE_GROUPS[group_key]["purpose"],
+            prompt_id=f"{subject}.{_FEATURE_GROUPS[group_key]['purpose']}",
+            prompt=f"feature_group::{group_key}::{subject}",
+            input_refs=_input_refs(question_text, options, correct_answer, question_type, subject, media_items),
+            parsed_schema="FeatureResult",
+            confidence=1.0 if oc["ok"] else 0.0,
+            validation_errors=[oc["error"]] if oc["error"] else [],
+            retry_count=oc["retry_count"],
+            existing_calls=result.get("_llm_calls"),
+            metadata={
+                "group": group_key,
+                "group_status": "ok" if oc["ok"] else ("degraded" if oc["degraded"] else "incomplete"),
+                "core_present": oc["core_present"],
+                "response_length": oc["response_length"],
+            },
+        )
+
+    return result
 
 
 # ── 大题结构化特征提取 v3.1 ────────────────────────────────────

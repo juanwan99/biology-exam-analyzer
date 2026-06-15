@@ -1572,10 +1572,14 @@ class TestBigQuestionPipeline:
             "teacher_comment": "review chart",
         })
         captured = {}
+        group_purposes = []
 
         async def fake_send_message(prompt, **kwargs):
+            # 方案B 拆分后特征提取走 difficulty/quality/teaching 三组顺序调用；
+            # 每组 prompt 都拼上视觉上下文文本，且组调用一律以纯文本发送
+            # （media_items=None），所以视觉图像不会直接喂给 DeepSeek。
             captured["prompt"] = prompt
-            captured["purpose"] = kwargs["purpose"]
+            group_purposes.append(kwargs["purpose"])
             return raw_json
 
         async def fake_extract_visual_context(media_items, **kwargs):
@@ -1597,7 +1601,10 @@ class TestBigQuestionPipeline:
                 "metadata": {"used_as": "deepseek_text_prompt_context"},
             }
 
-        with patch("feature_extractor.extract_visual_context", new=AsyncMock(side_effect=fake_extract_visual_context)):
+        import feature_cache
+        with patch("feature_cache.get", return_value=None), \
+             patch("feature_cache.set", lambda *a, **k: None), \
+             patch("feature_extractor.extract_visual_context", new=AsyncMock(side_effect=fake_extract_visual_context)):
             with patch("feature_extractor.send_message_gpt", new=AsyncMock(side_effect=fake_send_message)):
                 from feature_extractor import extract_features
                 result = asyncio.get_event_loop().run_until_complete(
@@ -1608,16 +1615,23 @@ class TestBigQuestionPipeline:
                     )
                 )
 
+        # 三组都注入了视觉上下文文本（captured 记录的是最后一组的 prompt）。
         assert "chart axis" in captured["prompt"]
-        assert captured["purpose"] == "feature_extraction"
+        assert group_purposes == ["feature_difficulty", "feature_quality", "feature_teaching"]
+        # _llm_calls 顺序契约：visual(image_inputs) → canonical feature_extraction → 三组。
         assert result["_llm_calls"][0]["purpose"] == "image_inputs"
         call = result["_llm_calls"][1]
+        assert call["call_id"] == "biology-feature-extraction"
         assert call["purpose"] == "feature_extraction"
         assert call["input_refs"]["media_count"] == 1
         assert call["input_refs"]["media_types"] == ["image"]
         assert call["metadata"]["visual_context_source"] == "qwen_vision"
 
     def test_feature_extraction_retries_compact_after_empty_provider_response(self):
+        # 方案B 新行为：特征提取拆为 difficulty/quality/teaching 三组顺序调用，
+        # 每组在 finish_reason=length 时本组内重试 1 次；重试成功该组照常 ok、
+        # 该题 _feature_status 仍为 ok。旧的「紧凑重试 / recovery_mode=
+        # api_failure_compact_retry」已删除，本测试改为验证组内 length 重试。
         raw_json = json.dumps({
             "working_memory": 3,
             "working_memory_reason": "compare conditions",
@@ -1648,12 +1662,16 @@ class TestBigQuestionPipeline:
         calls = []
 
         async def fake_send_message(prompt, **kwargs):
-            calls.append(prompt)
+            calls.append(kwargs.get("purpose"))
+            # 难度核心组首次调用 finish=length → 触发组内重试；其余调用正常返回。
             if len(calls) == 1:
-                raise RuntimeError("LLM 返回空内容，视为失败触发 fallback")
+                raise RuntimeError("provider_incomplete_response finish_reason=length")
             return raw_json
 
-        with patch("feature_extractor.send_message_gpt", new=AsyncMock(side_effect=fake_send_message)):
+        import feature_cache
+        with patch("feature_cache.get", return_value=None), \
+             patch("feature_cache.set", lambda *a, **k: None), \
+             patch("feature_extractor.send_message_gpt", new=AsyncMock(side_effect=fake_send_message)):
             from feature_extractor import extract_features
             result = asyncio.get_event_loop().run_until_complete(
                 extract_features(
@@ -1663,12 +1681,30 @@ class TestBigQuestionPipeline:
                 )
             )
 
+        # 组内 length 重试成功 → 该题仍成功，无降级。
         assert result["_feature_status"] == "ok"
         assert result.get("_feature_failed") is not True
-        assert len(calls) == 2
-        call = result["_llm_calls"][0]
-        assert call["retry_count"] == 1
-        assert call["metadata"]["recovery_mode"] == "api_failure_compact_retry"
+        # 调用序列：难度组(首发 length 失败 → 重试) + 质量组 + 教学组 = 4 次。
+        assert calls == [
+            "feature_difficulty", "feature_difficulty",
+            "feature_quality", "feature_teaching",
+        ]
+        # canonical 记录 retry_count = 各组重试次数之和（仅难度组重试了 1 次）。
+        canonical = result["_llm_calls"][0]
+        assert canonical["purpose"] == "feature_extraction"
+        assert canonical["retry_count"] == 1
+        # split_groups 以组键（difficulty/quality/teaching）索引；难度组重试后 ok。
+        difficulty_split = canonical["metadata"]["split_groups"]["difficulty"]
+        assert difficulty_split["ok"] is True
+        assert difficulty_split["degraded"] is False
+        assert difficulty_split["retry_count"] == 1
+        assert difficulty_split["purpose"] == "feature_difficulty"
+        assert canonical["metadata"]["degraded_groups"] == []
+        # 难度组的组记录（紧随 canonical）也应记录 retry_count=1 且 ok。
+        difficulty_call = result["_llm_calls"][1]
+        assert difficulty_call["purpose"] == "feature_difficulty"
+        assert difficulty_call["retry_count"] == 1
+        assert difficulty_call["metadata"]["group_status"] == "ok"
 
     def test_full_chain_with_raw_json(self):
         """A-002: 入口级集成测试 — mock send_message_gpt 返回原始 JSON。"""

@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import feature_cache
 import feature_extractor
 import prompt_loader
 from feature_extractor import extract_big_question_features, extract_features, parse_features
@@ -102,9 +103,17 @@ def test_parse_features_salvages_fields_from_truncated_json():
 @pytest.mark.asyncio
 async def test_extract_features_attaches_llm_call_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", _prepare_prompt_dir(tmp_path))
+    # 隔离同卷特征缓存：保证本测试一定走真实提取（三组顺序调用），
+    # 不被磁盘上已存在的缓存命中短路掉 send_message_gpt。
+    monkeypatch.setattr(feature_cache, "get", lambda *a, **k: None)
+    monkeypatch.setattr(feature_cache, "set", lambda *a, **k: None)
+
+    group_purposes = []
 
     async def fake_send_message(prompt, **kwargs):
-        assert "feature prompt" in prompt
+        # 方案B 拆分后特征提取改为 difficulty/quality/teaching 三组顺序调用；
+        # tmp prompt 目录只放了 feature_extractor.txt，三组各自回退到代码内 builder。
+        group_purposes.append(kwargs.get("purpose"))
         return json.dumps(_feature_payload(), ensure_ascii=False)
 
     monkeypatch.setattr(feature_extractor, "send_message_gpt", fake_send_message)
@@ -117,7 +126,13 @@ async def test_extract_features_attaches_llm_call_metadata(monkeypatch, tmp_path
         subject="biology",
     )
 
+    # 拆分后三组各调一次 LLM（顺序：难度核心 / 质量 / 教学）。
+    assert group_purposes == ["feature_difficulty", "feature_quality", "feature_teaching"]
+
     assert result["_feature_status"] == "ok"
+    # canonical feature_extraction 审计记录排在 _llm_calls[0]（无 visual 时），
+    # purpose/prompt_id/parsed_schema 仍是聚合后的统一契约。
+    assert result["_llm_calls"][0]["call_id"] == "biology-feature-extraction"
     assert result["_llm_calls"][0]["purpose"] == "feature_extraction"
     assert result["_llm_calls"][0]["prompt_id"] == "biology.feature_extraction"
     assert len(result["_llm_calls"][0]["prompt_hash"]) == 64
@@ -126,6 +141,10 @@ async def test_extract_features_attaches_llm_call_metadata(monkeypatch, tmp_path
     assert result["_llm_calls"][0]["parsed_schema"] == "FeatureResult"
     assert result["_llm_calls"][0]["confidence"] == result["_extraction_confidence"]
     assert result["_llm_calls"][0]["input_refs"]["question_type"] == "单选题"
+    # canonical 之后紧跟三条组记录。
+    assert [c["purpose"] for c in result["_llm_calls"][1:]] == [
+        "feature_difficulty", "feature_quality", "feature_teaching"
+    ]
 
 
 @pytest.mark.asyncio
