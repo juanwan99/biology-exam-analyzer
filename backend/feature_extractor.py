@@ -25,7 +25,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "model_policy"):
+    for key in ("provider_errors", "status", "model_policy", "usage"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata
@@ -1702,6 +1702,13 @@ def _renormalize_cached_media(cached: dict, media_items: list | None) -> dict:
     修复 media_not_passed 假阳性：带图题命中早先 media-less 缓存条目时回放出无 media_count 的 call。"""
     if not isinstance(cached, dict):
         return cached
+    # GOAL #8:缓存命中=本次零 LLM 调用,给回放 call 标记 usage_from_cache 防成本双计费
+    for _c in cached.get("_llm_calls") or []:
+        if isinstance(_c, dict):
+            if isinstance(_c.get("metadata"), dict):
+                _c["metadata"]["usage_from_cache"] = True
+            elif _c.get("metadata") is None:
+                _c["metadata"] = {"usage_from_cache": True}
     refs_patch = media_input_refs(media_items)
     if not refs_patch:  # 本次无媒体，无需修正（也不清除缓存里可能存在的反向字段，无害）
         return cached

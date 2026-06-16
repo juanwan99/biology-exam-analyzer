@@ -15,6 +15,8 @@ logger = get_logger()
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
+# GOAL #8 成本计量:成功 provider 的 token usage 旁路回传,经 llm_call 并入 _last_call_metadata
+_last_provider_usage: ContextVar = ContextVar("last_provider_usage", default=None)
 
 
 def get_last_llm_call_metadata() -> dict:
@@ -317,6 +319,28 @@ def _extract_text(api_format: str, data: dict) -> str:
     return text
 
 
+def _extract_usage(api_format: str, data: dict):
+    """从响应提取 token usage(GOAL #8 成本计量)。None-safe,无 usage 返回 None。
+    deepseek 多 reasoning_tokens 与前缀缓存命中数;qwen/responses 缺则为 None。纯落盘,不改任何调用。"""
+    if not isinstance(data, dict):
+        return None
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    out = {
+        "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+        "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+    }
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+        out["reasoning_tokens"] = details.get("reasoning_tokens")
+    for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        if usage.get(k) is not None:
+            out[k] = usage.get(k)
+    return out
+
+
 # ── HTTP 调用 ─────────────────────────────────────────────────────
 
 async def _http_post(url: str, headers: dict, json: dict,
@@ -358,6 +382,7 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                     )
                 resp.raise_for_status()
                 data = resp.json()
+                _last_provider_usage.set(_extract_usage(provider["api_format"], data))
                 return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e
@@ -404,6 +429,7 @@ async def llm_call(
 ) -> str:
     """统一 LLM 调用入口，内置 fallback 链。"""
     _last_call_metadata.set({})
+    _last_provider_usage.set(None)
     requires_images = _messages_include_images(messages)
     providers = get_providers(
         purpose=purpose,
@@ -441,6 +467,7 @@ async def llm_call(
                 "model_policy": provider.get("model_policy"),
                 "fallback_count": len(errors),
                 "provider_errors": _provider_error_summary(errors),
+                "usage": _last_provider_usage.get(),
             })
             return result
         except httpx.HTTPStatusError as e:

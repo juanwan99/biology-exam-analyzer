@@ -25,7 +25,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "operation", "model_policy"):
+    for key in ("provider_errors", "status", "operation", "model_policy", "usage"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata

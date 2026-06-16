@@ -54,7 +54,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "model_policy"):
+    for key in ("provider_errors", "status", "model_policy", "usage"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata
@@ -161,7 +161,11 @@ async def extract_visual_context(
     if cache_key in _visual_context_cache:
         from logger import get_logger
         get_logger().info(f"[视觉] 题目{question_id} visual_context 命中内容缓存，跳过 qwen_vision API")
-        return _visual_context_cache[cache_key]
+        # GOAL #8:命中回放标记 usage_from_cache 防双计费(本次零 qwen API 调用)
+        ctx, cached_call = _visual_context_cache[cache_key]
+        cached_call = dict(cached_call)
+        cached_call["metadata"] = {**(cached_call.get("metadata") or {}), "usage_from_cache": True}
+        return ctx, cached_call
 
     prompt = build_visual_context_prompt(
         question_text=question_text,
