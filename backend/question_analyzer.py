@@ -1110,9 +1110,12 @@ class QuestionAnalyzer:
                 f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
                 "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
                 "3. bloom_level 必须是 1-6 的整数（不是中文）。\n"
-                "4. 严格输出 JSON（不要解释、不要 markdown）：\n"
+                "4. 每个 SEU 必须输出 competency_weights（生命观念/科学思维/科学探究/社会责任 四维，"
+                "四项和=1.0），按本问真实素养分布给值，不要一律均匀填 0.25。\n"
+                "5. 严格输出 JSON（不要解释、不要 markdown）：\n"
                 "{\"scoring_units\":[{\"seu_id\":\"seu_1\",\"label\":\"\",\"score_share\":0.0,"
                 "\"knowledge_links\":[{\"knowledge_point\":\"\",\"share\":1.0}],\"bloom_level\":3,"
+                "\"competency_weights\":{\"生命观念\":0.5,\"科学思维\":0.5,\"科学探究\":0.0,\"社会责任\":0.0},"
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
