@@ -18,6 +18,15 @@ _split_merge_sem = asyncio.Semaphore(8)  # 全局：限制 split-merge 子问总
 SCORE_SHARE_NORMALIZATION_MAX_DEVIATION = 0.10
 
 
+async def _call_with_timeout(coro, timeout):
+    """等价 asyncio.wait_for,但用 asyncio.timeout(3.11+)上下文管理器:不创建子 task,
+    故不隔离 ContextVar —— llm_call 内 set 的 _last_call_metadata(provider/fallback/usage)
+    能回传父 context。修复 wait_for 子 task copy_context 致文本调用 usage/provider 元数据丢失
+    (GOAL #8 成本目标:文本调用 token usage 落盘)。超时同样抛 TimeoutError,except 兼容。"""
+    async with asyncio.timeout(timeout):
+        return await coro
+
+
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     metadata = dict(metadata or {})
     try:
@@ -983,7 +992,7 @@ class QuestionAnalyzer:
             compact_timeout = min(max(analysis_timeout, 180.0), 220.0)
             compact_max_tokens = min(analysis_max_tokens, 8192)
             try:
-                compact_response = await asyncio.wait_for(
+                compact_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1124,7 +1133,7 @@ class QuestionAnalyzer:
                 _transient_left = 1
                 while True:
                     try:
-                        sub_resp = await asyncio.wait_for(
+                        sub_resp = await _call_with_timeout(
                             llm_call(
                                 messages=_question_messages(
                                     "\n\n".join(part for part in [
@@ -1291,7 +1300,7 @@ class QuestionAnalyzer:
             ultra_prompt_hash = sha256(ultra_prompt.encode("utf-8")).hexdigest()
             ultra_timeout = min(max(analysis_timeout, 140.0), 180.0)
             try:
-                ultra_response = await asyncio.wait_for(
+                ultra_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1414,7 +1423,7 @@ class QuestionAnalyzer:
             micro_prompt_hash = sha256(micro_prompt.encode("utf-8")).hexdigest()
             micro_timeout = min(max(analysis_timeout, 100.0), 140.0)
             try:
-                micro_response = await asyncio.wait_for(
+                micro_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1621,7 +1630,7 @@ class QuestionAnalyzer:
             skeletal_prompt_hash = sha256(skeletal_prompt.encode("utf-8")).hexdigest()
             skeletal_timeout = min(max(analysis_timeout, 80.0), 120.0)
             try:
-                skeletal_response = await asyncio.wait_for(
+                skeletal_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(skeletal_prompt, []),
                         max_tokens=1536,
@@ -1807,7 +1816,7 @@ class QuestionAnalyzer:
             minimal_prompt_hash = sha256(minimal_prompt.encode("utf-8")).hexdigest()
             minimal_timeout = min(max(analysis_timeout, 150.0), 180.0)
             try:
-                minimal_response = await asyncio.wait_for(
+                minimal_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(minimal_prompt, []),
                         max_tokens=3072,
@@ -1903,7 +1912,7 @@ class QuestionAnalyzer:
                 total_img_size = sum(len(img) for img in question_images if img)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
-            response_text = await asyncio.wait_for(
+            response_text = await _call_with_timeout(
                 llm_call(
                     messages=_question_messages(full_prompt, []),
                     max_tokens=analysis_max_tokens,
@@ -2079,7 +2088,7 @@ class QuestionAnalyzer:
                     compact_prompt_id = "biology.question_analysis.v2.json_repair"
                     json_repair_timeout = min(max(analysis_timeout, 150.0), 180.0)
                     json_repair_max_tokens = min(analysis_max_tokens, 4096)
-                    compact_response = await asyncio.wait_for(
+                    compact_response = await _call_with_timeout(
                         llm_call(
                             messages=_question_messages(
                                 "\n\n".join(
