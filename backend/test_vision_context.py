@@ -5,6 +5,15 @@ import pytest
 import vision_context
 
 
+@pytest.fixture(autouse=True)
+def _clear_visual_context_cache():
+    # ①A 后缓存键仅按图片 base64;本文件两测试用同一占位 base64,
+    # 需逐测试清进程内缓存以隔离(否则后者命中前者结果)。
+    vision_context._visual_context_cache.clear()
+    yield
+    vision_context._visual_context_cache.clear()
+
+
 @pytest.mark.asyncio
 async def test_extract_visual_context_records_qwen_vision_call(monkeypatch):
     async def fake_llm_call(**kwargs):

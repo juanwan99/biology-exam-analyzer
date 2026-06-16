@@ -33,15 +33,17 @@ def _visual_context_cache_key(
     section_header: str,
     normalized: list[dict[str, str]],
 ) -> str:
+    # ①A 视觉去重(GOAL 调研 #1):视觉转写是对整张图的客观抽取(visual_text/ocr/tables/figures),
+    # 与题型/分节/题干无关。缓存键此前掺入 question_type/section_header,而三个消费方
+    # (question_analyzer/feature_extractor/competency_analyzer)传入这两字段不一致(常为空),
+    # 同题同图算出不同 key、缓存被打穿 → 同图被 Qwen-VL 重复转写 2-3 次(全卷 29 次 vs 带图题 11 道)。
+    # 改为仅按图片 base64 做键:同题图片三方同源(派生自同一 media_items)→ 必命中,29→约11 次真调用;
+    # 同图跨题共享转写无害(转写的是整图内容,题干差异由下游 DeepSeek 处理)。
+    # 签名保留 question_text/question_type/section_header 参数以零改调用点,仅不再参与键。
     h = sha256()
-    h.update((question_text or "").encode("utf-8"))
-    h.update(b"\x00")
-    h.update((question_type or "").encode("utf-8"))
-    h.update(b"\x00")
-    h.update((section_header or "").encode("utf-8"))
     for item in normalized:
-        h.update(b"\x00")
         h.update((item.get("base64") or "").encode("utf-8"))
+        h.update(b"\x00")
     return h.hexdigest()
 
 
