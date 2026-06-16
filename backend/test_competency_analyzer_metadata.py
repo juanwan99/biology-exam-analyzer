@@ -3,6 +3,7 @@ import json
 import pytest
 
 import competency_analyzer
+import prompt_loader
 from competency_analyzer import CompetencyAnalyzer
 
 
@@ -17,11 +18,12 @@ async def test_analyze_competency_attaches_llm_call_metadata(monkeypatch, tmp_pa
 
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+    (prompt_dir / "biology").mkdir(exist_ok=True)
+    (prompt_dir / "biology" / "competency_prompt.txt").write_text(
         "competency prompt {question_text} {knowledge_points}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", prompt_dir)
 
     payload = {
         "生命观念": {"涉及": True, "具体维度": ["结构与功能观"], "权重": 0.2, "分析说明": "关联结构"},
@@ -63,11 +65,12 @@ async def test_analyze_competency_normalizes_near_miss_weight_sum(monkeypatch, t
 
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+    (prompt_dir / "biology").mkdir(exist_ok=True)
+    (prompt_dir / "biology" / "competency_prompt.txt").write_text(
         "competency prompt {question_text} {knowledge_points}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", prompt_dir)
 
     payload = {
         "生命观念": {"涉及": True, "具体维度": ["结构与功能观"], "权重": 0.4, "分析说明": "结构"},
@@ -110,11 +113,12 @@ async def test_analyze_competency_recovers_length_failure_with_compact_json(monk
 
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+    (prompt_dir / "biology").mkdir(exist_ok=True)
+    (prompt_dir / "biology" / "competency_prompt.txt").write_text(
         "competency prompt {question_text} {knowledge_points}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", prompt_dir)
 
     payload = {
         "生命观念": {"涉及": True, "具体维度": ["稳态与平衡观"], "权重": 0.3, "分析说明": "理解调节机制"},
@@ -173,11 +177,12 @@ async def test_analyze_competency_failed_json_keeps_call_metadata(monkeypatch, t
 
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+    (prompt_dir / "biology").mkdir(exist_ok=True)
+    (prompt_dir / "biology" / "competency_prompt.txt").write_text(
         "competency prompt {question_text} {knowledge_points}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", prompt_dir)
 
     async def fake_llm_call(messages, **kwargs):
         return '{"invalid": }'
@@ -206,11 +211,12 @@ async def test_analyze_competency_sends_media_and_records_fallback(monkeypatch, 
 
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    (prompt_dir / "competency_analysis_prompt.txt").write_text(
+    (prompt_dir / "biology").mkdir(exist_ok=True)
+    (prompt_dir / "biology" / "competency_prompt.txt").write_text(
         "competency prompt {question_text} {knowledge_points}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(competency_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(prompt_loader, "_PROMPTS_DIR", prompt_dir)
 
     payload = {
         "鐢熷懡瑙傚康": {"娑夊強": False, "鍏蜂綋缁村害": [], "鏉冮噸": 0.0, "鍒嗘瀽璇存槑": ""},

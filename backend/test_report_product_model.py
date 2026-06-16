@@ -523,7 +523,7 @@ def test_structure_and_difficulty_warnings_are_teacher_visible():
     assert rows[18]["quality_level"] == "需复核"
     assert "难度评估需复核" in rows[18]["primary_issue"]
     assert "0.57" in rows[18]["primary_issue"]
-    assert "LLM" in rows[18]["primary_issue"]
+    assert "AI" in rows[18]["primary_issue"]
     assert "难度评估证据和采分点负荷" in rows[18]["action"]
     assert "题面结构" not in rows[18]["action"]
     assert rows[19]["risk_level"] == "medium"

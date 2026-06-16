@@ -1037,6 +1037,11 @@ async def test_analyze_question_attaches_llm_call_record(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setattr(question_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(
+        question_analyzer.PromptLoader,
+        "exists",
+        lambda self, name: name == "analysis_prompt",
+    )
 
     async def fake_llm_call(**kwargs):
         return json.dumps({
@@ -1084,6 +1089,11 @@ async def test_analyze_question_records_actual_provider_model_metadata(monkeypat
         encoding="utf-8",
     )
     monkeypatch.setattr(question_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(
+        question_analyzer.PromptLoader,
+        "exists",
+        lambda self, name: name == "analysis_prompt",
+    )
 
     async def fake_llm_call(**kwargs):
         return json.dumps({
@@ -1133,6 +1143,11 @@ async def test_long_short_answer_uses_extended_timeout(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setattr(question_analyzer, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(
+        question_analyzer.PromptLoader,
+        "exists",
+        lambda self, name: name == "analysis_prompt",
+    )
 
     seen = {}
 
