@@ -52,6 +52,64 @@ def _coerce_bloom(v):
     return max(1, min(6, n))
 
 
+# ── 嵌套单元数值容错 ─────────────────────────────────────────────
+# SEU/KnowledgeLink/DU/SU 的 ge/le 范围字段:LLM 偶给越界值/百分数/文字档位,
+# pydantic 硬校验会拒绝 → 整份 FineGrainedResult 构造失败、整题 None/降级。
+# before-validator 只做"夹值/类型修正",不放松必填与守恒:必填字段 None 原样透传
+# 让 pydantic 正常报缺失;越界夹到边界并 warning 留审计;不做百分数等启发式猜测
+# （仅明确带 % 的字符串还原），避免制造新错误,越界由下游守恒检查兜底。
+_TRAP_WORD = {"low": 1, "weak": 1, "弱": 1, "小": 1, "轻": 1,
+              "medium": 2, "moderate": 2, "mid": 2, "中": 2,
+              "high": 3, "strong": 3, "强": 3, "大": 3, "重": 3}
+
+
+def _coerce_unit_float(v, lo, hi, default):
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = float(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        is_pct = s.endswith("%")
+        s = s.rstrip("%").strip()
+        try:
+            n = float(s)
+            if is_pct:
+                n = n / 100.0
+        except (ValueError, TypeError):
+            n = None
+    if n is None:
+        logger.warning(f"[unit_coerce] 无法识别数值 {v!r}，回退 {default}")
+        return default
+    clamped = max(lo, min(hi, n))
+    if clamped != n:
+        logger.warning(f"[unit_coerce] 数值 {n} 越界[{lo},{hi}]，夹到 {clamped}")
+    return clamped
+
+
+def _coerce_unit_int(v, lo, hi, default):
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = int(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        if s.lstrip("-").isdigit():
+            n = int(s)
+        else:
+            n = _TRAP_WORD.get(s.lower())
+            if n is None:
+                m = re.search(r"[1-9][0-9]*", s)
+                if m:
+                    n = int(m.group())
+    if n is None:
+        logger.warning(f"[unit_coerce] 无法识别档位 {v!r}，回退 {default}")
+        return default
+    return max(lo, min(hi, n))
+
+
 # ── 1. 主分析（question_analyzer）────────────────────────────────
 
 class AnalysisResult(BaseModel):
@@ -104,6 +162,11 @@ class CompetencyDim(BaseModel):
     具体维度: List[str] = Field(default_factory=list)
     权重: float = Field(default=0, ge=0, le=1)
     分析说明: str = ""
+
+    @field_validator("权重", mode="before")
+    @classmethod
+    def _vld_quanzhong(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, 0.0)
 
     class Config:
         extra = "allow"
@@ -200,6 +263,11 @@ class KnowledgeLink(BaseModel):
     knowledge_point: str
     share: float = Field(ge=0.0, le=1.0)  # 在 SEU 中占的比例
 
+    @field_validator("share", mode="before")
+    @classmethod
+    def _vld_share(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, None)
+
 
 COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任"]
 
@@ -207,6 +275,11 @@ COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任
 class CompetencyLink(BaseModel):
     primary: str = ""
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("weight", mode="before")
+    @classmethod
+    def _vld_weight(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, 1.0)
 
 
 class ScoringEvidenceUnit(BaseModel):
@@ -227,6 +300,15 @@ class ScoringEvidenceUnit(BaseModel):
     @classmethod
     def _vld_bloom_level(cls, v):
         return _coerce_bloom(v)
+
+    @field_validator("score_share", "allocation_confidence", "difficulty_estimate", mode="before")
+    @classmethod
+    def _vld_unit_floats(cls, v, info):
+        if info.field_name == "difficulty_estimate":
+            return _coerce_unit_float(v, 0.0, 10.0, 5.0)
+        if info.field_name == "allocation_confidence":
+            return _coerce_unit_float(v, 0.0, 1.0, 0.7)
+        return _coerce_unit_float(v, 0.0, 1.0, None)  # score_share 必填:无法识别→None 让 pydantic 报缺失
 
     def get_competency_weights(self, competency_dims: Optional[List[str]] = None) -> Dict[str, float]:
         """获取素养权重（兼容新旧格式）。
@@ -263,6 +345,11 @@ class DiagnosticUnit(BaseModel):
     knowledge_boundary: str = ""
     if_selected_means: List[str] = []
 
+    @field_validator("trap_strength", mode="before")
+    @classmethod
+    def _vld_trap_strength(cls, v):
+        return _coerce_unit_int(v, 1, 3, 2)
+
 
 class StimulusUnit(BaseModel):
     """情境/过程单元 — 承载材料、图表、共享情境"""
@@ -271,6 +358,11 @@ class StimulusUnit(BaseModel):
     complexity: int = Field(default=1, ge=1, le=3)
     is_core: bool = False
     description: str = ""  # ≤30字
+
+    @field_validator("complexity", mode="before")
+    @classmethod
+    def _vld_complexity(cls, v):
+        return _coerce_unit_int(v, 1, 3, 1)
 
 
 class FineGrainedResult(BaseModel):
