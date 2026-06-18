@@ -124,6 +124,15 @@ class AnalysisResult(BaseModel):
     sub_questions: Optional[List[Dict]] = None
     option_difficulty_breakdown: Optional[Dict] = None
 
+    @field_validator("option_difficulty_breakdown", mode="before")
+    @classmethod
+    def _coerce_option_bd(cls, v):
+        # 选项难度细分为非关键可选 flag（下游 difficulty_pipeline 已 isinstance(dict) 防御）。
+        # v1 prompt 示例为 list，LLM 常返回 list；schema 要 Dict 会校验失败 →
+        # 整题 confidence 归零 → 报告门禁(component confidence<=0)拦截。
+        # 仅 dict 有效，其余（list/str/None）降级为 None。生物走 v2 不触此路径，零回归。
+        return v if isinstance(v, dict) else None
+
     @field_validator("bloom_level", mode="before")
     @classmethod
     def _vld_bloom_level(cls, v):
