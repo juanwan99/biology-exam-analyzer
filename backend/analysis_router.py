@@ -33,6 +33,7 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
 from analysis_statistics import generate_exam_statistics, _build_competency_list
 from subject_config import normalize_subject
+from llm_client import set_user_api_keys
 from deps import (
     get_analysis_service,
     get_competency_analyzer,
@@ -218,11 +219,26 @@ async def analyze_auto(
     token = authorization[7:]
 
     from auth_router import active_tokens as _admin_tokens
+    _user_api_keys_dict = None
     _rev = _admin_tokens.get(token)
-    if _rev and _rev.get("username") == "reviewer":
+    if _rev:
         _review_mode = True
         user_id = _rev["id"]
-        logger.info(f"[评审] reviewer 评审模式，跳过积分")
+        username = _rev.get("username", "")
+        _uses_system = username in ("admin", "reviewer") or username.startswith("teacher")
+        if _uses_system:
+            logger.info(f"[系统Key] {username} 使用系统 API Key")
+        else:
+            from database import async_session as _async_session_factory
+            from models import AdminUser
+            from sqlalchemy import select as sa_select
+            async with _async_session_factory() as _db:
+                _r = await _db.execute(sa_select(AdminUser).where(AdminUser.id == user_id))
+                _u = _r.scalar_one_or_none()
+                if not _u or not _u.deepseek_api_key or not _u.qwen_api_key:
+                    raise HTTPException(403, detail="请先在首页配置 DeepSeek 和 Qwen 的 API Key")
+                _user_api_keys_dict = {"deepseek": _u.deepseek_api_key, "qwen": _u.qwen_api_key}
+                logger.info(f"[用户Key] {username} 使用自己的 API Key")
     else:
         try:
             user_info = await credits_service.verify_token(token)
@@ -328,6 +344,8 @@ async def analyze_auto(
         _bg_competency_analyzer = competency_analyzer
         _bg_start_time = start_time
 
+        if _user_api_keys_dict:
+            set_user_api_keys(_user_api_keys_dict)
         _bg_task = asyncio.create_task(_run_analysis_pipeline(
             task_id, _bg_questions, _bg_image_bytes, _bg_mode,
             _bg_competency_analyzer,

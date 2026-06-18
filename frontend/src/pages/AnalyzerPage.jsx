@@ -29,6 +29,10 @@ function AnalyzerPage() {
     try { return JSON.parse(localStorage.getItem('bio_user') || 'null') } catch { return null }
   })
   const [balance, setBalance] = useState(null)
+  const [apiKeys, setApiKeys] = useState({ has_deepseek: false, has_qwen: false, deepseek_key_preview: null, qwen_key_preview: null, uses_system_keys: false })
+  const [apiKeyForm, setApiKeyForm] = useState({ deepseek: '', qwen: '' })
+  const [apiKeySaving, setApiKeySaving] = useState(false)
+  const [apiKeyMsg, setApiKeyMsg] = useState('')
   const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
@@ -44,7 +48,18 @@ function AnalyzerPage() {
     }
   }
 
+  const loadApiKeys = async (t) => {
+    if (!isReviewMode) return
+    try {
+      const resp = await axios.get('/api/auth/me/api-keys', { headers: { Authorization: `Bearer ${t}` } })
+      setApiKeys(resp.data)
+    } catch (err) {
+      if (err.response?.status === 401) handleLogout()
+    }
+  }
+
   useEffect(() => { if (token && !isReviewMode) loadBalance(token) }, [token])
+  useEffect(() => { if (token && isReviewMode) loadApiKeys(token) }, [token])
 
   useEffect(() => {
     return () => { pollingRef.current = false }
@@ -74,6 +89,7 @@ function AnalyzerPage() {
         localStorage.setItem('bio_user', JSON.stringify(u))
         setToken(t)
         setUser(u)
+        if (u.uses_system_keys === false) loadApiKeys(t)
       } else {
         const resp = await axios.post(`${AUTH_API}/login`, { email: loginEmail, password: loginPassword })
         const { token: t, user: u } = resp.data.data
@@ -87,6 +103,24 @@ function AnalyzerPage() {
       setLoginError(err.response?.data?.error || '登录失败')
     } finally {
       setLoginLoading(false)
+    }
+  }
+
+  const saveApiKeys = async () => {
+    setApiKeySaving(true)
+    setApiKeyMsg('')
+    try {
+      const body = {}
+      if (apiKeyForm.deepseek) body.deepseek_api_key = apiKeyForm.deepseek
+      if (apiKeyForm.qwen) body.qwen_api_key = apiKeyForm.qwen
+      const resp = await axios.put('/api/auth/me/api-keys', body, { headers: { Authorization: `Bearer ${token}` } })
+      setApiKeyMsg(resp.data.message)
+      setApiKeyForm({ deepseek: '', qwen: '' })
+      loadApiKeys(token)
+    } catch (err) {
+      setApiKeyMsg(err.response?.data?.detail || '保存失败')
+    } finally {
+      setApiKeySaving(false)
     }
   }
 
@@ -289,6 +323,44 @@ function AnalyzerPage() {
           </button>
         </div>
       </div>
+
+      {/* API Key 配置 */}
+      {isReviewMode && !apiKeys.uses_system_keys && (
+        <div className="max-w-2xl mx-auto" style={{ marginBottom: '16px' }}>
+          <div style={{ padding: '24px', borderRadius: '20px', border: (apiKeys.has_deepseek && apiKeys.has_qwen) ? '1px solid #b8d1bf' : '2px solid #fde68a', background: (apiKeys.has_deepseek && apiKeys.has_qwen) ? '#f0faf3' : '#fffbeb' }}>
+            <h3 className="font-bold" style={{ color: 'var(--color-primary)', fontSize: '1rem', marginBottom: '12px' }}>
+              {(apiKeys.has_deepseek && apiKeys.has_qwen) ? '✓ API Key 已配置' : '请配置 API Key'}
+            </h3>
+            {(apiKeys.has_deepseek && apiKeys.has_qwen) ? (
+              <div style={{ fontSize: '0.85rem', color: 'var(--color-secondary)' }}>
+                <p>DeepSeek: {apiKeys.deepseek_key_preview}</p>
+                <p style={{ marginTop: '4px' }}>Qwen: {apiKeys.qwen_key_preview}</p>
+                <button onClick={() => setApiKeys(prev => ({ ...prev, has_deepseek: false }))} className="text-sm mt-2" style={{ color: 'var(--color-primary-light)', textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer' }}>重新配置</button>
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: '0.85rem', color: 'var(--color-muted)', marginBottom: '16px' }}>使用前需要填入您自己的 API Key，分析产生的费用由您的账户承担。</p>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-secondary)', marginBottom: '4px' }}>DeepSeek API Key</label>
+                  <input type="password" placeholder="sk-..." value={apiKeyForm.deepseek} onChange={e => setApiKeyForm(p => ({ ...p, deepseek: e.target.value }))} className="input-modern" style={{ fontSize: '0.85rem' }} />
+                </div>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-secondary)', marginBottom: '4px' }}>Qwen API Key (通义千问 / DashScope)</label>
+                  <input type="password" placeholder="sk-..." value={apiKeyForm.qwen} onChange={e => setApiKeyForm(p => ({ ...p, qwen: e.target.value }))} className="input-modern" style={{ fontSize: '0.85rem' }} />
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={saveApiKeys} disabled={apiKeySaving || (!apiKeyForm.deepseek && !apiKeyForm.qwen)} className="btn-primary" style={{ padding: '10px 24px', fontSize: '14px' }}>
+                    {apiKeySaving ? '保存中...' : '保存 Key'}
+                  </button>
+                  <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>获取 DeepSeek Key</a>
+                  <a href="https://dashscope.console.aliyun.com/apiKey" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>获取 Qwen Key</a>
+                </div>
+                {apiKeyMsg && <p style={{ marginTop: '10px', fontSize: '0.85rem', color: apiKeyMsg.includes('失败') ? '#991b1b' : '#166534' }}>{apiKeyMsg}</p>}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 上传区域 */}
       <div className="max-w-2xl mx-auto" style={{ paddingBottom: '80px' }}>

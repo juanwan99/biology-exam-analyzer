@@ -17,6 +17,11 @@ _semaphores: dict[str, asyncio.Semaphore] = {}
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
 # GOAL #8 成本计量:成功 provider 的 token usage 旁路回传,经 llm_call 并入 _last_call_metadata
 _last_provider_usage: ContextVar = ContextVar("last_provider_usage", default=None)
+_user_api_keys: ContextVar = ContextVar("user_api_keys", default=None)
+
+
+def set_user_api_keys(keys):
+    _user_api_keys.set(keys)
 
 
 def get_last_llm_call_metadata() -> dict:
@@ -90,7 +95,16 @@ def _get_semaphore(provider: dict) -> asyncio.Semaphore:
 
 
 def _get_headers(provider: dict) -> dict:
-    key = os.environ.get(provider["key_env"], "")
+    key = ""
+    user_keys = _user_api_keys.get(None)
+    if user_keys:
+        key_env = provider.get("key_env", "")
+        if key_env == "DEEPSEEK_API_KEY" and user_keys.get("deepseek"):
+            key = user_keys["deepseek"]
+        elif key_env in ("QWEN_API_KEY", "DASHSCOPE_API_KEY") and user_keys.get("qwen"):
+            key = user_keys["qwen"]
+    if not key:
+        key = os.environ.get(provider.get("key_env", ""), "")
     fmt = provider["api_format"]
     headers = {"Content-Type": "application/json"}
     if fmt == "anthropic":

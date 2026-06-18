@@ -164,6 +164,9 @@ class AdminUser(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    deepseek_api_key = Column(Text)
+    qwen_api_key = Column(Text)
+
     operation_logs = relationship("OperationLog", back_populates="user")
 
 
