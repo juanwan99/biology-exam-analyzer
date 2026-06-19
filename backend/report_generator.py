@@ -1190,12 +1190,15 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
     """组装完整 HTML 报告。"""
     exam = data["exam_info"]
     metrics = data["metrics"]
+    from subject_config import get_subject_name, get_curriculum_name
+    _subject_name = get_subject_name(exam.get("subject"))
+    _curriculum_name = get_curriculum_name(exam.get("subject"))
 
     css = _get_report_css()
 
     # 封面
     cover = f'''<div class="cover">
-<h1>生物试卷质量评估报告</h1>
+<h1>{_subject_name}试卷质量评估报告</h1>
 <p class="subtitle">{exam["name"]}</p>
 <p>题目总数: {exam["total_questions"]} | 总分: {exam["total_score"]}分 |
 模式: {"深度" if exam["mode"]=="deep" else "快速"} |
@@ -1259,9 +1262,9 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
     sections.append(_render_recommendations_section(insights, mode))
 
     # Footer
-    sections.append('''<div class="footer">
-<p>本报告由 生物试卷智能分析系统 自动生成</p>
-<p>基于《普通高中生物学课程标准（2017年版2020修订）》</p>
+    sections.append(f'''<div class="footer">
+<p>本报告由 {_subject_name}试卷智能分析系统 自动生成</p>
+<p>基于《{_curriculum_name}》</p>
 </div>''')
 
     return f'''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">

@@ -32,7 +32,7 @@ import credits_service
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
 from analysis_statistics import generate_exam_statistics, _build_competency_list
-from subject_config import normalize_subject
+from subject_config import normalize_subject, is_valid_subject, get_subject_name
 from llm_client import set_user_api_keys
 from deps import (
     get_analysis_service,
@@ -315,8 +315,16 @@ async def analyze_auto(
 
         # 注入学科：service/analyzer/competency/difficulty 链路均从 question["subject"] 取学科
         _subject = normalize_subject(subject)
+        # G 根因修复：未注册学科被静默降级为 biology 会产出"学科错误但无告警"的脏报告。
+        # 此处显式告警 + 在题目上保留 raw_subject 原值，供排障/未来报告层提示。
+        if subject and not is_valid_subject(subject):
+            logger.warning(
+                f"[学科] 上传学科 '{subject}' 未在九科注册，已降级为 {get_subject_name(_subject)}"
+                f"（{_subject}）；本卷将按该学科分析出报告，请确认前端学科选择是否正确。"
+            )
         for _q in questions:
             _q["subject"] = _subject
+            _q["raw_subject"] = subject
 
         # 3.5 文件拆分成功，扣除积分（评审模式跳过）
         if not _review_mode:
@@ -685,8 +693,15 @@ async def confirm_split(
                 raise HTTPException(400, f"第{i+1}项缺少 id 字段")
         # 注入学科（下游链路从 question["subject"] 取）
         _subject = normalize_subject(subject)
+        # G 根因修复：未注册学科静默降级告警 + 保留 raw_subject 原值。
+        if subject and not is_valid_subject(subject):
+            logger.warning(
+                f"[学科] 上传学科 '{subject}' 未在九科注册，已降级为 {get_subject_name(_subject)}"
+                f"（{_subject}）；本卷将按该学科分析出报告，请确认前端学科选择是否正确。"
+            )
         for q in corrected_questions_list:
             q["subject"] = _subject
+            q["raw_subject"] = subject
         logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目 (subject={_subject})")
 
         # 题目校验通过，扣除积分（评审模式跳过；同 session 幂等，防刷新/重试重复扣费 DR-01）

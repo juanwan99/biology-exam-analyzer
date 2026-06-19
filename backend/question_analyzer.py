@@ -10,7 +10,7 @@ from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from vision_context import extract_visual_context
 from prompt_loader import PromptLoader
-from subject_config import normalize_subject
+from subject_config import normalize_subject, get_competency_dims, get_subject_name
 
 logger = get_logger()
 _split_merge_sem = asyncio.Semaphore(8)  # 全局：限制 split-merge 子问总并发，防网关过载
@@ -879,6 +879,7 @@ class QuestionAnalyzer:
                 question_id=question_id,
                 question_type=question_type,
                 section_header=section_header or "",
+                subject=normalized_subject,
                 timeout=min(analysis_timeout, 120.0),
             )
             prompt_sections.append(visual_context_text)
@@ -924,6 +925,10 @@ class QuestionAnalyzer:
             return 0.0
 
         def _fallback_knowledge_points() -> list[str]:
+            # 触发关键词(CGG/基因/遗传/生态/蛋白/转录)全为生物专属；非生物学科不套用，
+            # 避免非生物题干恰含生物字样时回退到生物知识点。A-3 残留路径闭环（与 :1686 占位一致）。
+            if normalized_subject != "biology":
+                return []
             text = question_text or ""
             if any(marker in text for marker in ("CGG", "三核苷酸", "动态突变", "脆性X")):
                 return ["基因突变"]
@@ -968,7 +973,7 @@ class QuestionAnalyzer:
                 0.2,
                 result["_validation_errors"],
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v1.length_recovery.deterministic",
+                prompt_id=f"{normalized_subject}.question_analysis.v1.length_recovery.deterministic",
                 prompt_hash_value=fallback_prompt_hash,
                 response_len=0,
                 call_suffix="analysis-length-recovery-deterministic",
@@ -986,9 +991,10 @@ class QuestionAnalyzer:
             compact_prompt = self._get_compact_analysis_retry_prompt(
                 question_type=question_type,
                 section_header=section_header,
+                subject=normalized_subject,
             )
             compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
-            compact_prompt_id = "biology.question_analysis.v2.compact_retry"
+            compact_prompt_id = f"{normalized_subject}.question_analysis.v2.compact_retry"
             compact_timeout = min(max(analysis_timeout, 180.0), 220.0)
             compact_max_tokens = min(analysis_max_tokens, 8192)
             try:
@@ -1059,7 +1065,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1100,6 +1106,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _analyze_one_subquestion(sub_idx: int, sub_meta: dict, all_subs: list, big_total: float):
@@ -1110,8 +1117,14 @@ class QuestionAnalyzer:
             brief_list = "；".join(
                 f"第{j}问({s.get('brief','')})" for j, s in enumerate(all_subs, start=1))
             sub_pts = sub_meta.get("points") or round((sub_meta.get("score_share") or 0) * big_total) or "若干"
+            _dims = get_competency_dims(normalized_subject)
+            _dims_str = "/".join(_dims)
+            _dim_n = len(_dims)
+            _dim_even = round(1.0 / _dim_n, 2) if _dim_n else 0.0
+            _cw_tpl = "{" + ",".join(
+                f'"{_d}":{0.5 if _i < 2 else 0.0}' for _i, _d in enumerate(_dims)) + "}"
             sub_prompt = (
-                "你是生物学审题专家。下面是整道大题的完整题干与子问清单。\n"
+                f"你是{get_subject_name(normalized_subject)}学科审题专家。下面是整道大题的完整题干与子问清单。\n"
                 f"本次【只分析第{sub_idx}问】（{sub_meta.get('brief','')}，约{sub_pts}分），"
                 f"只为这一问产出采分点 scoring_units(SEU)，不要分析其它子问。\n"
                 f"子问清单：{brief_list}\n"
@@ -1119,12 +1132,12 @@ class QuestionAnalyzer:
                 f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
                 "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
                 "3. bloom_level 必须是 1-6 的整数（不是中文）。\n"
-                "4. 每个 SEU 必须输出 competency_weights（生命观念/科学思维/科学探究/社会责任 四维，"
-                "四项和=1.0），按本问真实素养分布给值，不要一律均匀填 0.25。\n"
+                f"4. 每个 SEU 必须输出 competency_weights（{_dims_str} 共{_dim_n}维，"
+                f"{_dim_n}项和=1.0），按本问真实素养分布给值，不要一律均匀填 {_dim_even}。\n"
                 "5. 严格输出 JSON（不要解释、不要 markdown）：\n"
                 "{\"scoring_units\":[{\"seu_id\":\"seu_1\",\"label\":\"\",\"score_share\":0.0,"
                 "\"knowledge_links\":[{\"knowledge_point\":\"\",\"share\":1.0}],\"bloom_level\":3,"
-                "\"competency_weights\":{\"生命观念\":0.5,\"科学思维\":0.5,\"科学探究\":0.0,\"社会责任\":0.0},"
+                f"\"competency_weights\":{_cw_tpl},"
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
@@ -1252,7 +1265,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [u.model_dump() if hasattr(u, 'model_dump') else u for u in fg.scoring_units],
@@ -1266,7 +1279,7 @@ class QuestionAnalyzer:
             validated = attach_call_record(
                 validated, "FineGrainedResult", ext_conf, val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.split_merge",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.split_merge",
                 prompt_hash_value=sha256(("split_merge:" + str(question_type)).encode("utf-8")).hexdigest(),
                 response_len=0,
                 call_suffix="analysis-split-merge",
@@ -1288,6 +1301,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _ultra_compact_analysis_retry(initial_reason: str, retry_count: int = 2) -> dict:
@@ -1296,6 +1310,7 @@ class QuestionAnalyzer:
             ultra_prompt = self._get_ultra_compact_analysis_retry_prompt(
                 question_type=question_type,
                 section_header=section_header,
+                subject=normalized_subject,
             )
             ultra_prompt_hash = sha256(ultra_prompt.encode("utf-8")).hexdigest()
             ultra_timeout = min(max(analysis_timeout, 140.0), 180.0)
@@ -1362,7 +1377,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1379,7 +1394,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.ultra_compact_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.ultra_compact_retry",
                 prompt_hash_value=ultra_prompt_hash,
                 response_len=ultra_response_length,
                 call_suffix="analysis-ultra-compact-retry",
@@ -1410,6 +1425,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _micro_compact_analysis_retry(initial_reason: str, retry_count: int = 3) -> dict:
@@ -1490,7 +1506,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1507,7 +1523,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.micro_compact_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.micro_compact_retry",
                 prompt_hash_value=micro_prompt_hash,
                 response_len=micro_response_length,
                 call_suffix="analysis-micro-compact-retry",
@@ -1538,6 +1554,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         def _should_attempt_skeletal_fine_grained_retry() -> bool:
@@ -1584,7 +1601,7 @@ class QuestionAnalyzer:
                 for point in points:
                     if is_non_textbook_skill_point(point):
                         continue
-                    canonical, _ = canonicalize_knowledge_point(point, knowledge_mapper=mapper)
+                    canonical, _ = canonicalize_knowledge_point(point, knowledge_mapper=mapper, subject=normalized_subject)
                     if canonical and canonical not in canonical_points:
                         canonical_points.append(canonical)
                 return canonical_points or points
@@ -1670,7 +1687,13 @@ class QuestionAnalyzer:
                 _short_list(
                     skeletal.get("k") or skeletal.get("kp") or skeletal.get("knowledge_points"),
                     3,
-                    _fallback_knowledge_points() or ["遗传的基本规律", "基因突变", "基因表达与性状的关系"],
+                    _fallback_knowledge_points() or (
+                        # 生物保留原遗传兜底(零回归)；非生物科 _fallback_knowledge_points 必返空，
+                        # 不再写死注入生物遗传知识点，改学科中性占位+人工复核。A-3 根因修复。
+                        ["遗传的基本规律", "基因突变", "基因表达与性状的关系"]
+                        if normalized_subject == "biology"
+                        else ["待人工复核知识点"]
+                    ),
                     item_limit=18,
                 )
             )
@@ -1687,6 +1710,12 @@ class QuestionAnalyzer:
             total_score = int(round(_infer_fallback_total_score()))
             diff_estimate = _difficulty_estimate(diff_label)
             shares = [0.34, 0.33, 0.33]
+            if normalized_subject == "biology":
+                _skeletal_cw = {"生命观念": 0.15, "科学思维": 0.55, "科学探究": 0.25, "社会责任": 0.05}
+            else:
+                _sk_dims = get_competency_dims(normalized_subject)
+                _sk_even = round(1.0 / len(_sk_dims), 2) if _sk_dims else 0.0
+                _skeletal_cw = {_d: _sk_even for _d in _sk_dims}
             scoring_units = []
             for index, share in enumerate(shares):
                 kp = knowledge_points[min(index, len(knowledge_points) - 1)]
@@ -1699,12 +1728,7 @@ class QuestionAnalyzer:
                         "allocation_confidence": 0.65,
                         "knowledge_links": [{"knowledge_point": kp, "share": 1.0}],
                         "bloom_level": bloom,
-                        "competency_weights": {
-                            "生命观念": 0.15,
-                            "科学思维": 0.55,
-                            "科学探究": 0.25,
-                            "社会责任": 0.05,
-                        },
+                        "competency_weights": dict(_skeletal_cw),
                         "difficulty_estimate": min(10.0, diff_estimate + (0.2 if index == 2 else 0.0)),
                         "reasoning_brief": labels[index],
                     }
@@ -1757,7 +1781,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1778,7 +1802,7 @@ class QuestionAnalyzer:
                 validated["_extraction_confidence"],
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.skeletal_fine_grained_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.skeletal_fine_grained_retry",
                 prompt_hash_value=skeletal_prompt_hash,
                 response_len=skeletal_response_length,
                 call_suffix="analysis-skeletal-fine-grained-retry",
@@ -1800,7 +1824,7 @@ class QuestionAnalyzer:
             logger.warning(f"[分析] 题目{question_id} 触发 minimal JSON 重试: {initial_reason}")
             provider_errors_before = _last_provider_error_messages()
             minimal_prompt = (
-                "You are the DeepSeek primary reviewer for a high-school biology exam item.\n"
+                f"You are the DeepSeek primary reviewer for a high-school {get_subject_name(normalized_subject)} exam item.\n"
                 "Return ONLY one compact JSON object. Do not include markdown or extra text.\n"
                 "Required keys: knowledge_points, detailed_analysis, difficulty, common_mistakes, "
                 "answer, total_score, bloom_level.\n"
@@ -1869,7 +1893,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v1.length_recovery",
+                prompt_id=f"{normalized_subject}.question_analysis.v1.length_recovery",
                 prompt_hash_value=minimal_prompt_hash,
                 response_len=minimal_response_length,
                 call_suffix="analysis-length-recovery",
@@ -1890,6 +1914,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         # 大题直接 split-merge（跳过 v2 整题分析，省 4-5 分钟）
@@ -2001,7 +2026,7 @@ class QuestionAnalyzer:
                                 raw_sum = sum(s.get("score_share", 0) for s in raw_seus if isinstance(s, dict))
                                 if abs(raw_sum - 1.0) > 0.02:
                                     val_errors = (val_errors or []) + [f"原始 score_share 总和={raw_sum:.3f}，未归一化"]
-                            summary = compute_summary_from_units(fg)
+                            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
                             validated.update(summary)
                             validated["_fine_grained"] = {
                                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -2035,6 +2060,7 @@ class QuestionAnalyzer:
                                 question_media_items=question_media_items,
                                 visual_context_text=visual_context_text,
                                 timeout=analysis_timeout,
+                                subject=normalized_subject,
                             )
                             return validated
                         else:
@@ -2083,9 +2109,10 @@ class QuestionAnalyzer:
                     compact_prompt = self._get_compact_analysis_retry_prompt(
                         question_type=question_type,
                         section_header=section_header,
+                        subject=normalized_subject,
                     )
                     compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
-                    compact_prompt_id = "biology.question_analysis.v2.json_repair"
+                    compact_prompt_id = f"{normalized_subject}.question_analysis.v2.json_repair"
                     json_repair_timeout = min(max(analysis_timeout, 150.0), 180.0)
                     json_repair_max_tokens = min(analysis_max_tokens, 4096)
                     compact_response = await _call_with_timeout(
@@ -2138,7 +2165,7 @@ class QuestionAnalyzer:
                     if not is_conserved:
                         val_errors = (val_errors or []) + conservation_errors
                         ext_conf = min(ext_conf, 0.6)
-                    summary = compute_summary_from_units(fg)
+                    summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
                     validated.update(summary)
                     validated["_fine_grained"] = {
                         "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -2176,6 +2203,7 @@ class QuestionAnalyzer:
                         question_media_items=question_media_items,
                         visual_context_text=visual_context_text,
                         timeout=analysis_timeout,
+                        subject=normalized_subject,
                     )
                     return validated
 
@@ -2276,6 +2304,7 @@ class QuestionAnalyzer:
         timeout: float,
         question_media_items: list | None = None,
         visual_context_text: str = "",
+        subject: str = "biology",
     ) -> dict:
         if not self._needs_evidence_units(analysis_payload, question_type):
             return analysis_payload
@@ -2288,6 +2317,7 @@ class QuestionAnalyzer:
             question_type=question_type,
             section_header=section_header,
             scoring_units=fine_grained.get("scoring_units") or [],
+            subject=subject,
         )
         prompt_hash = sha256(prompt.encode("utf-8")).hexdigest()
         response_text = ""
@@ -2391,7 +2421,7 @@ class QuestionAnalyzer:
             call_id=f"question-{question_id}-evidence-retry",
             question_id=question_id,
             purpose="missing_evidence_repair",
-            prompt_id="biology.question_analysis.v2.evidence_retry",
+            prompt_id=f"{subject}.question_analysis.v2.evidence_retry",
             prompt_hash=prompt_hash,
             provider=provider,
             model=model,
@@ -2413,12 +2443,14 @@ class QuestionAnalyzer:
         return analysis_payload
 
     @staticmethod
-    def _get_compact_analysis_retry_prompt(question_type: str, section_header: str = None) -> str:
+    def _get_compact_analysis_retry_prompt(question_type: str, section_header: str = None, subject: str = "biology") -> str:
         section = section_header or "未提供"
+        _subject_cn = get_subject_name(subject)
+        _dims = "、".join(get_competency_dims(subject))
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题元数据分析器。上一次完整 schema 输出不可解析，现在只做紧凑重试。\n"
+            f"你是高中{_subject_cn}试题元数据分析器。上一次完整 schema 输出不可解析，现在只做紧凑重试。\n"
             "只返回一个合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
@@ -2427,19 +2459,21 @@ class QuestionAnalyzer:
             "allocation_confidence, knowledge_links, bloom_level, competency_weights, "
             "difficulty_estimate, reasoning_brief。\n"
             "knowledge_links 每个单元只输出 1 个，share=1.0。\n"
-            "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
+            f"competency_weights 必须含 {_dims}，各项总和等于 1.0。\n"
             "knowledge_points 最多 4 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 80 个汉字。\n"
             "大题只输出 2 个 diagnostic_units 和 1 个 stimulus_units；"
             "只有选择题且确无材料时才允许 stimulus_units=[]。所有 label/reason 字段不超过 24 个汉字。"
         )
 
     @staticmethod
-    def _get_ultra_compact_analysis_retry_prompt(question_type: str, section_header: str = None) -> str:
+    def _get_ultra_compact_analysis_retry_prompt(question_type: str, section_header: str = None, subject: str = "biology") -> str:
         section = section_header or "未提供"
+        _subject_cn = get_subject_name(subject)
+        _dims = "、".join(get_competency_dims(subject))
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题元数据分析器。前两次输出过长，现在只做超短结构化恢复。\n"
+            f"你是高中{_subject_cn}试题元数据分析器。前两次输出过长，现在只做超短结构化恢复。\n"
             "只返回一个 minified JSON 对象，不要 markdown，不要解释，整体不超过 1500 个汉字。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
@@ -2451,7 +2485,7 @@ class QuestionAnalyzer:
             "misconception,trap_strength,knowledge_boundary,if_selected_means；字符串不超过 12 个汉字。\n"
             "stimulus_units 必须恰好 1 个，含 su_id,stimulus_type,complexity,is_core,description；"
             "description 不超过 14 个汉字。\n"
-            "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
+            f"competency_weights 必须含 {_dims}，各项总和等于 1.0。\n"
             "knowledge_points 最多 3 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 40 个汉字；"
             "difficulty 只能是 简单、中等、困难。"
         )
@@ -2484,13 +2518,15 @@ class QuestionAnalyzer:
         question_type: str,
         section_header: str = None,
         scoring_units: list = None,
+        subject: str = "biology",
     ) -> str:
         section = section_header or "未提供"
         scoring_units_json = json.dumps(scoring_units or [], ensure_ascii=False)
+        _subject_cn = get_subject_name(subject)
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题诊断元数据抽取器。已有采分单元如下：\n"
+            f"你是高中{_subject_cn}试题诊断元数据抽取器。已有采分单元如下：\n"
             f"{scoring_units_json}\n"
             "现在只补充诊断单元和情境单元。只返回合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含两个字段：diagnostic_units, stimulus_units。\n"
@@ -2505,7 +2541,7 @@ class QuestionAnalyzer:
 
     @staticmethod
     def _get_default_split_prompt() -> str:
-        return """请分析这份生物试卷，将其拆分为单独的题目。
+        return """请分析这份试卷，将其拆分为单独的题目。
 
 返回纯JSON数组格式（不要markdown代码块）：
 [
@@ -2532,7 +2568,7 @@ class QuestionAnalyzer:
 
     @staticmethod
     def _get_default_analysis_prompt() -> str:
-        return """请深入分析这道生物题目，返回纯JSON格式（不要markdown代码块）：
+        return """请深入分析这道题目，返回纯JSON格式（不要markdown代码块）：
 
 {
     "knowledge_points": ["知识点1", "知识点2"],

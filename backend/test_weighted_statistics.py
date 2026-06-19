@@ -229,7 +229,7 @@ class TestTextbookWeightedMapping:
 
         result = generate_exam_statistics(questions, {})
 
-        mock_knowledge_mapper.map_knowledge_points.assert_called_once_with(["遗传的基本规律"])
+        mock_knowledge_mapper.map_knowledge_points.assert_called_once_with(["遗传的基本规律"], subject="biology")
         assert result["knowledge_non_textbook_count"] == 1
         assert result["knowledge_non_textbook_points"] == [
             {"name": "实验设计与变量控制", "weighted_score": 3.0, "occurrences": 1}

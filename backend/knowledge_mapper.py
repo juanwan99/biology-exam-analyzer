@@ -9,6 +9,7 @@
 
 from typing import List, Dict, Any
 from logger import get_logger
+from subject_config import normalize_subject
 
 logger = get_logger()
 
@@ -878,16 +879,25 @@ class KnowledgeMapper:
             "mapped": False
         }
 
-    def map_knowledge_points(self, knowledge_points: List[str]) -> List[Dict[str, Any]]:
+    def map_knowledge_points(self, knowledge_points: List[str],
+                             subject: str = "biology") -> List[Dict[str, Any]]:
         """
         批量映射知识点
 
         Args:
             knowledge_points: LLM返回的知识点列表
+            subject: 学科 key。教材结构(TEXTBOOK_STRUCTURE)与关键词表为生物学科专属，
+                非生物学科无对应教材库，一律返回 mapped=False，避免把化学/地理等知识点
+                经模糊兜底强行塞进生物教材章节（污染报告"教材章节归因/教材覆盖率"）。
+                默认 biology 保证既有生物调用零回归。 —— A-1 根因修复（教材映射加 subject 门控）。
 
         Returns:
             映射结果列表
         """
+        if normalize_subject(subject) != "biology":
+            logger.info(f"[知识点映射] 学科={normalize_subject(subject)} 非生物，跳过生物教材映射（{len(knowledge_points)}个知识点按未映射处理）")
+            return [{"original": kp, "mapped": False, "reason": "non_biology_subject"}
+                    for kp in knowledge_points]
         results = []
         for kp in knowledge_points:
             results.append(self.map_knowledge_point(kp))

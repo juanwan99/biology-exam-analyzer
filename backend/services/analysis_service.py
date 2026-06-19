@@ -18,7 +18,8 @@ from subject_config import get_competency_dims, normalize_subject
 logger = get_logger()
 
 
-def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper: Any) -> List[str]:
+def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper: Any,
+                                          subject: str = "biology") -> List[str]:
     standardized: List[str] = []
     seen = set()
     for point in raw_points or []:
@@ -27,7 +28,7 @@ def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper
         raw = point.strip()
         if is_non_textbook_skill_point(raw):
             continue
-        canonical, _ = canonicalize_knowledge_point(raw, knowledge_mapper=knowledge_mapper)
+        canonical, _ = canonicalize_knowledge_point(raw, knowledge_mapper=knowledge_mapper, subject=subject)
         canonical = canonical.strip() if isinstance(canonical, str) else ""
         if not canonical or is_non_textbook_skill_point(canonical) or canonical in seen:
             continue
@@ -128,6 +129,7 @@ class AnalysisService:
                 "total_score": total_score,
                 "num_options": analysis.get("num_options", 4),
                 "options": question.get("options", ""),
+                "subject": subject,
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
@@ -167,7 +169,8 @@ class AnalysisService:
                             max_key = max(norm_weights, key=norm_weights.get)
                             norm_weights[max_key] = round(norm_weights[max_key] + remainder, 2)
                     else:
-                        norm_weights = {k: 0.25 for k in raw_weights}
+                        _uniform = round(1.0 / len(raw_weights), 2) if raw_weights else 0.0
+                        norm_weights = {k: _uniform for k in raw_weights}
                     v2_seu_competency = {
                         "primary_competency": summary["primary_competency"],
                         "competency_level": summary["competency_level"],
@@ -247,8 +250,9 @@ class AnalysisService:
                 report_points = _standardize_report_knowledge_points(
                     analysis["knowledge_points"],
                     self.knowledge_mapper,
+                    subject=subject,
                 )
-                standardized = self.knowledge_mapper.map_knowledge_points(report_points)
+                standardized = self.knowledge_mapper.map_knowledge_points(report_points, subject=subject)
                 question["knowledge_mapping"] = standardized
 
             # 置信度计算（基础 + 质量信号）

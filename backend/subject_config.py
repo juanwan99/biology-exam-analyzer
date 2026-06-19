@@ -30,6 +30,19 @@ SUBJECT_NAMES: dict[str, str] = {
     "history": "历史", "geography": "地理",
 }
 
+# subject key → 课标全称（报告依据署名，2017年版2020年修订）
+SUBJECT_CURRICULA: dict[str, str] = {
+    "chinese": "普通高中语文课程标准（2017年版2020年修订）",
+    "math": "普通高中数学课程标准（2017年版2020年修订）",
+    "english": "普通高中英语课程标准（2017年版2020年修订）",
+    "physics": "普通高中物理课程标准（2017年版2020年修订）",
+    "chemistry": "普通高中化学课程标准（2017年版2020年修订）",
+    "biology": "普通高中生物学课程标准（2017年版2020年修订）",
+    "politics": "普通高中思想政治课程标准（2017年版2020年修订）",
+    "history": "普通高中历史课程标准（2017年版2020年修订）",
+    "geography": "普通高中地理课程标准（2017年版2020年修订）",
+}
+
 DEFAULT_SUBJECT = "biology"
 
 
@@ -49,6 +62,11 @@ def get_competency_dims(subject: str | None) -> list[str]:
 def get_subject_name(subject: str | None) -> str:
     """返回中文学科名。"""
     return SUBJECT_NAMES[normalize_subject(subject)]
+
+
+def get_curriculum_name(subject: str | None) -> str:
+    """返回该学科课标全称（报告依据署名用）。"""
+    return SUBJECT_CURRICULA[normalize_subject(subject)]
 
 
 def list_subjects() -> list[dict[str, str | int]]:

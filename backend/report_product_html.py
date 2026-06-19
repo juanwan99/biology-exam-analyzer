@@ -7,6 +7,7 @@ from html import escape
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from subject_config import get_subject_name
 from report_product_charts import (
     render_figure_chart,
     render_methodology_chart,
@@ -769,7 +770,7 @@ def _render_hero(model: Dict[str, Any]) -> str:
         f'<p class="hero-note">{_e(credibility.get("method_note", ""))}</p>'
         f'<div class="hero-metrics">{metric_html}</div>'
         '<div class="hero-footer">'
-        f'<span>{_e(_status_label(cover.get("subject", "")))}</span>'
+        f'<span>{_e(get_subject_name(cover.get("subject", "")))}</span>'
         f'<span>{_e(cover.get("generated_at", ""))}</span>'
         "</div>"
         "</section>"

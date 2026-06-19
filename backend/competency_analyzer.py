@@ -1,7 +1,7 @@
 """
 核心素养分析器
-基于《普通高中生物学课程标准（2017年版2020修订）》
-分析题目考查的四大核心素养
+基于各学科课程标准核心素养维度（按 subject 动态选取 get_competency_dims）
+分析题目考查的学科核心素养
 """
 import json
 from hashlib import sha256
@@ -112,6 +112,32 @@ def _parse_competency_response(response_text: str, question_id) -> tuple[dict, f
     result["_extraction_confidence"] = ext_conf
     result["question_id"] = question_id
     return result, ext_conf, val_errors
+
+
+def _align_competency_to_subject(result: dict, competency_dims: list) -> dict:
+    """把单题素养字典对齐到该学科真实维度：剔除非本学科的维度形态键（如 CompetencyResult
+    默认注入的生物四维空键、或 LLM 误吐的他科维度），并补齐缺失的本学科维度。
+
+    维度形态键 = 值为 dict 且含 '涉及' 字段。meta/标量键（primary_competency、competency_level、
+    question_id、_extraction_confidence 等）原样保留且保持出现顺序。
+    生物科 competency_dims 即生物四维：四维悉数保留、无外来键可剔除、无缺失需补齐
+    → 输出与对齐前逐字一致（生物零回归）。
+    A-2 根因修复：杜绝跨学科素养空键污染 per-question competency 字典（潜伏至 report_data）。"""
+    if not isinstance(result, dict) or not competency_dims:
+        return result
+    dim_set = set(competency_dims)
+    aligned: dict = {}
+    for key, value in result.items():
+        if isinstance(value, dict) and "涉及" in value:
+            if key in dim_set:
+                aligned[key] = value
+            # 否则：丢弃不属于本学科的维度键（非生物题里的生物四维空键即在此剔除）
+            continue
+        aligned[key] = value
+    for dim in competency_dims:
+        if dim not in aligned:
+            aligned[dim] = {"涉及": False, "具体维度": [], "权重": 0, "分析说明": ""}
+    return aligned
 
 
 def _competency_weight_sum(result: dict, competency_dims: list | None = None) -> float:
@@ -247,6 +273,7 @@ class CompetencyAnalyzer:
                     question_id=question.get("id"),
                     question_type=str(question.get("type") or question.get("question_type") or ""),
                     section_header=str(question.get("_section_header") or ""),
+                    subject=subject,
                     call_id=f"question-{question.get('id')}-competency-visual-context",
                 )
                 prompt = "\n\n".join([prompt, visual_context_text])
@@ -298,6 +325,7 @@ class CompetencyAnalyzer:
                     question.get("id"),
                 )
 
+            result = _align_competency_to_subject(result, competency_dims)
             weight_metadata = _normalise_competency_weights(result, competency_dims)
             total_weight = _competency_weight_sum(result, competency_dims)
 

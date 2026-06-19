@@ -122,20 +122,25 @@ def build_visual_context_prompt(
     question_id: int | None = None,
     question_type: str = "",
     section_header: str = "",
+    subject: str = "biology",
 ) -> str:
+    from subject_config import get_subject_name
+    subject_cn = get_subject_name(subject)
     return (
-        "You are the vision preprocessing layer for a high-school biology exam-review system.\n"
+        f"You are the vision preprocessing layer for a high-school {subject_cn} (学科) exam-review system.\n"
         "Extract only visual information from the attached image(s). Do not judge difficulty, "
-        "competencies, answer correctness, or item quality; DeepSeek will perform those tasks later.\n"
-        "Preserve any Chinese text, labels, legends, table entries, units, and option markers exactly "
-        "when visible. If something is unclear, put it in uncertainties instead of guessing.\n\n"
+        "competencies, answer correctness, or item quality; the downstream model will perform those tasks later.\n"
+        "Preserve any Chinese text, labels, legends, table entries, units, formulas, equations, and option "
+        "markers (A/B/C/D and their full option text) exactly when visible. If something is unclear, put it "
+        "in uncertainties instead of guessing.\n\n"
+        f"subject: {subject_cn}\n"
         f"question_id: {question_id}\n"
         f"question_type: {question_type}\n"
         f"section_header: {section_header}\n"
         f"known_question_text:\n{question_text}\n\n"
         "Return one JSON object with these keys only:\n"
         "{\n"
-        '  "visual_text": "concise description of visible biological structures, charts, apparatus, curves, or diagrams",\n'
+        '  "visual_text": "concise description of visible structures, charts, apparatus, curves, diagrams, or formulas",\n'
         '  "ocr_text": "all readable text from the image, preserving Chinese and symbols",\n'
         '  "tables": ["table/axis/curve information, one item per table or chart"],\n'
         '  "figures": ["diagram/apparatus/process information, one item per visual object"],\n'
@@ -151,6 +156,7 @@ async def extract_visual_context(
     question_id: int | None = None,
     question_type: str = "",
     section_header: str = "",
+    subject: str = "biology",
     call_id: str | None = None,
     timeout: float = 120.0,
 ) -> tuple[str, dict | None]:
@@ -174,6 +180,7 @@ async def extract_visual_context(
         question_id=question_id,
         question_type=question_type,
         section_header=section_header,
+        subject=subject,
     )
     response_text = await llm_call(
         messages=messages_with_media(prompt, normalized),

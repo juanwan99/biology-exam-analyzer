@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from logger import get_logger
+from subject_config import normalize_subject
 
 logger = get_logger()
 
@@ -538,16 +539,24 @@ def canonicalize_knowledge_point(
     value: Any,
     *,
     knowledge_mapper: Any | None = None,
+    subject: str = "biology",
 ) -> tuple[str, dict[str, Any]]:
     """Map a model knowledge label to a stable aggregation label.
 
     The canonical label remains concept-level when possible. If the model emits
     an unmapped or overly broad phrase, the fallback is the textbook section
     name produced by ``KnowledgeMapper`` rather than the raw phrase.
+
+    规范化规则表(_CANONICAL_RULES)、同义词/关键词/教材分节(KnowledgeMapper)均为生物
+    学科专属知识库。非生物学科没有对应知识库，统一原样返回 raw 标签，避免把化学/地理等
+    知识点误改写成生物术语(如 富集作用→生物富集、盐类水解→水解)。subject 默认 biology
+    保证既有生物调用零回归。  —— A-1 根因修复（去生物污染：知识点规范化加 subject 门控）。
     """
     raw = " ".join(str(value or "").strip().split())
     if not raw:
         return "", {"mapped": False, "reason": "empty"}
+    if normalize_subject(subject) != "biology":
+        return raw, {"mapped": False, "strategy": "raw_non_biology", "original": raw}
     if raw == "PCR技术":
         return raw, {
             "mapped": True,
@@ -606,6 +615,7 @@ def normalize_knowledge_links(
     *,
     knowledge_mapper: Any | None = None,
     max_links: int = 3,
+    subject: str = "biology",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Canonicalize, merge and renormalize knowledge links for one SEU."""
     buckets: dict[str, float] = {}
@@ -627,6 +637,7 @@ def normalize_knowledge_links(
         canonical, meta = canonicalize_knowledge_point(
             point,
             knowledge_mapper=knowledge_mapper,
+            subject=subject,
         )
         if not canonical:
             continue
@@ -663,6 +674,7 @@ def calibrate_fine_grained_analysis(
     *,
     knowledge_mapper: Any | None = None,
     max_links_per_seu: int = 3,
+    subject: str = "biology",
 ) -> dict[str, Any]:
     """Normalize SEU knowledge links in-place and refresh summary knowledge points."""
     if not isinstance(analysis, dict):
@@ -683,6 +695,7 @@ def calibrate_fine_grained_analysis(
             unit.get("knowledge_links") or [],
             knowledge_mapper=knowledge_mapper,
             max_links=max_links_per_seu,
+            subject=subject,
         )
         if normalized:
             unit["knowledge_links"] = normalized

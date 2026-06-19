@@ -12,6 +12,7 @@ from metadata_contracts import LLMCallRecord
 from prompt_loader import PromptLoader
 from logger import get_logger
 from vision_context import extract_visual_context
+from subject_config import get_subject_name
 
 logger = get_logger()
 
@@ -204,7 +205,8 @@ def _attach_llm_call(payload: dict, *, call_id: str, purpose: str, prompt_id: st
 
 
 def build_feature_prompt(question_text: str, options: str = "",
-                         correct_answer: str = "", question_type: str = "") -> str:
+                         correct_answer: str = "", question_type: str = "",
+                         subject: str = "biology") -> str:
     """构建特征提取 prompt（v3: 难度预测 + 质量审查 + 教学点评）。"""
     parts = [question_text]
     if options:
@@ -215,7 +217,7 @@ def build_feature_prompt(question_text: str, options: str = "",
 
     qtype_hint = f"\n题型：{question_type}" if question_type else ""
 
-    return f"""你是一名资深高中生物命题审查专家。请从难度预测、命题质量、教学价值三个层面严格分析这道题目。
+    return f"""你是一名资深高中{get_subject_name(subject)}命题审查专家。请从难度预测、命题质量、教学价值三个层面严格分析这道题目。
 
 题目：
 {question_block}{qtype_hint}
@@ -285,11 +287,12 @@ def _question_block(question_text: str, options: str, correct_answer: str) -> st
 
 
 def build_feature_difficulty_prompt(question_text: str, options: str = "",
-                                    correct_answer: str = "", question_type: str = "") -> str:
+                                    correct_answer: str = "", question_type: str = "",
+                                    subject: str = "biology") -> str:
     """方案B 难度核心组 fallback prompt（仅当 prompts/biology/feature_difficulty.txt 缺失时用）。"""
     question_block = _question_block(question_text, options, correct_answer)
     qtype_hint = f"\n题型：{question_type}" if question_type else ""
-    return f"""你是一名资深高中生物命题审查专家。只做难度预测分析，不评质量、不写教学点评。
+    return f"""你是一名资深高中{get_subject_name(subject)}命题审查专家。只做难度预测分析，不评质量、不写教学点评。
 
 题目：
 {question_block}{qtype_hint}
@@ -315,11 +318,12 @@ def build_feature_difficulty_prompt(question_text: str, options: str = "",
 
 
 def build_feature_quality_prompt(question_text: str, options: str = "",
-                                 correct_answer: str = "", question_type: str = "") -> str:
+                                 correct_answer: str = "", question_type: str = "",
+                                 subject: str = "biology") -> str:
     """方案B 质量审查组 fallback prompt。"""
     question_block = _question_block(question_text, options, correct_answer)
     qtype_hint = f"\n题型：{question_type}" if question_type else ""
-    return f"""你是一名资深高中生物命题审查专家。只做命题质量审查与报告维度标注，不预测难度、不写教学点评。
+    return f"""你是一名资深高中{get_subject_name(subject)}命题审查专家。只做命题质量审查与报告维度标注，不预测难度、不写教学点评。
 
 题目：
 {question_block}{qtype_hint}
@@ -342,11 +346,12 @@ def build_feature_quality_prompt(question_text: str, options: str = "",
 
 
 def build_feature_teaching_prompt(question_text: str, options: str = "",
-                                  correct_answer: str = "", question_type: str = "") -> str:
+                                  correct_answer: str = "", question_type: str = "",
+                                  subject: str = "biology") -> str:
     """方案B 教学点评组 fallback prompt。"""
     question_block = _question_block(question_text, options, correct_answer)
     qtype_hint = f"\n题型：{question_type}" if question_type else ""
-    return f"""你是一名资深高中生物教师。只做教学视角的深度点评，不打分、不做难度或质量评级。
+    return f"""你是一名资深高中{get_subject_name(subject)}教师。只做教学视角的深度点评，不打分、不做难度或质量评级。
 
 题目：
 {question_block}{qtype_hint}
@@ -708,17 +713,24 @@ async def _extract_group(group_key: str, *, loader: PromptLoader,
     prompt_name = group["prompt_name"]
     purpose = group["purpose"]
 
+    # B3: 视觉描述并入题干位置（作为题干的一部分），而非拼到 JSON schema 之后；
+    # 否则质量审查模型只读到"题目："处的短文本、把末尾图像信息当噪音，对图片密集卷误判"题干缺失"。
+    stem_text = question_text
+    if visual_context_text:
+        stem_text = (
+            f"{question_text}\n"
+            f"【题目附带图像的视觉信息（OCR 文本与图示描述，属于题干的一部分）】\n"
+            f"{visual_context_text}"
+        )
+
     if loader.exists(prompt_name):
-        question_block = _question_block(question_text, options, correct_answer)
+        question_block = _question_block(stem_text, options, correct_answer)
         qtype_hint = f"\n题型：{question_type}" if question_type else ""
         prompt = loader.load(prompt_name,
                              question_block=question_block, qtype_hint=qtype_hint)
     else:
         prompt = _GROUP_FALLBACK_BUILDERS[group_key](
-            question_text, options, correct_answer, question_type)
-
-    if visual_context_text:
-        prompt = "\n\n".join([prompt, visual_context_text])
+            stem_text, options, correct_answer, question_type, subject=loader.subject)
 
     outcome = {
         "fields": {}, "core_present": 0, "ok": False,
@@ -793,6 +805,7 @@ async def _extract_features_uncached(question_text: str, options: str = "",
                 media_items,
                 question_text=question_text,
                 question_type=question_type,
+                subject=subject,
                 call_id=f"{subject}-feature-visual-context",
             )
 
@@ -1008,7 +1021,8 @@ def _assemble_feature_result(group_outcomes: dict, *, question_text: str,
 
 def build_big_question_prompt(question_text: str, options: str = "",
                               correct_answer: str = "",
-                              question_type: str = "") -> str:
+                              question_type: str = "",
+                              subject: str = "biology") -> str:
     """构建大题结构化特征提取 prompt（v3.2: score_share 替代 absolute points）。"""
     parts = [question_text]
     if options:
@@ -1018,7 +1032,7 @@ def build_big_question_prompt(question_text: str, options: str = "",
     question_block = "\n".join(parts)
     qtype_hint = f"\n题型：{question_type}" if question_type else ""
 
-    return f"""你是一名资深高中生物命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
+    return f"""你是一名资深高中{get_subject_name(subject)}命题审查专家。这是一道非选择题（大题），请按小问拆分分析。
 
 题目：
 {question_block}{qtype_hint}
@@ -1569,29 +1583,42 @@ async def _extract_big_question_features_uncached(question_text: str, options: s
     当成普通缺省值继续评分。
     """
     loader = PromptLoader(subject)
-    if loader.exists("big_question_extractor"):
-        parts = [question_text]
-        if options:
-            parts.append(f"选项：{options}")
-        if correct_answer:
-            parts.append(f"正确答案/参考答案：{correct_answer}")
-        question_block = "\n".join(parts)
-        qtype_hint = f"\n题型：{question_type}" if question_type else ""
-        prompt = loader.load("big_question_extractor",
-                            question_block=question_block, qtype_hint=qtype_hint)
-    else:
-        prompt = build_big_question_prompt(question_text, options, correct_answer, question_type)
     try:
+        # B3: 先取视觉描述并入题干位置（与小题 _extract_group 同构），避免大题质量审查模型
+        # 只读到顶部短"题目："、把末尾图像信息当噪音而误判"题干缺失"压低 quality_score。
+        prompt = ""  # 预绑定：prompt 构造已移入 try，避免构造前(如视觉提取)抛异常时 except 引用未绑定 prompt → UnboundLocalError
         visual_call_record = None
-        prompt_for_llm = prompt
+        visual_context_text = ""
         if media_input_refs(media_items):
             visual_context_text, visual_call_record = await extract_visual_context(
                 media_items,
                 question_text=question_text,
                 question_type=question_type,
+                subject=subject,
                 call_id=f"{subject}-big-question-visual-context",
             )
-            prompt_for_llm = "\n\n".join([prompt, visual_context_text])
+        stem_text = question_text
+        if visual_context_text:
+            stem_text = (
+                f"{question_text}\n"
+                f"【题目附带图像的视觉信息（OCR 文本与图示描述，属于题干的一部分）】\n"
+                f"{visual_context_text}"
+            )
+        if loader.exists("big_question_extractor"):
+            parts = [stem_text]
+            if options:
+                parts.append(f"选项：{options}")
+            if correct_answer:
+                parts.append(f"正确答案/参考答案：{correct_answer}")
+            question_block = "\n".join(parts)
+            qtype_hint = f"\n题型：{question_type}" if question_type else ""
+            prompt = loader.load(
+                "big_question_extractor",
+                question_block=question_block, qtype_hint=qtype_hint,
+            )
+        else:
+            prompt = build_big_question_prompt(stem_text, options, correct_answer, question_type, subject=subject)
+        prompt_for_llm = prompt
 
         raw = await _send_prompt(
             prompt_for_llm,

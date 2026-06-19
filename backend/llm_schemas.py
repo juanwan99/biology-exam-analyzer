@@ -182,6 +182,10 @@ class CompetencyDim(BaseModel):
 
 
 class CompetencyResult(BaseModel):
+    # 以下四个生物维度为历史默认字段（保留以对生物维 权重 做 CompetencyDim 强制 float 校验，
+    # 保证生物零回归）。非生物学科的真实维度经 extra='allow' 携带；这些生物默认空维(权重0)会
+    # 在 competency_analyzer._align_competency_to_subject 解析后按真实学科维度剔除/补齐，
+    # 不会污染非生物报告。A-2 根因修复落在该对齐函数（数据唯一产出点），见 competency_analyzer.py。
     生命观念: CompetencyDim = Field(default_factory=CompetencyDim)
     科学思维: CompetencyDim = Field(default_factory=CompetencyDim)
     科学探究: CompetencyDim = Field(default_factory=CompetencyDim)
@@ -331,6 +335,15 @@ class ScoringEvidenceUnit(BaseModel):
             total = sum(w.values())
             if total > 0:
                 return {k: v / total for k, v in w.items()}
+            # competency_weights 非空但与本科维度求和为 0（键不匹配或值全 0）→ 退化均分。
+            # 静默退化会掩盖 LLM 写错维度键名的真实跑偏，打 WARNING 使其可观测（R9 健壮性）。
+            try:
+                from logger import get_logger
+                get_logger().warning(
+                    "[素养] competency_weights 与维度求和为 0，退化均分: "
+                    f"got={list(self.competency_weights.keys())} expected={dims}")
+            except Exception:
+                pass
             return {d: equal for d in dims}
         if self.competency and self.competency.primary:
             w = {d: 0.0 for d in dims}

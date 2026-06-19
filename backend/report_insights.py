@@ -195,7 +195,7 @@ def _build_teaching_prompt(
     if ultra_compact:
         mistakes_text = "；".join(mistakes[:6]) or "无"
         return (
-            "你是高中生物试卷讲评助手。只返回一个可解析JSON对象，"
+            f"你是高中{get_subject_name(_data_subject(data))}试卷讲评助手。只返回一个可解析JSON对象，"
             "不要Markdown、解释或JSON外文字。\n"
             f"依据：{mistakes_text}\n"
             f"诊断：难度梯度{gradient_info}，素养均衡度{balance_info}\n"

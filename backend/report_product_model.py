@@ -1416,7 +1416,8 @@ def _question_pressure(question: Dict, scoring_units: List[Dict], diagnostic_uni
     }
 
 
-def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List[Dict]:
+def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict],
+                                  subject: str = "biology") -> List[Dict]:
     aggregate: Dict[str, Dict[str, Any]] = {}
 
     def bucket(name: str) -> Dict[str, Any]:
@@ -1433,7 +1434,7 @@ def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List
 
     def _canon(raw_value: Any) -> tuple[str, str]:
         raw_name = str(raw_value or "未标注知识点")
-        label, _diag = canonicalize_knowledge_point(raw_name)
+        label, _diag = canonicalize_knowledge_point(raw_name, subject=subject)
         return (label or raw_name), raw_name
 
     # 源1：采分点贡献（per-link）。归一知识点名作分组 key，seu_id 去重计数。
@@ -2877,6 +2878,7 @@ def build_report_product_model(report_data: Dict, insights: Dict | None = None) 
     knowledge_exhibit_rows = _build_knowledge_exhibit_rows(
         _as_dict(report_data.get("knowledge")),
         _as_list(fine_exhibits.get("knowledge_contribution_rows")) or _as_list(fine_exhibits.get("seu_rows")),
+        subject=exam.get("subject"),
     )
     evidence_integrity = _build_evidence_integrity(report_data, questions, fine_exhibits, insights)
     findings = _build_findings(report_data, rows, fine_exhibits, knowledge_exhibit_rows)
