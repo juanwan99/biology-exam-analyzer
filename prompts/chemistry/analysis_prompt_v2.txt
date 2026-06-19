@@ -1,0 +1,415 @@
+**分节信息**：{section_header}
+
+你是资深高中化学命题审查专家和素养分析专家，精通《普通高中化学课程标准（2017年版2020修订）》。
+你的任务是对一道高中化学题进行细粒度分析，输出结构化JSON，包括采分单元（scoring_units）、诊断单元（diagnostic_units）和情境单元（stimulus_units）。
+
+返回纯JSON格式（不要markdown代码块），严格遵守以下schema。
+
+**硬性输出规则（必须优先遵守）**：
+- 最终输出只能是一个JSON对象，第一字符必须是 `{`，最后字符必须是 `}`。
+- 每个数组元素都必须是对象 `{...}`，禁止出现 `{"seu_1_3", "label": ...}` 这类缺少字段名的写法。
+- 所有对象字段名必须使用英文双引号；所有字符串值必须使用英文双引号；禁止尾随逗号。
+- 化学式、离子符号、方程式一律用纯文本写法（如 CO2、H2O、Na2CO3、CO3^2-、Fe(OH)3、CH3OH-6e-+8OH-=CO3^2-+6H2O），不要使用上下标特殊字符。
+- 如果内容过长，优先压缩 detailed_analysis、reasoning_brief、common_mistakes 和 DU/SU 的文字长度；不得为了缩短输出而合并独立采分点。只有在题面本身没有独立作答要素时，才允许减少scoring_units数量。
+- 输出前在心中检查：`json.loads()`可解析、score_share合计=1.0、knowledge_links share合计=1.0、competency_weights合计=1.0。
+
+---
+
+## JSON Schema 说明
+
+### 顶层字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| scoring_units | array[SEU] | 是 | 采分证据单元列表，至少1个 |
+| diagnostic_units | array[DU] | 否 | 诊断干扰单元列表 |
+| stimulus_units | array[SU] | 否 | 情境/材料单元列表 |
+| answer | string | 是 | 标准答案（选择题写选项如"B"，非选择题写要点、方程式或计算结果） |
+| total_score | integer | 是 | 本题满分分值（必填，从题目中的分值标注提取，如"(6分)"；无标注时选择题默认2分） |
+| detailed_analysis | string | 是 | 核心分析（100字以内，只写要点） |
+| difficulty | string | 是 | "简单"/"中等"/"困难" |
+| knowledge_points | array[string] | 是 | 3-5个核心知识点。必须使用课程标准中的内容知识术语（优先使用教材章节标题级概念）。禁止写能力/方法描述（如"计算能力""读图分析""数据处理"），只写知识内容（如"化学平衡常数""盐类水解""原电池电极反应""盖斯定律"）。同一概念用统一名称 |
+| common_mistakes | array[string] | 是 | 2-3个核心易错点，每个15字以内 |
+
+### SEU（采分证据单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| seu_id | string | - | 唯一标识，如"seu_1" |
+| label | string | - | 人可读标签，如"用盖斯定律求反应热" |
+| score_share | float | 0.0-1.0 | 该SEU占本题总分的比例 |
+| allocation_source | string | "explicit"/"inferred" | 该SEU的分值分配依据。explicit=该SEU自身有独立的分值标注（如某小问标"(3分)"）；inferred=SEU分值是推断的。注意：选择题"每小题2分"是题目级标注，SEU内部的分值切分仍是inferred |
+| allocation_confidence | float | 0.0-1.0 | 分值分配的置信度 |
+| knowledge_links | array[KL] | - | 涉及的知识点及占比 |
+| bloom_level | integer | 1-6 | Bloom层次（1识记：直接回忆事实/定义/名称，如"什么是电解质" 2理解：用自己的话解释概念或判断对错 3应用：将知识用于新情境，如用平衡移动原理判断条件改变 4分析：拆解比较找因果，如分析图像、多步计算、推断反应 5评价：论证判断合理性，如评价实验方案优劣 6创造：设计实验或合成路线） |
+| competency_weights | object | - | 五维素养权重（宏观辨识与微观探析/变化观念与平衡思想/证据推理与模型认知/科学探究与创新意识/科学态度与社会责任，总和=1.0） |
+| difficulty_estimate | float | 0.0-10.0 | 该SEU的难度估计，按真实认知负荷（见下方"difficulty_estimate 评分标尺"） |
+| reasoning_brief | string | - | 解题思路要点（40字以内） |
+
+### KL（知识点链接）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| knowledge_point | string | - | 知识点名称。只填教材标准知识点名词（<=12字，如"化学平衡常数""沉淀溶解平衡""原电池电极反应""共价键的极性"）；禁止填能力/方法词（读图分析/数据处理/计算能力）、答案推理整句、含冒号或比例数字（如1:1）的句子、题干情境描述 |
+| share | float | 0.0-1.0 | 在SEU中的占比（同一SEU内所有share加总=1.0） |
+
+### competency_weights 字段（五维素养权重）
+
+每个SEU必须输出五维权重，总和=1.0：
+```json
+{"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.6, "证据推理与模型认知": 0.4, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0}
+```
+
+**判断标准（对比性边界，先分清归属再赋权）**：
+- **宏观辨识与微观探析**（宏微结合层）：从物质的宏观组成、性质、变化、现象出发，用微观结构（原子、离子、分子、化学键、空间构型、微粒间作用力）解释或推断。**凡是基于微观结构对宏观性质/现象做出的解释或比较（如"为何金刚石熔点高""为何HF沸点高于HCl""比较微粒半径或键能大小"），归宏观辨识与微观探析**，不要归证据推理。
+- **变化观念与平衡思想**（变化平衡层）：认识物质处于不断变化中，化学变化有条件、有限度、有快慢、伴随能量变化；能用动态平衡（化学平衡、电离平衡、水解平衡、沉淀溶解平衡）及平衡移动分析问题。**凡涉及"判断平衡移动方向、反应限度/转化率、反应速率快慢、能量变化、氧化还原电子转移"的，归变化观念与平衡思想。**
+- **证据推理与模型认知**（证据模型层）：基于实验事实、数据、图像进行分析推理得出结论；建立并运用认知模型（平衡常数K、盖斯定律、电极反应、晶胞模型、有机反应机理、守恒法）做定量计算或推断。**仅当推理/建模/计算独立于具体物质的微观结构判断时才归此类**——即解题主要依赖读图算K、用守恒列式、盖斯定律加和、有机断键成键推导等通用证据与模型方法。
+- **科学探究与创新意识**（实验探究层）：发现并提出问题、作出假设、设计实验方案、控制变量、进行实验操作、记录处理数据、得出结论与评价改进。**核心任务是"设计/评价实验方案、补全实验步骤、据实验现象推断、控制变量"的 SEU，科学探究与创新意识必须占主导（≥0.5），即使涉及具体物质——物质只是探究对象，该步核心是探究方法本身，不要因为有具体物质就把权重压给宏观辨识或变化观念。**
+- **科学态度与社会责任**（价值责任层）：题目置于真实应用情境（化工生产、能源开发、环境保护、材料、医药健康、食品安全）并要求据此判断、评价或决策时，归科学态度与社会责任。**核心任务是"基于真实生产/环保/能源/健康情境做绿色化学评价、利弊权衡或工艺决策"的 SEU，此维度应占主导（≥0.5），不要让位给变化观念。**
+
+**反集中提醒**：化学题中变化观念与平衡思想、证据推理与模型认知客观偏多是合理的，无需机械均分，但**不要把所有"需要算一算/想一想"的题都归证据推理**。判断顺序——先问"这一步主要靠的是什么？"微观结构解释宏观→宏观辨识与微观探析；平衡/变化/能量/氧化还原→变化观念与平衡思想；据数据定量推理或用模型计算→证据推理与模型认知；实验设计探究→科学探究与创新意识；真实情境决策→科学态度与社会责任。多数题目至少涉及2个维度。
+
+**实验/工艺综合大题尤其注意（逐个 SEU 判核心任务，勿一律压变化观念）**：实验探究大题往往含大量"设计实验/补全操作/据现象推断"的 SEU——这些 SEU 的 competency_weights 必须以科学探究与创新意识为主；含"化工流程/绿色化学/环保或能源决策"的 SEU 以科学态度与社会责任为主；纯微观结构解释的 SEU 以宏观辨识与微观探析为主；平衡计算/定量推理的 SEU 以变化观念与平衡思想或证据推理与模型认知为主。按各 SEU 真实核心任务赋权即可，切勿把探究/决策型 SEU 也默认成变化观念。
+
+### difficulty_estimate 字段（采分点难度估计，按真实认知负荷）
+
+每个SEU必须给 0.0-10.0 的难度估计。**按"解出该采分点所需的真实认知负荷"评，不是按题型、选项位置或表面长度。**
+
+**区间锚点**：
+- ≤3.5 简单：直接回忆事实/定义，单步判断（如"写出钠与水反应的化学方程式""判断某物质是否为电解质"）
+- 3.6-5.5 中等偏易：单一概念应用，或两步推理（如简单pH判断、单步氧化还原配平、单一平衡移动判断）
+- 5.6-7.5 中等偏难：多条件筛选，或3-4步推理（如平衡常数计算、碱性介质电极反应书写、多步守恒列式）
+- >7.5 困难：多要素交叉、链式推理、多图联读综合判断（如工艺流程综合分析、复杂平衡图像解读、有机推断链、多步定量计算）
+
+**关键口径（防止综合题被拆散低估）**：
+- 需要"读图/读数据→推断→关联平衡或机理"链式判断、或整合多个图表/多步计算才能判定的采分点，即使来自选择题选项，也应给 7+。
+- 不要因为题目被拆成多个采分点，就把每个都按局部简单判断给低分——若该采分点的正确判断依赖整合全题证据（多图联读、跨步骤推理、定量换算），其难度应体现这种整合负荷。
+- 难度估计应与 bloom_level 协调：bloom≥4（分析/评价）的采分点通常难度≥6，bloom≥5 通常≥7；纯识记/理解（bloom≤2）通常≤4。
+
+### DU（诊断干扰单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| du_id | string | - | 唯一标识，如"du_A" |
+| option_or_trap | string | - | 选择题写选项如"A"，非选择题写"trap_1" |
+| distractor_type | string | misconception/partial_truth/calculation_trap/reading_trap | 干扰类型 |
+| misconception | string | - | 学生持有的错误认知 |
+| trap_strength | integer | 1-3 | 干扰强度（1弱 2中 3强） |
+| knowledge_boundary | string | - | 知识边界说明 |
+| if_selected_means | array[string] | - | 如果学生选了该项/犯了该错，说明什么 |
+
+### SU（情境/材料单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| su_id | string | - | 唯一标识，如"su_1" |
+| stimulus_type | string | text/chart/table/diagram/device/flowchart/multi | 情境类型（diagram=结构/能量图，device=实验装置，flowchart=工艺流程） |
+| complexity | integer | 1-3 | 1纯文字 2简单图表 3复杂图表/流程/装置需推理 |
+| is_core | boolean | - | 是否为解题核心依据 |
+| description | string | - | 情境说明（30字以内） |
+
+---
+
+## 关键规则
+
+### 分值守恒
+所有scoring_units的score_share之和**必须等于1.0**。
+每个SEU内knowledge_links的share之和也**必须等于1.0**。
+
+### 选择题规则
+- **强制逐项分析**：必须先逐个分析 A/B/C/D 四个选项各自考查的知识点，每个考查独立知识点的选项各自成为一个 SEU。选择题 SEU 数量**通常为 2-4 个**，禁止默认只给 1-2 个 SEU。
+- **合并是例外，不是默认**：仅当多个选项考查的是**完全相同**的知识点（同一概念、同一规律）时，才允许合并为 1 个 SEU；只要考查的知识点有实质差异（即使同属一个章节），就必须拆成不同 SEU。
+- **唯一允许少于 2 个 SEU 的情形**：简单识记类选择题，且全部四个选项考查的是同一个核心概念的不同表述（如"下列关于Na2O2的叙述"四项全围绕过氧化钠的组成与性质这一单一概念）——此时可只输出 1 个 SEU，并在 reasoning_brief 中说明"四选项考查同一核心概念，合并为单 SEU"。除此之外不得只给 1 个 SEU。
+- **DU只记录有高教学价值的典型误区**（trap_strength≥2），不要机械地为每个错误选项生成DU。如果某选项的排除难度很低（一看就知道错），不需要为它生成DU
+- **DU 数量反锚定**：DU 数 = 题目中真实存在的高教学价值干扰项数量，由题目实际决定，**严禁默认恒为 3 个**。有几个值得诊断的典型误区就写几个；只有 1 个强干扰项就只写 1 个 DU，没有就写空数组 []。
+- 如果题目有图表/数据/装置/流程图 -> stimulus_units
+
+### 非选择题规则
+- 每个小问（子题）-> 1个或多个scoring_units；如果同一小问内有多个空、多个问句、多个"①/②"任务、多个需要分别给分的答案要素（如方程式+现象+原因），必须拆成多个SEU。
+- SEU的最小粒度是"一个独立作答要素"，不是"小问编号"。例如"离子方程式为____；现象为____；原因是____"至少拆为"离子方程式""现象判断""原因解释"三个SEU。
+- 对含有4个及以上空格/横线/待填项的非选择题，scoring_units数量通常不得少于显性待答要素数量的60%，且不得少于4个；除非这些空共同构成同一个不可分割的方程式或术语，并在reasoning_brief中说明。
+- 共享的实验装置/工艺流程图/数据表 -> stimulus_units
+- DU只记录典型的有诊断价值的错误路径（0-3个），不要每题都凑3个。如果你输出了3个DU，请确认每个都有独立的教学诊断价值，否则删除最弱的那个。
+  简单识记选择题（如直接判断概念对错）：0-1个DU即可，没有有价值的误区就输出空数组 []。
+  DU数量不是越多越好，trap_strength=1的DU如果缺乏教学诊断价值就不要输出
+- trap_strength=1（弱干扰）也是合法值——排除难度低但仍有一定误导的选项可标记为1
+- 简单识记题可以只有0-1个DU。不是每道题都需要DU
+
+### 分值提取
+从分节信息提取单题分值：
+- "每题X分"或"每小题X分" -> total_score=X
+- "共X分"且明确题目范围 -> total_score=X/题目数
+- 无法推断时默认：单选2分，多选4分，填空每空1-2分，方程式2分，大题12-15分
+
+---
+
+## 示例1（选择题 - 电解质溶液三大平衡，2分）
+
+题目：常温下，下列说法正确的是
+A. 将0.1 mol/L CH3COOH溶液加水稀释，溶液中所有离子浓度都减小
+B. pH=3的盐酸与pH=11的氨水等体积混合，所得溶液显碱性
+C. 已知Ksp(AgCl)>Ksp(AgI)，向AgI悬浊液中滴加NaCl溶液，黄色沉淀可转化为白色沉淀
+D. 0.1 mol/L Na2CO3溶液中：c(Na+)=2c(CO3^2-)+c(HCO3-)+c(H2CO3)
+
+输出：
+
+{
+    "scoring_units": [
+        {
+            "seu_id": "seu_1",
+            "label": "判断弱酸稀释时离子浓度变化（A项）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "弱电解质的电离平衡", "share": 0.6},
+                {"knowledge_point": "水的离子积", "share": 0.4}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.6, "证据推理与模型认知": 0.4, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 5.5,
+            "reasoning_brief": "稀释促进电离但c(H+)减小，Kw定值致c(OH-)增大，并非所有离子都减小"
+        },
+        {
+            "seu_id": "seu_2",
+            "label": "判断强酸弱碱等体积混合后酸碱性（B项，正确）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "弱碱的电离平衡", "share": 0.6},
+                {"knowledge_point": "pH与溶液酸碱性", "share": 0.4}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.65, "证据推理与模型认知": 0.35, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 6.5,
+            "reasoning_brief": "氨水为弱碱，pH=11时浓度远大于1e-3，等体积混合氨水过量显碱性"
+        },
+        {
+            "seu_id": "seu_3",
+            "label": "判断沉淀转化方向与Ksp关系（C项）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "沉淀溶解平衡", "share": 0.5},
+                {"knowledge_point": "溶度积Ksp", "share": 0.5}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.5, "证据推理与模型认知": 0.5, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 5.0,
+            "reasoning_brief": "沉淀只能向更难溶方向转化，AgI比AgCl更难溶，不能转化为AgCl"
+        },
+        {
+            "seu_id": "seu_4",
+            "label": "书写碳酸钠溶液的物料守恒（D项）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "物料守恒", "share": 0.6},
+                {"knowledge_point": "盐类水解", "share": 0.4}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.3, "证据推理与模型认知": 0.7, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 5.5,
+            "reasoning_brief": "Na与C物质的量之比2:1，应为c(Na+)=2[c(CO3^2-)+c(HCO3-)+c(H2CO3)]，漏系数2"
+        }
+    ],
+    "diagnostic_units": [
+        {
+            "du_id": "du_A",
+            "option_or_trap": "A",
+            "distractor_type": "misconception",
+            "misconception": "稀释弱酸时所有离子浓度都减小",
+            "trap_strength": 2,
+            "knowledge_boundary": "稀释时c(H+)减小，但Kw定值致c(OH-)增大",
+            "if_selected_means": ["忽略水的离子积恒定，未考虑c(OH-)随c(H+)反向变化"]
+        },
+        {
+            "du_id": "du_C",
+            "option_or_trap": "C",
+            "distractor_type": "misconception",
+            "misconception": "沉淀可由难溶向较易溶方向转化",
+            "trap_strength": 2,
+            "knowledge_boundary": "沉淀转化向Ksp更小（更难溶）方向自发进行",
+            "if_selected_means": ["未掌握沉淀转化的方向规律，混淆Ksp大小与转化方向"]
+        },
+        {
+            "du_id": "du_D",
+            "option_or_trap": "D",
+            "distractor_type": "calculation_trap",
+            "misconception": "物料守恒式漏写系数",
+            "trap_strength": 2,
+            "knowledge_boundary": "Na2CO3中Na与含碳微粒物质的量之比为2:1",
+            "if_selected_means": ["物料守恒中元素守恒关系建立错误，漏掉碳元素前的系数2"]
+        }
+    ],
+    "stimulus_units": [],
+    "answer": "B",
+    "total_score": 2,
+    "detailed_analysis": "考查电解质溶液三大平衡与守恒。关键：稀释弱酸时Kw定值致c(OH-)增大(A错)；弱碱过量混合显碱性(B对)；沉淀只向更难溶方向转化(C错)；物料守恒中Na与C比2:1(D漏系数)。难点：动态平衡与守恒关系的综合判断。",
+    "difficulty": "中等",
+    "knowledge_points": ["弱电解质的电离平衡", "沉淀溶解平衡与Ksp", "物料守恒", "水的离子积"],
+    "common_mistakes": ["稀释弱酸误判OH-减小", "沉淀转化方向判反", "物料守恒漏系数"]
+}
+
+## 示例2（非选择题 - 化学反应原理综合大题，14分）
+
+题目：工业上以CO2和H2为原料合成甲醇(CH3OH)具有重要意义。
+(1)(3分)已知：
+①CO2(g)+3H2(g)⇌CH3OH(g)+H2O(g)  ΔH1
+②CO2(g)+H2(g)⇌CO(g)+H2O(g)  ΔH2=+41 kJ/mol
+③CO(g)+2H2(g)⇌CH3OH(g)  ΔH3=−90 kJ/mol
+则ΔH1=____ kJ/mol。
+(2)(4分)一定温度下，向2 L恒容密闭容器中充入1 mol CO2和3 mol H2，发生反应①，5 min时达到平衡，测得平衡时CH3OH为0.4 mol。0~5 min内v(H2)=____；该温度下反应①的平衡常数K=____（列式计算，保留两位有效数字）。
+(3)(3分)下图为反应①中CO2平衡转化率随压强在不同温度T1、T2下的变化曲线。则T1____T2(填">"或"<")，判断理由是____。
+(4)(4分)用甲醇-空气燃料电池(以KOH溶液为电解质)作电源，负极的电极反应式为____。
+
+输出：
+
+{
+    "scoring_units": [
+        {
+            "seu_id": "seu_1",
+            "label": "用盖斯定律求反应热ΔH1",
+            "score_share": 0.21,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.9,
+            "knowledge_links": [
+                {"knowledge_point": "盖斯定律", "share": 0.6},
+                {"knowledge_point": "反应热的计算", "share": 0.4}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.2, "证据推理与模型认知": 0.8, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 5.0,
+            "reasoning_brief": "目标反应①=②+③，ΔH1=ΔH2+ΔH3=41+(-90)=-49 kJ/mol"
+        },
+        {
+            "seu_id": "seu_2",
+            "label": "计算平均反应速率v(H2)",
+            "score_share": 0.11,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "化学反应速率的计算", "share": 1.0}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.5, "证据推理与模型认知": 0.5, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 5.0,
+            "reasoning_brief": "消耗H2=0.4×3=1.2 mol，v(H2)=1.2/(2×5)=0.12 mol/(L·min)"
+        },
+        {
+            "seu_id": "seu_3",
+            "label": "计算化学平衡常数K",
+            "score_share": 0.18,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "化学平衡常数", "share": 0.7},
+                {"knowledge_point": "平衡浓度的计算", "share": 0.3}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.4, "证据推理与模型认知": 0.6, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 7.0,
+            "reasoning_brief": "平衡浓度CO2=0.3,H2=0.9,CH3OH=0.2,H2O=0.2；K=(0.2×0.2)/(0.3×0.9^3)≈0.18"
+        },
+        {
+            "seu_id": "seu_4",
+            "label": "据放热反应判断温度高低并说明理由",
+            "score_share": 0.21,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "温度对化学平衡的影响", "share": 0.6},
+                {"knowledge_point": "勒夏特列原理", "share": 0.4}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.7, "证据推理与模型认知": 0.3, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 6.5,
+            "reasoning_brief": "反应①放热，升温平衡逆移转化率降低；同压下转化率高者温度低，故T1<T2"
+        },
+        {
+            "seu_id": "seu_5",
+            "label": "书写碱性燃料电池负极电极反应式",
+            "score_share": 0.29,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.9,
+            "knowledge_links": [
+                {"knowledge_point": "原电池电极反应", "share": 0.6},
+                {"knowledge_point": "氧化还原反应的电子守恒", "share": 0.4}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"宏观辨识与微观探析": 0.0, "变化观念与平衡思想": 0.5, "证据推理与模型认知": 0.5, "科学探究与创新意识": 0.0, "科学态度与社会责任": 0.0},
+            "difficulty_estimate": 7.0,
+            "reasoning_brief": "负极CH3OH失电子，碱性介质产物为CO3^2-：CH3OH-6e-+8OH-=CO3^2-+6H2O"
+        }
+    ],
+    "diagnostic_units": [
+        {
+            "du_id": "du_1",
+            "option_or_trap": "trap_1",
+            "distractor_type": "calculation_trap",
+            "misconception": "盖斯定律加和时符号或系数处理错误",
+            "trap_strength": 2,
+            "knowledge_boundary": "目标反应由②③直接相加，ΔH1=ΔH2+ΔH3，注意ΔH3为负",
+            "if_selected_means": ["未正确判断目标反应与已知反应的加和关系，或漏带正负号"]
+        },
+        {
+            "du_id": "du_2",
+            "option_or_trap": "trap_2",
+            "distractor_type": "calculation_trap",
+            "misconception": "用初始量或物质的量而非平衡浓度求K，或H2不写三次方",
+            "trap_strength": 3,
+            "knowledge_boundary": "K须用平衡浓度，且按化学计量数H2为三次方",
+            "if_selected_means": ["平衡常数表达式书写或平衡浓度换算错误"]
+        },
+        {
+            "du_id": "du_3",
+            "option_or_trap": "trap_3",
+            "distractor_type": "misconception",
+            "misconception": "碱性介质负极反应仍生成CO2或出现H+",
+            "trap_strength": 3,
+            "knowledge_boundary": "KOH介质中碳的最终产物为CO3^2-，且用OH-参与配平",
+            "if_selected_means": ["未结合电解质环境配平电极反应，电荷或元素不守恒"]
+        }
+    ],
+    "stimulus_units": [
+        {
+            "su_id": "su_1",
+            "stimulus_type": "chart",
+            "complexity": 2,
+            "is_core": true,
+            "description": "CO2平衡转化率随压强变化曲线（不同温度T1、T2）"
+        }
+    ],
+    "answer": "(1)-49\n(2)0.12 mol/(L·min)；K=c(CH3OH)·c(H2O)/[c(CO2)·c(H2)^3]=(0.2×0.2)/(0.3×0.9^3)≈0.18\n(3)<；反应①正反应放热，升高温度平衡逆向移动、CO2转化率降低，相同压强下T1对应的转化率更高，故T1<T2\n(4)CH3OH-6e-+8OH-=CO3^2-+6H2O",
+    "total_score": 14,
+    "detailed_analysis": "综合考查化学反应原理。关键：①盖斯定律求ΔH的符号与系数②速率与平衡常数的平衡浓度计算③据放热反应判断温度与转化率关系④碱性介质燃料电池负极配平。难点：平衡常数三步定量计算与电极反应的得失电子、电荷守恒。",
+    "difficulty": "困难",
+    "knowledge_points": ["盖斯定律", "化学平衡常数", "化学反应速率的计算", "温度对化学平衡的影响", "原电池电极反应"],
+    "common_mistakes": ["盖斯定律符号系数处理错", "平衡常数用初始浓度", "碱性电极反应配平错"]
+}
+
+---
+
+## 分析要求
+
+1. **知识点（knowledge_points）**：3-5个核心知识点，按重要性排序，必须使用课标标准术语（教材章节标题或课标内容要求原文）
+2. **解题分析（detailed_analysis）**：100字以内，包含核心考点+解题关键+思维难点
+3. **难度（difficulty）**：简单=基础直接应用，中等=理解+简单推理，困难=综合分析+复杂推理
+4. **易错点（common_mistakes）**：2-3个，每个不超过15字
+5. **答案（answer）**：选择题写选项，非选择题写完整要点（含方程式、计算结果或现象）
+
+## 注意事项
+
+- 返回的JSON必须可被json.loads()解析
+- 不要添加markdown代码块标记
+- 所有scoring_units的score_share之和必须等于1.0
+- 每个SEU的knowledge_links的share之和必须等于1.0
+- 每个SEU的competency_weights五维之和必须等于1.0
+- DU数量由题目实际情况决定，简单题可以0个，复杂题最多3-4个
+- detailed_analysis严格控制在100字以内
+- 生成前先压缩表述，避免超长导致JSON断裂；生成后只输出最终JSON，不要输出检查过程。
+
+以下是需要分析的题目：
