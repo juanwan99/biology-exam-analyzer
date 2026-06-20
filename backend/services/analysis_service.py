@@ -672,17 +672,30 @@ class AnalysisService:
             if warnings:
                 warning_questions.append({"id": q_id, "warnings": list(warnings)})
 
-        if blocked:
-            detail = "; ".join(f"Q{b.get('id')}: {b.get('reason')}" for b in blocked[:5])
-            raise ValueError(f"metadata envelope missing or invalid: {detail}")
-
-        return {
+        result = {
             "total_questions": len(questions),
             "blocked_questions": blocked,
             "low_confidence_questions": low_confidence,
             "low_component_confidence_questions": low_component_confidence,
             "warning_questions": warning_questions,
         }
+
+        # Fail-open with degradation（修复"一题失败废掉整份报告/下载"的错误逻辑）：
+        # report_data 已能把失败/降级题渲染为"未评估/分析失败"行，单题失败不应
+        # 阻断整份报告。仅当【没有任何可用题】(全部 blocked) 时才拒绝生成——
+        # 那种情况下报告为空且具误导性；其余情况放行并告警，失败题照常标注入报告。
+        if blocked:
+            detail = "; ".join(f"Q{b.get('id')}: {b.get('reason')}" for b in blocked[:5])
+            blocked_ids = {b.get("id") for b in blocked}
+            valid_count = sum(1 for q in questions if q.get("id") not in blocked_ids)
+            if valid_count == 0:
+                raise ValueError(f"metadata envelope missing or invalid: {detail}")
+            logger.warning(
+                f"[报告门禁] {len(blocked_ids)} 题分析失败/降级，按未评估纳入报告；"
+                f"其余 {valid_count} 题正常生成 ({detail})"
+            )
+
+        return result
 
     @staticmethod
     def build_pipeline_audit(metadata_quality: Dict | None,
