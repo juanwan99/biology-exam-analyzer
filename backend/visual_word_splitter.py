@@ -245,12 +245,22 @@ def _ocr_with_cache(docx_path: str) -> List[Optional[str]]:
 # 严格主题号：行首仅允许空白 + 1~2 位数字 + 分隔符 + 空白。
 # 显式排除括号小题号"（4）/(4)"（不以数字开头）；排除"1.5"（点后非空白）。
 _MAIN_QNUM_RE = re.compile(r"^\s*(\d{1,2})[.、．]\s")
+# 考试注意事项噪音（与 native _detect_question_number 同源）：试卷开头的
+# "1.答卷前…准考证号" / "2.回答选择题…答题卡" / "3.考试结束后…" 这些编号项
+# 不是题目，必须跳过，否则会顶高单调递增计数器导致真 Q1/Q2/Q3 被吞。
+_NOISE_QNUM_RE = [
+    re.compile(r"^\s*\d{1,2}[.、．]\s*(答卷前|答题前|请按|选择题用|考试结束|注意事项|填涂|核对)"),
+    re.compile(r"^\s*\d{1,2}[.、．].*(答题卡|试题卷|试卷|草稿纸|准考证|条形码|铅笔|签字笔)"),
+]
 
 
 def _detect_main_qnum(line: str) -> Optional[int]:
     m = _MAIN_QNUM_RE.match(line)
     if not m:
         return None
+    for noise in _NOISE_QNUM_RE:
+        if noise.match(line):
+            return None  # 注意事项编号项，非题号
     return int(m.group(1))
 
 
