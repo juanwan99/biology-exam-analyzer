@@ -38,14 +38,18 @@ from word_splitter import WordQuestionSplitter
 logger = get_logger()
 
 # ── 试卷专用 OCR Prompt（不可复用教材 prompt）────────────────────────────
+# 设计要点（根因修复）：视觉模型转写"图形/稀疏表格"时会试图用 ASCII 方框画
+# (│ │ │) / 空网格 (|  |  |) 还原版式，进而陷入行重复，偶发跑飞到 max_tokens。
+# 故 prompt 显式：图只用一句话文字描述（禁字符画）、表格只写有内容的单元格
+# （禁空行/空格分隔线）、禁重复任何一行——从源头消除重复触发器。
 EXAM_OCR_PROMPT = """你是高考试卷数字化专家。请把这张试卷图片中的全部文字**原样**转写为纯文本，严格遵守：
 1. 完整保留题号（如"4."、"12."、"16."）、小题号（如"（1）""（2）"）和选项标号（A. B. C. D.）。
 2. 化学式、离子符号、电子排布式、化学方程式、离子方程式必须按原样转写：下标用 ₀₁₂₃₄₅₆₇₈₉，上标用 ⁰¹²³⁺⁻，例如 Na₂SO₄、(NH₄)₂CO₃、Mn²⁺、HCO₃⁻、Ksp、3d⁸4s²。
-3. 表格转写为 Markdown 表格，保留全部数据（如 Ksp 数值 8.0×10⁻²⁷、pH 数值）。
+3. 表格：只转写**有内容**的单元格，用紧凑 Markdown 表格或"项：值"形式，保留全部数据（如 Ksp 8.0×10⁻²⁷、pH 数值）；**严禁输出空单元格、空行或重复的分隔线**。
 4. 数学/物理公式按原样转写，保留上下标、根号、分数、单位。
-5. 流程图/装置图：用一行文字描述其中的物质和箭头流向，不要遗漏物质名称。
+5. 图（装置图/流程图/晶胞图/曲线）：**只用一句话文字描述其中的物质与关系，禁止用字符画 / ASCII art / 方框线还原图形**。
 6. 去除页眉、页脚、页码、密封线、"第X页共X页"等无关内容。
-7. 按阅读顺序输出。**不要解释、不要作答、不要改写题意**，只输出题目原文。"""
+7. 按阅读顺序输出。**不要解释、不要作答、不要改写题意、不要重复输出任何一行**，只输出题目原文。"""
 
 # ── 触发阈值 ──────────────────────────────────────────────────────────
 # 目标学科：仅这些学科在"公式密集"时才走视觉。生物等叙述卷显式排除。
@@ -61,6 +65,9 @@ _OLE_PER_Q_THRESHOLD = 2.0       # 每题平均
 _RENDER_DPI = 2.1                # fitz Matrix 缩放（72*2.1≈151dpi，已在真卷验证）
 _OCR_CONCURRENCY = 3
 _OCR_MAX_TOKENS = 8000
+# 解码层纵深防御：抑制退化重复（与上面的 prompt 改造合用，实测把图形/表格页的
+# 行重复从 top_rep=3~21 压到 1）。1.1 为温和值，不影响正常长文转写。
+_OCR_REPETITION_PENALTY = 1.1
 _LIBREOFFICE_TIMEOUT = 90
 # OCR 结果缓存（按文件内容 hash），容量很小，仅防同文件重试重复 OCR
 _OCR_CACHE: "Dict[str, List[Optional[str]]]" = {}
@@ -194,6 +201,7 @@ async def _ocr_pdf_pages(pdf_path: str) -> List[Optional[str]]:
                         md = await vp.extract_page_markdown(
                             img_b64, page_num,
                             prompt=EXAM_OCR_PROMPT, max_tokens=_OCR_MAX_TOKENS,
+                            repetition_penalty=_OCR_REPETITION_PENALTY,
                         )
                         if md:
                             return md

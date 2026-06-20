@@ -120,7 +120,8 @@ class VisionProcessor:
         page_num: int,
         timeout: float = 120.0,
         prompt: Optional[str] = None,
-        max_tokens: int = 4000
+        max_tokens: int = 4000,
+        repetition_penalty: Optional[float] = None
     ) -> Optional[str]:
         """
         使用 Qwen-VL 从图片提取 Markdown
@@ -153,7 +154,9 @@ class VisionProcessor:
                             }
                         ],
                         "max_tokens": max_tokens,
-                        "temperature": 0.1
+                        "temperature": 0.1,
+                        **({"repetition_penalty": repetition_penalty}
+                           if repetition_penalty is not None else {}),
                     }
                 )
 
