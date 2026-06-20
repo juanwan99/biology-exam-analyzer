@@ -25,6 +25,7 @@ import re
 import aiofiles
 
 from logger import get_logger
+from visual_word_splitter import split_word_with_visual
 from config import UPLOAD_DIR, REPORTS_DIR
 from report_signing import sign_report_path
 import credits_service
@@ -290,7 +291,8 @@ async def analyze_auto(
         if file_ext == 'docx':
             logger.info("使用Word原生拆分题目...")
             try:
-                split_result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+                split_result = await loop.run_in_executor(
+                    None, lambda: split_word_with_visual(str(file_path), subject=subject))
             except Exception as e:
                 err_msg = str(e)
                 logger.error(f"[Word拆分] 格式错误: {err_msg}")
@@ -571,7 +573,8 @@ async def auto_split_questions(
         # 3. 使用Word提取器拆分
         logger.info("[自动拆分] 使用Word原生提取器")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+        result = await loop.run_in_executor(
+            None, lambda: split_word_with_visual(str(file_path), subject=None))
 
         # 4. 分离前端数据和AI数据
         # 前端数据：移除_media_for_ai字段

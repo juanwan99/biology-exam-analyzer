@@ -3191,7 +3191,7 @@ class TestTableToMarkdownMergedCells:
             [("A", 0), ("B", 1), ("C", 2)],
             [("1", 3), ("2", 4), ("3", 5)],
         ])
-        md = WordQuestionSplitter._table_to_markdown(table)
+        md = WordQuestionSplitter()._table_to_markdown(table)
         header_cols = md.splitlines()[0].strip("|").split("|")
         assert len(header_cols) == 3, f"expected 3 cols, got {len(header_cols)}: {md}"
 
@@ -3203,7 +3203,7 @@ class TestTableToMarkdownMergedCells:
             [("Header1", 0), ("Header2", 1), ("Header3", 2)],
             [("Merged", "m"), ("Merged", "m"), ("Solo", 3)],
         ])
-        md = WordQuestionSplitter._table_to_markdown(table)
+        md = WordQuestionSplitter()._table_to_markdown(table)
         lines = md.splitlines()
         data_row = lines[2]  # skip header + separator
         cols = [c.strip() for c in data_row.strip("|").split("|")]
@@ -3216,7 +3216,7 @@ class TestTableToMarkdownMergedCells:
         table = self._make_mock_table([
             [("X", "same"), ("X", "same"), ("X", "same")],
         ])
-        md = WordQuestionSplitter._table_to_markdown(table)
+        md = WordQuestionSplitter()._table_to_markdown(table)
         header_cols = [c.strip() for c in md.splitlines()[0].strip("|").split("|")]
         assert len(header_cols) == 1, f"all-merged row should yield 1 col, got {header_cols}"
 
@@ -3228,7 +3228,7 @@ class TestTableToMarkdownMergedCells:
             [("A", 0), ("B", 1), ("C", 2)],
             [("AB", "m"), ("AB", "m"), ("C2", 3)],
         ])
-        md = WordQuestionSplitter._table_to_markdown(table)
+        md = WordQuestionSplitter()._table_to_markdown(table)
         lines = [l for l in md.splitlines() if not l.startswith("|---")]
         # Every data row must have the same number of | separators as the header
         header_pipes = lines[0].count("|")
@@ -3244,7 +3244,7 @@ class TestTableToMarkdownMergedCells:
         from word_splitter import WordQuestionSplitter
         table = MagicMock()
         table.rows = []
-        assert WordQuestionSplitter._table_to_markdown(table) == ""
+        assert WordQuestionSplitter()._table_to_markdown(table) == ""
 
 
 # ══════════════════════════════════════════════════════════════

@@ -118,7 +118,9 @@ class VisionProcessor:
         self,
         image_base64: str,
         page_num: int,
-        timeout: float = 120.0
+        timeout: float = 120.0,
+        prompt: Optional[str] = None,
+        max_tokens: int = 4000
     ) -> Optional[str]:
         """
         使用 Qwen-VL 从图片提取 Markdown
@@ -145,12 +147,12 @@ class VisionProcessor:
                                     },
                                     {
                                         "type": "text",
-                                        "text": EXTRACTION_PROMPT
+                                        "text": prompt or EXTRACTION_PROMPT
                                     }
                                 ]
                             }
                         ],
-                        "max_tokens": 4000,
+                        "max_tokens": max_tokens,
                         "temperature": 0.1
                     }
                 )

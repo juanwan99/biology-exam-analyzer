@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
+from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
 from subject_config import get_competency_dims, normalize_subject
@@ -1118,7 +1119,7 @@ class AnalysisService:
         if file_ext == "docx":
             loop = asyncio.get_event_loop()
             split_result = await loop.run_in_executor(
-                None, self.word_splitter.split, file_path
+                None, lambda: split_word_with_visual(file_path, subject=subject)
             )
             questions = split_result.get("questions", [])
             self.validate_split_integrity(questions)
