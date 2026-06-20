@@ -149,12 +149,12 @@ function AnalyzerPage() {
     e.preventDefault()
     setDragOver(false)
     const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile && (droppedFile.name.endsWith('.docx') || droppedFile.name.endsWith('.pdf'))) {
+    if (droppedFile && droppedFile.name.endsWith('.docx')) {
       setFile(droppedFile)
       setError(null)
       setResult(null)
     } else {
-      setError('请上传 DOCX 或 PDF 格式的文件')
+      setError('请上传 DOCX 格式的 Word 文件')
     }
   }
 
@@ -268,7 +268,7 @@ function AnalyzerPage() {
           className="max-w-xl mx-auto"
           style={{ fontSize: '1.125rem', lineHeight: 1.7, color: 'var(--color-secondary)' }}
         >
-          上传试卷（支持 DOCX 和 PDF 格式），AI 自动拆分并深度分析每道题目
+          上传试卷（Word .docx 格式），AI 自动拆分并深度分析每道题目
         </p>
       </div>
 
@@ -397,7 +397,7 @@ function AnalyzerPage() {
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
           >
-            <input ref={fileInputRef} type="file" accept=".docx,.pdf" onChange={handleFileChange} className="hidden" />
+            <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileChange} className="hidden" />
             <div className="text-center">
               <div className="inline-flex items-center justify-center"
                 style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--macaron-mint-light), var(--macaron-mint))', marginBottom: '20px', boxShadow: '0 8px 24px rgba(200, 240, 212, 0.5)' }}>
@@ -406,7 +406,7 @@ function AnalyzerPage() {
                 </svg>
               </div>
               <p className="text-lg font-semibold mb-2" style={{ color: 'var(--color-primary)' }}>拖拽文件到这里，或点击选择文件</p>
-              <p className="text-sm" style={{ color: 'var(--color-muted)' }}>支持 DOCX、PDF 格式，最大 50MB</p>
+              <p className="text-sm" style={{ color: 'var(--color-muted)' }}>支持 Word .docx 格式，最大 50MB</p>
             </div>
           </div>
 
@@ -416,7 +416,7 @@ function AnalyzerPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
                   <div className="flex items-center justify-center" style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'var(--macaron-mint)', marginRight: '14px' }}>
-                    {file.name.endsWith('.pdf') ? <FileText size={22} className="text-[#1a2e1f]" /> : <ClipboardEdit size={22} className="text-[#1a2e1f]" />}
+                    <ClipboardEdit size={22} className="text-[#1a2e1f]" />
                   </div>
                   <div>
                     <p className="font-semibold" style={{ color: 'var(--color-primary)' }}>{file.name}</p>
