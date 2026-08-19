@@ -7,6 +7,7 @@ import json
 import re
 from hashlib import sha256
 from llm_client import llm_call, send_message_gpt, get_last_llm_call_metadata as get_last_call_metadata
+from analysis_options import want_aux_features
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from prompt_loader import PromptLoader
@@ -811,8 +812,11 @@ async def _extract_features_uncached(question_text: str, options: str = "",
 
         # 三组「顺序」执行（不在单题内并发，避免叠加放大并发触发 22-30min 超时红线）；
         # 各组本身小而快。
+        group_keys = ("difficulty", "quality", "teaching")
+        if not want_aux_features():
+            group_keys = ("difficulty",)
         group_outcomes = {}
-        for group_key in ("difficulty", "quality", "teaching"):
+        for group_key in group_keys:
             group_outcomes[group_key] = await _extract_group(
                 group_key,
                 loader=loader,
@@ -823,6 +827,16 @@ async def _extract_features_uncached(question_text: str, options: str = "",
                 visual_context_text=visual_context_text,
             )
 
+        if "quality" not in group_outcomes:
+            group_outcomes["quality"] = {
+                "ok": True, "degraded": False, "fields": _group_defaults(_FEATURE_GROUPS["quality"]),
+                "core_present": 0, "retry_count": 0, "response_length": 0, "error": None, "skipped": True,
+            }
+        if "teaching" not in group_outcomes:
+            group_outcomes["teaching"] = {
+                "ok": True, "degraded": False, "fields": {},
+                "core_present": 0, "retry_count": 0, "response_length": 0, "error": None, "skipped": True,
+            }
         return _assemble_feature_result(
             group_outcomes,
             question_text=question_text,
@@ -931,10 +945,13 @@ def _assemble_feature_result(group_outcomes: dict, *, question_text: str,
     # 不再因字段总数变化误判（旧阈值 raw_core>=6 且 completeness>=18 是对 29 字段
     # 巨型单任务的口径；拆分后核心组单独评估）。
     degraded_groups = [k for k in ("difficulty", "quality", "teaching")
-                       if group_outcomes[k]["degraded"] or not group_outcomes[k]["ok"]]
+                       if not group_outcomes[k].get("skipped") and (group_outcomes[k]["degraded"] or not group_outcomes[k]["ok"])]
+    skipped_aux = any(group_outcomes[k].get("skipped") for k in ("quality", "teaching"))
     if difficulty["ok"]:
         # 难度核心齐全：质量/教学是否齐全决定 ok / partial。
-        if not degraded_groups:
+        if not degraded_groups and skipped_aux:
+            result["_feature_status"] = "core_only"
+        elif not degraded_groups:
             result["_feature_status"] = "ok"
             logger.info(f"[特征提取] 三组全成功 完整度={completeness}, raw_core={raw_core_count}, "
                         f"ext_conf={ext_conf}, consistency={consistency_score}")
@@ -1758,14 +1775,15 @@ async def extract_features(question_text: str, options: str = "",
     保证同卷重跑难度可复现；缓存命中零 LLM 调用、零额外 token。
     实际提取逻辑见 _extract_features_uncached。"""
     import feature_cache
-    cached = feature_cache.get(question_text, options, correct_answer, question_type, subject)
+    cache_subject = subject + ("::aux" if want_aux_features() else "::core")
+    cached = feature_cache.get(question_text, options, correct_answer, question_type, cache_subject)
     if cached is not None:
         logger.info(f"[特征缓存] 命中，复用特征（零 LLM 调用）: {question_text[:30]}...")
         return _renormalize_cached_media(cached, media_items)
     result = await _extract_features_uncached(
         question_text, options, correct_answer, question_type, subject, media_items)
-    if isinstance(result, dict) and result.get("_feature_status") in ("ok", "partial"):
-        feature_cache.set(question_text, options, correct_answer, question_type, subject, result)
+    if isinstance(result, dict) and result.get("_feature_status") in ("ok", "partial", "core_only"):
+        feature_cache.set(question_text, options, correct_answer, question_type, cache_subject, result)
     return result
 
 

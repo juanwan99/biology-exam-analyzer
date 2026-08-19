@@ -2,6 +2,9 @@
 改进版PDF解析器
 使用PyMuPDF提取文本、目录和图片
 按PDF书签/目录自动分章节
+
+
+Deprecated helper for the PDF split path. Not on the Word-only hot path.
 """
 import re
 import fitz  # PyMuPDF

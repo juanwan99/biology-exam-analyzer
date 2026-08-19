@@ -326,6 +326,10 @@ function ResultDisplay({ data }) {
 
   if (!data || !data.questions) return null
 
+  const flaggedQuestions = data.questions.filter((q) =>
+    (q.quality_flags && q.quality_flags.length) || q.analysis_failed
+  )
+
   return (
     <div className="max-w-[1200px] mx-auto">
       <div
@@ -337,6 +341,15 @@ function ResultDisplay({ data }) {
           padding: 'clamp(24px, 4vw, 48px)',
         }}
       >
+        {flaggedQuestions.length > 0 && (
+          <div style={{
+            marginBottom: '20px', padding: '14px 18px', borderRadius: '14px',
+            border: '1px solid #fde68a', background: '#fffbeb', color: '#92400e',
+            fontSize: '0.9rem'
+          }}>
+            本卷有 {flaggedQuestions.length} 道题为降级或部分结果（特征默认值 / 素养未补全 / 分析失败），报告仍可下载，请人工复核标黄题目。
+          </div>
+        )}
         {/* HTML 报告入口 — 顶部醒目横幅 */}
         {(data.html_report_url || data.report_url) && (
           <div

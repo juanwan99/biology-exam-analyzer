@@ -35,6 +35,7 @@ from session_manager import save_session, get_session
 from analysis_statistics import generate_exam_statistics, _build_competency_list
 from subject_config import normalize_subject, is_valid_subject, get_subject_name
 from llm_client import set_user_api_keys
+from analysis_options import set_analysis_options
 from deps import (
     get_analysis_service,
     get_competency_analyzer,
@@ -356,6 +357,7 @@ async def analyze_auto(
 
         if _user_api_keys_dict:
             set_user_api_keys(_user_api_keys_dict)
+        set_analysis_options(generate_report=_bg_generate_report, report_mode=_bg_report_mode)
         _bg_task = asyncio.create_task(_run_analysis_pipeline(
             task_id, _bg_questions, _bg_image_bytes, _bg_mode,
             _bg_competency_analyzer,
@@ -394,7 +396,8 @@ async def _run_analysis_pipeline(
         total = len(questions)
         completed = [0]
 
-        logger.info(f"开始并发分析 {total} 道题（{MAX_WORKERS}线程）...")
+        set_analysis_options(generate_report=generate_report, report_mode=report_mode)
+        logger.info(f"开始并发分析 {total} 道题（并发 {MAX_WORKERS}）...")
         sem = asyncio.Semaphore(MAX_WORKERS)
 
         async def analyze_one(q):

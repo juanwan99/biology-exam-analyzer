@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
+from analysis_options import want_competency_supplement
 from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
@@ -183,7 +184,14 @@ class AnalysisService:
                     add_analysis_warning(f"seu_derivation_failed:{type(e).__name__}")
                     logger.warning(f"[分析] 题目{q_id} v2素养派生失败: {e}，改用独立素养分析并写入元数据告警")
 
-            if v2_seu_competency:
+            if v2_seu_competency and not want_competency_supplement():
+                difficulty_result = await self.difficulty_engine.evaluate_with_refinement(
+                    question=difficulty_q, mode=mode, analysis_result=analysis)
+                question["difficulty"] = difficulty_result
+                question["competency"] = dict(v2_seu_competency)
+                add_analysis_warning("competency_supplement_skipped")
+                need_independent_competency = False
+            elif v2_seu_competency:
                 # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
                 competency_q = {
                     "id": q_id,
@@ -286,6 +294,15 @@ class AnalysisService:
             question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
             if analysis_warnings:
                 question["_analysis_warnings"] = analysis_warnings
+            flags = list(analysis_warnings)
+            feat = (question.get("difficulty") or {}).get("features") or {}
+            if isinstance(feat, dict):
+                fs = feat.get("_feature_status")
+                if fs in ("partial", "failed", "core_only"):
+                    flags.append("feature_status:%s" % fs)
+                if feat.get("_feature_failed"):
+                    flags.append("default_features")
+            question["quality_flags"] = flags
             self._attach_metadata_envelope(question)
 
             return question

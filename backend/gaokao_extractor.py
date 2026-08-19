@@ -1,6 +1,9 @@
 """
 高考真题提取器
 从 Word 文档中提取高考真题，通过 AI 结构化处理后入库
+
+
+Legacy v1 extractor. Prefer gaokao_extractor_v2. Not on the analyze_auto hot path.
 """
 import os
 import json
