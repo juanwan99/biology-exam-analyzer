@@ -92,8 +92,8 @@ async def test_auto_analysis_returns_metadata_quality_summary():
         return [_question(1, overall=0.55)]
 
     service.analyze_questions_batch = fake_analyze_questions_batch
-    service.build_competency_summary = lambda questions: {}
-    service.aggregate_statistics = lambda questions, competency_summary: {}
+    service.build_competency_summary = lambda questions, subject=None: {}
+    service.aggregate_statistics = lambda questions, competency_summary, subject=None: {}
 
     result = await service.run_auto_analysis(
         "exam.docx",
@@ -137,8 +137,8 @@ async def test_auto_analysis_returns_html_report_url_when_report_generated(tmp_p
         return output_path
 
     service.analyze_questions_batch = fake_analyze_questions_batch
-    service.build_competency_summary = lambda questions: {}
-    service.aggregate_statistics = lambda questions, competency_summary: {}
+    service.build_competency_summary = lambda questions, subject=None: {}
+    service.aggregate_statistics = lambda questions, competency_summary, subject=None: {}
     service.generate_report = fake_generate_report
 
     result = await service.run_auto_analysis(
@@ -188,3 +188,12 @@ def test_report_html_renders_metadata_quality_summary():
     assert model["credibility"]["llm_calls_total"] == 3
     assert "\u5143\u6570\u636e" in html
     assert "Q1" in html
+
+
+@pytest.fixture(autouse=True)
+def _stub_visual_split(monkeypatch):
+    monkeypatch.setattr(
+        "services.analysis_service.split_word_with_visual",
+        lambda file_path, subject="biology": FakeWordSplitter().split(file_path),
+        raising=False,
+    )

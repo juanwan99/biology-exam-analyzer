@@ -755,7 +755,7 @@ async def test_auto_pdf_analysis_propagates_document_failure_events():
 @pytest.mark.asyncio
 async def test_generate_report_stores_report_insights(monkeypatch, tmp_path):
     service = _service_without_dependencies()
-    monkeypatch.setattr(service, "validate_report_metadata", lambda questions: {})
+    monkeypatch.setattr(service, "validate_report_metadata", lambda questions, subject=None: {})
 
     captured = {}
 
@@ -841,7 +841,7 @@ async def test_auto_analysis_allows_report_generation_when_llm_fallback_warning_
 
     service.analyze_questions_batch = fake_analyze_questions_batch_with_fallback
     service.build_competency_summary = lambda questions, subject="biology": {}
-    service.aggregate_statistics = lambda questions, competency_summary: {}
+    service.aggregate_statistics = lambda questions, competency_summary, subject=None: {}
     service.generate_report = fake_generate_report
 
     # 不再 raise pipeline gate failed：报告应正常生成
@@ -901,3 +901,12 @@ async def test_failed_question_analysis_gets_failure_envelope_and_remains_blocke
     )
     assert no_score_result["analysis_failed"] is True
     assert no_score_result.get("total_score") is None
+
+
+@pytest.fixture(autouse=True)
+def _stub_visual_split(monkeypatch):
+    monkeypatch.setattr(
+        "services.analysis_service.split_word_with_visual",
+        lambda file_path, subject="biology": {"questions": [{"id": 1, "content": "Question stem"}]},
+        raising=False,
+    )

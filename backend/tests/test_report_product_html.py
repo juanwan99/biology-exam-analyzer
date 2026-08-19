@@ -53,6 +53,6 @@ def test_render_report_product_html_uses_commercial_report_structure():
     assert "命题质量诊断" not in html
     assert "执行摘要" in html
     assert "题目组合诊断" in html
-    assert "LLM 调用与方法论" in html
+    assert "AI 调用与方法论" in html
     assert "来源：报告数据：难度梯度" in visible_html
     assert "commercial_report.v1" in html

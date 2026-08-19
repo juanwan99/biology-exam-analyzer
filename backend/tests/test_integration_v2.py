@@ -14,11 +14,7 @@ import types
 
 # ── 补充 conftest 中未 stub 的模块 ──────────────────────────────────
 
-# utils.infer_question_type
-if "utils" not in sys.modules:
-    _utils_mod = types.ModuleType("utils")
-    _utils_mod.infer_question_type = lambda q: q.get("question_type", "single_choice")
-    sys.modules["utils"] = _utils_mod
+# utils is a real production module; do not stub it.
 
 # config（PROMPT_DIR, RULES_DIR）
 if "config" not in sys.modules:
@@ -187,7 +183,7 @@ class MockCompetencyAnalyzer:
 
 
 class MockKnowledgeMapper:
-    def map_knowledge_points(self, kp_list):
+    def map_knowledge_points(self, kp_list, **kwargs):
         return [{"mapped": False, "original": kp} for kp in kp_list]
 
 

@@ -9,6 +9,7 @@ async def test_download_report_serves_html_inline(monkeypatch, tmp_path):
     report_path = tmp_path / "exam.html"
     report_path.write_text("<html>report</html>", encoding="utf-8")
     monkeypatch.setattr(admin_router, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr("report_signing.verify_report_sig", lambda *a, **k: True)
 
     response = await admin_router.download_report("exam.html")
 
@@ -22,6 +23,7 @@ async def test_download_report_rejects_unknown_report_type(monkeypatch, tmp_path
     report_path = tmp_path / "exam.txt"
     report_path.write_text("secret", encoding="utf-8")
     monkeypatch.setattr(admin_router, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr("report_signing.verify_report_sig", lambda *a, **k: True)
 
     with pytest.raises(HTTPException) as exc_info:
         await admin_router.download_report("exam.txt")

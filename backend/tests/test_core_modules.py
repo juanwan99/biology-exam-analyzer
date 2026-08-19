@@ -67,12 +67,10 @@ class TestSessionManager:
     """Session 管理测试。"""
 
     def setup_method(self):
-        from session_manager import SESSION_STORAGE, save_session, get_session, clean_expired_sessions
-        SESSION_STORAGE.clear()
+        from session_manager import save_session, get_session, clean_expired_sessions
         self.save = save_session
         self.get = get_session
         self.clean = clean_expired_sessions
-        self.storage = SESSION_STORAGE
 
     def test_save_and_get(self):
         """保存后能取回。"""
@@ -85,13 +83,11 @@ class TestSessionManager:
         assert self.get("nonexistent") is None
 
     def test_expired_session_cleaned(self):
-        """过期 session 自动清理。"""
-        self.storage["old"] = {
-            "data": {"x": 1},
-            "expire_time": datetime.now() - timedelta(minutes=1)
-        }
+        """?? session ?????"""
+        import runtime_store
+        runtime_store.save_session("old", {"x": 1}, minutes=-1)
         assert self.get("old") is None
-        assert "old" not in self.storage
+
 
     def test_multiple_sessions(self):
         """多个 session 互不干扰。"""

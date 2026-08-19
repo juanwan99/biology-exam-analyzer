@@ -148,7 +148,7 @@ def test_render_commercial_report_has_consulting_report_structure():
     assert "试卷可用性与学情适配" in html
     assert "题目组合诊断" in html
     assert "单题审查明细" in html
-    assert "LLM 调用与方法论" in html
+    assert "AI 调用与方法论" in html
 
 
 def test_hero_exam_name_can_wrap_long_file_names_on_mobile():
@@ -317,7 +317,7 @@ def test_render_commercial_report_contains_advanced_svg_charts():
         assert chart_id in html
     assert "采分点与误区诊断矩阵" in html
     assert "题目组合气泡图" in html
-    assert "LLM 调用结构图" in html
+    assert "方法论图表" in html
 
 
 def test_portfolio_bubble_labels_all_points_and_exposes_data_gaps():
@@ -686,7 +686,7 @@ def test_report_frontend_accessibility_and_mobile_contracts():
     assert 'data-label="题号"' in html
     assert 'data-label="调用目的"' in html
     assert '<caption class="sr-only">题目组合诊断明细</caption>' in html
-    assert '<caption class="sr-only">LLM 调用提示词清单</caption>' in html
+    assert '<caption class="sr-only">AI 调用提示词清单</caption>' in html
     assert 'aria-label="题目组合诊断明细"' not in html
     assert ".table-wrap {\n  overflow: visible;" in html
     assert ".table-wrap {\n  overflow-x: auto" not in html

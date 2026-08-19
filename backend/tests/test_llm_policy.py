@@ -11,6 +11,7 @@ def test_qwen_key_enables_vision_provider_only_by_default(monkeypatch):
     monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     monkeypatch.delenv("QWEN_TEXT_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("QWEN_VISION_MODEL", "qwen3-vl-plus")
 
     text_providers = get_providers(purpose="question_analysis", requires_images=False)
     assert text_providers == []

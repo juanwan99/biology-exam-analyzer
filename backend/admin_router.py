@@ -231,7 +231,7 @@ async def download_report(
             media_type='text/html; charset=utf-8',
             filename=filename,
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'inline; filename="{filename}"',
                 "X-Content-Type-Options": "nosniff",
             }
         )
