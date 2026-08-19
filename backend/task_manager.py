@@ -1,16 +1,15 @@
-"""In-memory async task manager for long-running analysis jobs."""
+"""Analysis task manager — SQLite via runtime_store, same public API."""
 import uuid
 from datetime import datetime
 from logger import get_logger
+import runtime_store
 
 logger = get_logger()
-
-_tasks = {}
 
 
 def create(total_questions: int) -> str:
     task_id = uuid.uuid4().hex[:8]
-    _tasks[task_id] = {
+    runtime_store.put_task(task_id, {
         "status": "processing",
         "progress": 0,
         "total": total_questions,
@@ -18,45 +17,44 @@ def create(total_questions: int) -> str:
         "result": None,
         "error": None,
         "created_at": datetime.now().isoformat(),
-    }
-    logger.info(f"[任务] 创建任务 {task_id}，共 {total_questions} 题")
+    })
+    logger.info("[任务] 创建任务 %s，共 %s 题", task_id, total_questions)
     return task_id
 
 
 def update(task_id: str, progress: int, message: str = None):
-    if task_id in _tasks:
-        _tasks[task_id]["progress"] = progress
-        if message:
-            _tasks[task_id]["message"] = message
+    row = runtime_store.get_task(task_id)
+    if not row:
+        return
+    row["progress"] = progress
+    if message:
+        row["message"] = message
+    runtime_store.put_task(task_id, row)
 
 
 def complete(task_id: str, result: dict):
-    if task_id in _tasks:
-        _tasks[task_id]["status"] = "completed"
-        _tasks[task_id]["result"] = result
-        _tasks[task_id]["message"] = "分析完成"
-        logger.info(f"[任务] 任务 {task_id} 完成")
+    row = runtime_store.get_task(task_id) or {}
+    row["status"] = "completed"
+    row["result"] = result
+    row["message"] = "分析完成"
+    runtime_store.put_task(task_id, row)
+    logger.info("[任务] 任务 %s 完成", task_id)
 
 
 def fail(task_id: str, error: str):
-    if task_id in _tasks:
-        _tasks[task_id]["status"] = "failed"
-        _tasks[task_id]["error"] = error
-        _tasks[task_id]["message"] = f"分析失败: {error}"
-        logger.error(f"[任务] 任务 {task_id} 失败: {error}")
+    row = runtime_store.get_task(task_id) or {}
+    row["status"] = "failed"
+    row["error"] = error
+    row["message"] = "分析失败: %s" % error
+    runtime_store.put_task(task_id, row)
+    logger.error("[任务] 任务 %s 失败: %s", task_id, error)
 
 
-def get(task_id: str) -> dict | None:
-    return _tasks.get(task_id)
+def get(task_id: str):
+    return runtime_store.get_task(task_id)
 
 
 def cleanup(max_age_hours: int = 2):
-    now = datetime.now()
-    expired = [
-        tid for tid, t in _tasks.items()
-        if (now - datetime.fromisoformat(t["created_at"])).total_seconds() > max_age_hours * 3600
-    ]
-    for tid in expired:
-        del _tasks[tid]
-    if expired:
-        logger.info(f"[任务] 清理 {len(expired)} 个过期任务")
+    n = runtime_store.cleanup_tasks(max_age_hours)
+    if n:
+        logger.info("[任务] 清理 %s 个过期任务", n)

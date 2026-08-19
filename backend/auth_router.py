@@ -14,13 +14,14 @@ import string
 from database import get_db
 from models import AdminUser, OperationLog
 from logger import get_logger
+import runtime_store
 
 logger = get_logger()
 
 router = APIRouter(prefix="/api/auth", tags=["认证管理"])
 
 # 简单的token存储（生产环境应使用Redis）
-active_tokens: Dict[str, dict] = {}
+active_tokens = runtime_store.TokenMap()
 
 # 登录限流：IP -> (失败次数, 首次失败时间)
 _login_attempts: Dict[str, tuple] = {}

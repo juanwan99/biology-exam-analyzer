@@ -35,7 +35,8 @@ services:
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - LOG_LEVEL=INFO
-      - ANALYSIS_CONCURRENCY=10
+      - ANALYSIS_CONCURRENCY=5
+      - MAX_WORKERS=5
       - DATABASE_URL=postgresql://biology:${POSTGRES_PASSWORD:-biology123}@postgres:5432/biology_edu
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
