@@ -510,6 +510,9 @@ def _looks_like_answer_sentence(value: Any) -> bool:
     # 冒号陈述（半角:或全角：作分隔的陈述句，如"安全机制设计：..."）
     if "：" in text or ":" in text:
         return True
+    # 带逗号 / 句号的长文本是答案或推理整句，知识点名不带句读
+    if any(p in text for p in ("，", ",", "。")):
+        return True
     if "比例" in text or _RATIO_RE.search(text):
         return True
     if any(marker in text for marker in _ANSWER_SENTENCE_MARKERS):
@@ -576,6 +579,10 @@ def canonicalize_knowledge_point(
     synonyms = getattr(mapper, "_synonyms", {}) if mapper is not None else {}
     for alias, canonical in synonyms.items():
         if alias and alias in raw:
+            if _is_broad_label(str(canonical), raw):
+                section = _section_label(raw, mapper)
+                if section:
+                    return section
             return str(canonical), {
                 "mapped": True,
                 "strategy": "synonym",
@@ -586,6 +593,10 @@ def canonicalize_knowledge_point(
     keyword = _best_keyword_match(raw, mapper)
     if keyword:
         label = _keyword_to_label(keyword)
+        if _is_broad_label(label, raw):
+            section = _section_label(raw, mapper)
+            if section:
+                return section
         return label, {
             "mapped": True,
             "strategy": "keyword",
@@ -756,6 +767,29 @@ def _map_with_mapper(value: str, mapper: Any | None) -> dict[str, Any] | None:
         return mapper.map_knowledge_point(value)
     except Exception:
         return None
+
+
+def _is_broad_label(label: str, raw: str) -> bool:
+    """命中的关键词 / 同义词只有 1-3 字而原知识点明显更长时（「植物激素的作用特点」→「激素」），
+    拿它当聚合标签太宽，改用所属教材小节名。"""
+    return len(label) <= 3 and len(raw) >= len(label) + 2
+
+
+def _section_label(raw: str, mapper: Any | None) -> tuple[str, dict[str, Any]] | None:
+    mapped = _map_with_mapper(raw, mapper)
+    if not (mapped and mapped.get("mapped") is True and not mapped.get("fuzzy")):
+        return None
+    label = str(mapped.get("section_name") or mapped.get("chapter_name") or "").strip()
+    if not label:
+        return None
+    return label, {
+        "mapped": True,
+        "strategy": "textbook_section",
+        "original": raw,
+        "textbook": mapped.get("textbook"),
+        "chapter": mapped.get("chapter"),
+        "section": mapped.get("section"),
+    }
 
 
 def _best_keyword_match(value: str, mapper: Any | None) -> str | None:

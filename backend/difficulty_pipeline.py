@@ -215,7 +215,9 @@ class DifficultyPipeline:
             features = await extract_features(
                 full_text, "", correct_answer, question_type,
                 subject=subject, media_items=media_items)
-            logger.info(f"特征提取完成: {features}")
+            logger.info(f"特征提取完成: status={features.get('_feature_status') if isinstance(features, dict) else None}, "
+                        f"cache_hit={bool(isinstance(features, dict) and features.get('_feature_cache_hit'))}")
+            logger.debug(f"特征提取明细: {features}")
 
             # Bloom 优先级：LLM 分析的 bloom_level 优先于特征提取推断
             llm_bloom = kwargs.get("analysis_result", {}).get("bloom_level")
