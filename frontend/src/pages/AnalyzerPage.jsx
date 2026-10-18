@@ -160,10 +160,12 @@ function AnalyzerPage() {
 
   const pollTaskStatus = useCallback((taskId) => {
     pollingRef.current = true
+    let consecutiveErrors = 0
     const poll = async () => {
       if (!pollingRef.current) return
       try {
-        const resp = await axios.get(`/api/analysis/status/${taskId}`)
+        const resp = await axios.get(`/api/analysis/status/${taskId}`, { timeout: 30000 })
+        consecutiveErrors = 0
         const data = resp.data
         setProgress({ progress: data.progress, total: data.total, message: data.message })
 
@@ -190,6 +192,16 @@ function AnalyzerPage() {
         if (err.response?.status === 404) {
           pollingRef.current = false
           localStorage.removeItem('bio_task_id')
+          setError('分析任务已失效（可能服务刚重启或任务已过期），请重新上传试卷')
+          setLoading(false)
+          setProgress(null)
+          return
+        }
+        consecutiveErrors += 1
+        if (consecutiveErrors >= 24) {
+          // 约 2 分钟连续查不到进度：停止轮询并提示，不让页面一直转圈（保留 task_id，刷新页面可继续跟踪）
+          pollingRef.current = false
+          setError('连续 2 分钟无法获取分析进度，请检查网络后刷新页面（分析仍在后台进行）')
           setLoading(false)
           setProgress(null)
           return

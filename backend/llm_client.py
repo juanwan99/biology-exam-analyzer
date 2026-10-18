@@ -226,6 +226,27 @@ def _raise_if_incomplete_finish(provider_name: str, finish_reason):
     )
 
 
+def _should_retry_without_thinking(provider: dict, body: dict, exc: Exception) -> bool:
+    return (
+        bool(provider.get("length_retry_without_thinking"))
+        and "thinking" not in body
+        and "finish_reason=length" in str(exc)
+    )
+
+
+# 重试阶梯（首调超时 / 截断后的 compact 重试）直接关思考：首调已经把思考预算烧过一轮，
+# 重试再带思考只会再截断一次，白耗 1–2 分钟。
+NO_THINKING_PURPOSES = frozenset({"question_analysis_retry"})
+
+
+def _body_without_thinking(provider: dict, body: dict) -> dict:
+    retry_body = dict(body)
+    retry_body.pop("reasoning_effort", None)
+    retry_body["thinking"] = {"type": "disabled"}
+    retry_body["max_tokens"] = max(int(body.get("max_tokens") or 0), int(provider["max_tokens"]))
+    return retry_body
+
+
 def _deterministic_seed(provider: dict) -> int:
     """确定性复现 seed（temperature<=0 时使用）。统一各 provider 的 seed 注入路径，
     确保可复现性（RC2 根因修复）。"""
@@ -366,7 +387,8 @@ async def _http_post(url: str, headers: dict, json: dict,
 
 
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
-                                temperature: float, timeout: float) -> str:
+                                temperature: float, timeout: float,
+                                purpose: str | None = None) -> str:
     """调用单个 provider（含内部重试）。"""
     if _messages_include_images(messages) and not provider.get("supports_images", False):
         raise RuntimeError(
@@ -376,6 +398,8 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
     url = _get_url(provider)
     headers = _get_headers(provider)
     body = _build_request_body(provider, messages, max_tokens, temperature)
+    if purpose in NO_THINKING_PURPOSES and provider.get("length_retry_without_thinking"):
+        body = _body_without_thinking(provider, body)
     proxy = _get_proxy(provider)
     no_proxy = provider.get("no_proxy", False)
     retries = provider.get("retry_count", 2)
@@ -397,7 +421,23 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                 resp.raise_for_status()
                 data = resp.json()
                 _last_provider_usage.set(_extract_usage(provider["api_format"], data))
-                return _extract_text(provider["api_format"], data)
+                try:
+                    return _extract_text(provider["api_format"], data)
+                except RuntimeError as e:
+                    if not _should_retry_without_thinking(provider, body, e):
+                        raise
+                    # 推理模型思考 token 烧光 max_tokens → 输出截断。原地关思考、满额度再发一次，
+                    # 不交给上层逐级缩 max_tokens 的重试阶梯（那只会截得更早）。
+                    body = _body_without_thinking(provider, body)
+                    logger.warning(f"[LLM] {provider['name']} 输出截断(finish_reason=length)，"
+                                   f"关闭思考、max_tokens={body['max_tokens']} 重试一次")
+                    resp = await _http_post(url, headers=headers, json=body,
+                                            timeout=timeout, proxy=proxy,
+                                            trust_env=not no_proxy)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    _last_provider_usage.set(_extract_usage(provider["api_format"], data))
+                    return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e
                 status = e.response.status_code
@@ -467,7 +507,7 @@ async def llm_call(
     for provider in providers:
         try:
             result = await _call_single_provider(
-                provider, messages, max_tokens, temperature, timeout
+                provider, messages, max_tokens, temperature, timeout, purpose=purpose
             )
             if len(errors) > 0:
                 logger.info(f"[LLM] Fallback 成功: {provider['name']} "

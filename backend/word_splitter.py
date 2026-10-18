@@ -7,7 +7,11 @@ import re
 import base64
 import io
 from typing import List, Dict, Any, Tuple, Optional
-from dataclasses import dataclass
+import os
+import struct
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
 from docx import Document
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
@@ -29,6 +33,58 @@ class Question:
     media: List[Dict[str, Any]]  # 按文档顺序保存图片和表格
     warnings: List[str]
     section_header: Optional[str] = None  # 分节标题
+    # OLE / VML 对象的矢量预览图（WMF/EMF 原始字节）：题干说「如图」却没取到图时才渲染兜底
+    ole_previews: List[Tuple[bytes, str]] = field(default_factory=list)
+
+
+_PLACEABLE_WMF_KEY = b"\xd7\xcd\xc6\x9a"
+
+
+def _metafile_rtf(blob: bytes, ext: str) -> str:
+    """把 WMF/EMF 包成只含这一张图的 RTF（页面贴合图的大小）。"""
+    width_tw = height_tw = 0
+    if ext == ".wmf":
+        if blob[:4] == _PLACEABLE_WMF_KEY and len(blob) > 22:
+            left, top, right, bottom, inch = struct.unpack("<hhhhH", blob[6:16])
+            if inch:
+                width_tw = (right - left) * 1440 // inch
+                height_tw = (bottom - top) * 1440 // inch
+            blob = blob[22:]  # RTF 的 wmetafile 要去掉 placeable 头
+        pict = "\\wmetafile8"
+    else:
+        if len(blob) >= 40:
+            # EMF 头 rclFrame，单位 0.01 mm
+            left, top, right, bottom = struct.unpack("<iiii", blob[24:40])
+            width_tw = (right - left) * 1440 // 2540
+            height_tw = (bottom - top) * 1440 // 2540
+        pict = "\\emfblip"
+    if width_tw <= 0 or height_tw <= 0:
+        width_tw, height_tw = 9000, 6000
+    margin = 360
+    page = (f"\\paperw{width_tw + 2 * margin}\\paperh{height_tw + 2 * margin}"
+            f"\\margl{margin}\\margr{margin}\\margt{margin}\\margb{margin}")
+    size = f"\\picwgoal{width_tw}\\pichgoal{height_tw}"
+    return "{\\rtf1\\ansi" + page + "{\\pict" + pict + size + " " + blob.hex() + "}}"
+
+
+def _pdf_to_png(pdf_path: str, dpi: int = 150) -> Optional[bytes]:
+    """PDF 第一页转 PNG 并裁掉空白边；整页空白返回 None。"""
+    from pdf2image import convert_from_path
+    from PIL import ImageOps
+
+    pages = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
+    if not pages:
+        return None
+    page = pages[0].convert("RGB")
+    bbox = ImageOps.invert(page.convert("L")).getbbox()
+    if not bbox:
+        return None
+    pad = 8
+    bbox = (max(bbox[0] - pad, 0), max(bbox[1] - pad, 0),
+            min(bbox[2] + pad, page.width), min(bbox[3] + pad, page.height))
+    buf = io.BytesIO()
+    page.crop(bbox).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class WordQuestionSplitter:
@@ -210,14 +266,17 @@ class WordQuestionSplitter:
 
                 # 提取段落中的图片
                 images, image_warnings = self._extract_images_from_paragraph(para, doc)
+                vml_images, ole_previews = self._extract_vml_media(para, doc)
+                images.extend(vml_images)
 
-                if not text and not images:
+                if not text and not images and not ole_previews:
                     continue
 
                 elements.append({
                     "type": "paragraph",
                     "text": text,
                     "images": images,
+                    "ole_previews": ole_previews,
                     "warnings": image_warnings,
                     "element": para
                 })
@@ -282,6 +341,70 @@ class WordQuestionSplitter:
                             warnings.append("image_media_extract_failed")
 
         return images, list(dict.fromkeys(warnings))
+
+    # 公式对象的预览图通常 < 1KB；小于此值的不当作「图」
+    OLE_PREVIEW_MIN_BYTES = 3000
+    VECTOR_RENDER_TIMEOUT = 60
+
+    def _extract_vml_media(self, para: DocxParagraph, doc: Document) -> Tuple[List[str], List[Tuple[bytes, str]]]:
+        """VML 图片（w:pict / w:object 里的 v:imagedata）。
+
+        位图（老版 Word 存的图片）直接当图片返回；WMF/EMF（MathType 公式、OLE 对象预览）
+        只收集为候选，由 _question_to_dict 在题目缺图时兜底渲染。
+        """
+        images: List[str] = []
+        previews: List[Tuple[bytes, str]] = []
+        rel_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
+        fallback_tag = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback'
+        for imagedata in para._p.iter('{urn:schemas-microsoft-com:vml}imagedata'):
+            # mc:AlternateContent 的 VML 兜底与 w:drawing 是同一张图，跳过免重复
+            if any(ancestor.tag == fallback_tag for ancestor in imagedata.iterancestors()):
+                continue
+            rId = imagedata.get(rel_attr)
+            if not rId:
+                continue
+            try:
+                part = doc.part.related_parts[rId]
+            except KeyError:
+                continue
+            blob = part.blob
+            if self._is_valid_image(blob):
+                images.append(base64.b64encode(blob).decode('utf-8'))
+                continue
+            ext = os.path.splitext(str(part.partname))[1].lower()
+            if ext in ('.wmf', '.emf') and len(blob) >= self.OLE_PREVIEW_MIN_BYTES:
+                previews.append((blob, ext))
+        return images, previews
+
+    def _render_largest_ole_preview(self, previews: List[Tuple[bytes, str]]) -> Optional[str]:
+        if not previews:
+            return None
+        blob, ext = max(previews, key=lambda item: len(item[0]))
+        try:
+            with tempfile.TemporaryDirectory(prefix="ole_preview_") as tmp:
+                # 现网镜像只装了 LibreOffice Writer（没有 Draw），打不开单独的 WMF/EMF：
+                # 包进 RTF 交给 Writer 转 PDF，再光栅化成 PNG
+                src = os.path.join(tmp, "preview.rtf")
+                with open(src, "w", encoding="ascii") as f:
+                    f.write(_metafile_rtf(blob, ext))
+                result = subprocess.run(
+                    ["soffice", f"-env:UserInstallation=file://{tmp}/lo_profile", "--headless",
+                     "--convert-to", "pdf", "--outdir", tmp, src],
+                    capture_output=True, text=True, timeout=self.VECTOR_RENDER_TIMEOUT,
+                )
+                pdf_path = os.path.join(tmp, "preview.pdf")
+                if result.returncode != 0 or not os.path.exists(pdf_path):
+                    logger.warning(f"[图片提取] OLE 预览图渲染失败: {result.stderr[:200]}")
+                    return None
+                png = _pdf_to_png(pdf_path)
+            if not png:
+                logger.warning("[图片提取] OLE 预览图渲染为空白")
+                return None
+            logger.info(f"[图片提取] 题干缺图，已用 OLE 预览图兜底（{ext}, {len(blob)}B → PNG {len(png)}B）")
+            return base64.b64encode(png).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"[图片提取] OLE 预览图渲染异常: {e}")
+            return None
 
     def _is_valid_image(self, image_bytes: bytes) -> bool:
         """
@@ -454,7 +577,8 @@ class WordQuestionSplitter:
                             for img_base64 in element["images"]
                         ],
                         warnings=list(element.get("warnings", [])),
-                        section_header=current_section_header  # 附加分节标题
+                        section_header=current_section_header,  # 附加分节标题
+                        ole_previews=list(element.get("ole_previews", [])),
                     )
                     logger.debug(f"[题号检测] 识别到题目{question_id}，模式={pattern_type}")
                 else:
@@ -466,6 +590,7 @@ class WordQuestionSplitter:
                             if warning not in current_question.warnings:
                                 current_question.warnings.append(warning)
                         current_question.images.extend(element["images"])
+                        current_question.ole_previews.extend(element.get("ole_previews", []))
                         current_question.media.extend(
                             {"type": "image", "base64": img_base64}
                             for img_base64 in element["images"]
@@ -586,10 +711,16 @@ class WordQuestionSplitter:
                     "base64": item["base64"]
                 })
 
-        table_count = sum(1 for item in media_for_ai if item["type"] == "table")
-        image_count = sum(1 for item in media_for_ai if item["type"] == "image")
         expected_table = bool(self.TABLE_CUE_PATTERN.search(question.content or ""))
         expected_image = bool(self.IMAGE_CUE_PATTERN.search(question.content or ""))
+        if expected_image and not any(item["type"] == "image" for item in media_for_ai):
+            # 题干「如图」却没有位图：图可能画在 MathType / OLE 对象里，渲染其中最大的预览图兜底
+            fallback = self._render_largest_ole_preview(question.ole_previews)
+            if fallback:
+                media_for_ai.append({"type": "image", "base64": fallback})
+                question.warnings.append("image_from_ole_preview")
+        table_count = sum(1 for item in media_for_ai if item["type"] == "table")
+        image_count = sum(1 for item in media_for_ai if item["type"] == "image")
         integrity_warnings = []
         if expected_table and table_count == 0:
             integrity_warnings.append("table_media_missing")

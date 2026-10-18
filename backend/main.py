@@ -168,21 +168,15 @@ async def start_cleanup_task():
         while True:
             await asyncio.sleep(300)  # 每 5 分钟
             try:
-                # 清理过期 token
-                from auth_router import active_tokens, _login_attempts, TOKEN_TTL_SECONDS
-                now = datetime.now()
-                expired = [k for k, v in active_tokens.items()
-                           if (now - datetime.fromisoformat(v["login_time"])).total_seconds() > TOKEN_TTL_SECONDS]
-                for k in expired:
-                    del active_tokens[k]
-
                 # 清理过期登录尝试记录
+                from auth_router import _login_attempts
+                now = datetime.now()
                 stale = [ip for ip, (count, first) in _login_attempts.items()
                          if (now - first).total_seconds() > 300]
                 for ip in stale:
                     del _login_attempts[ip]
 
-                # 清理过期 session
+                # 清理过期 token / session（runtime_store 按 expires_at 删，token 不再需要逐个比对）
                 from session_manager import clean_expired_sessions
                 clean_expired_sessions()
 
@@ -190,10 +184,14 @@ async def start_cleanup_task():
                 import task_manager
                 task_manager.cleanup()
 
-                if expired or stale:
-                    logger.debug(f"[定期清理] tokens={len(expired)} attempts={len(stale)}")
+                if stale:
+                    logger.debug(f"[定期清理] attempts={len(stale)}")
             except Exception as e:
                 logger.warning(f"[定期清理] 异常: {e}")
+
+    # 单进程部署：启动时库里还标 processing 的任务属于上一个进程，已无人执行
+    import task_manager
+    task_manager.fail_unfinished()
 
     asyncio.create_task(_periodic_cleanup())
     logger.info("[主模块] 后台清理任务已启动（间隔 5 分钟）")

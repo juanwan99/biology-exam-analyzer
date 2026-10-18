@@ -72,6 +72,8 @@ PROVIDERS = [
         "model_role": "analysis_text",
         "model_policy": "exam-review-deepseek-primary",
         "reasoning_effort": "medium",
+        # finish_reason=length 时关闭思考（thinking.type=disabled）满额重试一次，见 llm_client
+        "length_retry_without_thinking": True,
         "response_format": "json_object",
         "max_tokens": 16384,
         "subq_max_tokens": 65536,

@@ -15,6 +15,7 @@ from analysis_options import want_competency_supplement
 from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
+from score_rules import SOURCE_MODEL, SOURCE_SECTION_AVG, paper_score, section_average_score
 from subject_config import get_competency_dims, normalize_subject
 
 logger = get_logger()
@@ -75,7 +76,7 @@ class AnalysisService:
         self.word_splitter = word_splitter
         self.pdf_splitter = pdf_splitter
         import os
-        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
+        self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "16"))
         self._last_report_insights = None
         self._last_pipeline_audit = None
 
@@ -112,9 +113,21 @@ class AnalysisService:
             )
             question["analysis"] = analysis
 
-            if "total_score" not in question or question.get("total_score") is None:
+            rule_score, rule_source = paper_score(question)
+            if rule_score is not None:
+                question["total_score"] = rule_score
+                question["score_source"] = rule_source
+            elif "total_score" not in question or question.get("total_score") is None:
                 question["total_score"] = analysis.get("total_score")
+                question["score_source"] = SOURCE_MODEL
             total_score, score_issue = _score_record(question, analysis)
+            if score_issue:
+                # LLM 没给出有效分值：按分节「共 K 小题，共 N 分」均分兜底，不让大题落 0 分 / 难度未评估
+                avg = section_average_score(question)
+                if avg:
+                    logger.warning(f"[分值] 题目{q_id} {score_issue['reason']}，按分节均分 {avg} 兜底")
+                    total_score, score_issue = avg, None
+                    question["score_source"] = SOURCE_SECTION_AVG
             question["total_score"] = total_score
             question["score_status"] = score_issue["reason"] if score_issue else "valid"
             if score_issue:

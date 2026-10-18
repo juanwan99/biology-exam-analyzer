@@ -50,6 +50,16 @@ def fail(task_id: str, error: str):
     logger.error("[任务] 任务 %s 失败: %s", task_id, error)
 
 
+RESTART_MESSAGE = "服务重启，本次分析已中断，请重新上传"
+
+
+def fail_unfinished() -> int:
+    n = runtime_store.fail_unfinished_tasks(RESTART_MESSAGE)
+    if n:
+        logger.warning("[任务] 启动时发现 %s 个上次未完成的任务，已标记失败", n)
+    return n
+
+
 def get(task_id: str):
     return runtime_store.get_task(task_id)
 

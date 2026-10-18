@@ -393,3 +393,94 @@ class TestReasoningEffortInjection:
         provider = {"api_format": "openai_chat", "model": "deepseek", "max_tokens": 8192}
         body = _build_request_body(provider, [{"role": "user", "content": "hi"}], 1000, 0)
         assert "reasoning_effort" not in body
+
+
+# ── finish_reason=length：关思考满额重试一次 ──
+def _chat_length():
+    return httpx.Response(200, json={
+        "choices": [{"message": {"content": "{\"partial\": "}, "finish_reason": "length"}],
+    }, request=_FAKE_REQ)
+
+
+class TestLengthRetryWithoutThinking:
+    @pytest.fixture(autouse=True)
+    def setup_env(self):
+        import os
+        with patch.dict(os.environ, {"TEST_KEY_0": "k0"}):
+            yield
+
+    def _provider(self, enabled=True):
+        return {
+            "name": "deepseek", "model": "deepseek-v4-pro", "api_format": "openai_chat",
+            "base_url_env": None, "base_url_default": "https://api.test/v1/chat/completions",
+            "key_env": "TEST_KEY_0", "max_tokens": 16384, "semaphore_limit": 3, "retry_count": 1,
+            "reasoning_effort": "medium", "length_retry_without_thinking": enabled,
+        }
+
+    @pytest.mark.asyncio
+    async def test_length_then_ok_without_thinking(self):
+        from llm_client import _call_single_provider
+        bodies = []
+
+        async def mock_post(url, headers, json, timeout, proxy=None, trust_env=True):
+            bodies.append(json)
+            return _chat_length() if len(bodies) == 1 else _chat_ok()
+
+        with patch("llm_client._http_post", side_effect=mock_post):
+            text = await _call_single_provider(self._provider(), [{"role": "user", "content": "hi"}], 4096, 0, 60)
+        assert text == "hello from deepseek"
+        assert len(bodies) == 2
+        assert bodies[0].get("reasoning_effort") == "medium" and "thinking" not in bodies[0]
+        assert bodies[1]["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in bodies[1]
+        assert bodies[1]["max_tokens"] == 16384
+
+    @pytest.mark.asyncio
+    async def test_length_twice_raises_once_retried(self):
+        from llm_client import _call_single_provider
+        calls = []
+
+        async def mock_post(url, headers, json, timeout, proxy=None, trust_env=True):
+            calls.append(json)
+            return _chat_length()
+
+        with patch("llm_client._http_post", side_effect=mock_post):
+            with pytest.raises(RuntimeError, match="finish_reason=length"):
+                await _call_single_provider(self._provider(), [{"role": "user", "content": "hi"}], 4096, 0, 60)
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_disabled(self):
+        from llm_client import _call_single_provider
+        calls = []
+
+        async def mock_post(url, headers, json, timeout, proxy=None, trust_env=True):
+            calls.append(json)
+            return _chat_length()
+
+        with patch("llm_client._http_post", side_effect=mock_post):
+            with pytest.raises(RuntimeError, match="finish_reason=length"):
+                await _call_single_provider(self._provider(False), [{"role": "user", "content": "hi"}], 4096, 0, 60)
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_purpose_starts_without_thinking(self):
+        from llm_client import _call_single_provider
+        calls = []
+
+        async def mock_post(url, headers, json, timeout, proxy=None, trust_env=True):
+            calls.append(json)
+            return _chat_length()
+
+        with patch("llm_client._http_post", side_effect=mock_post):
+            with pytest.raises(RuntimeError, match="finish_reason=length"):
+                await _call_single_provider(self._provider(), [{"role": "user", "content": "hi"}], 4096, 0, 60,
+                                            purpose="question_analysis_retry")
+        # 首发即关思考；再截断不重复发
+        assert len(calls) == 1
+        assert calls[0]["thinking"] == {"type": "disabled"} and "reasoning_effort" not in calls[0]
+
+    def test_deepseek_provider_enables_length_retry(self):
+        from llm_config import PROVIDERS
+        deepseek = next(p for p in PROVIDERS if p["name"] == "deepseek")
+        assert deepseek.get("length_retry_without_thinking") is True

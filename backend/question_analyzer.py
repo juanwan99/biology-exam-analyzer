@@ -1141,10 +1141,13 @@ class QuestionAnalyzer:
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
-            sub_timeout = max(analysis_timeout, 240.0)
+            # 首发带思考限 180 s；超时 / 失败后的重试关思考直出（llm_client NO_THINKING_PURPOSES），
+            # 单个子问的长尾不再拖住整卷（实测有子问挂 270 s 才超时、重试再 2 分钟）。
+            sub_timeout = 180.0
             for sub_budget in (64000,):
                 _transient_left = 1
                 while True:
+                    _is_retry = _transient_left == 0
                     try:
                         sub_resp = await _call_with_timeout(
                             llm_call(
@@ -1159,7 +1162,7 @@ class QuestionAnalyzer:
                                 max_tokens=sub_budget,
                                 temperature=0,
                                 timeout=sub_timeout,
-                                purpose="question_analysis_subquestion",
+                                purpose="question_analysis_retry" if _is_retry else "question_analysis_subquestion",
                             ),
                             timeout=sub_timeout + 5.0,
                         )
