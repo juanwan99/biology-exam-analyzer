@@ -8,6 +8,7 @@ import base64
 import io
 from typing import List, Dict, Any, Tuple, Optional
 import os
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -34,6 +35,56 @@ class Question:
     section_header: Optional[str] = None  # 分节标题
     # OLE / VML 对象的矢量预览图（WMF/EMF 原始字节）：题干说「如图」却没取到图时才渲染兜底
     ole_previews: List[Tuple[bytes, str]] = field(default_factory=list)
+
+
+_PLACEABLE_WMF_KEY = b"\xd7\xcd\xc6\x9a"
+
+
+def _metafile_rtf(blob: bytes, ext: str) -> str:
+    """把 WMF/EMF 包成只含这一张图的 RTF（页面贴合图的大小）。"""
+    width_tw = height_tw = 0
+    if ext == ".wmf":
+        if blob[:4] == _PLACEABLE_WMF_KEY and len(blob) > 22:
+            left, top, right, bottom, inch = struct.unpack("<hhhhH", blob[6:16])
+            if inch:
+                width_tw = (right - left) * 1440 // inch
+                height_tw = (bottom - top) * 1440 // inch
+            blob = blob[22:]  # RTF 的 wmetafile 要去掉 placeable 头
+        pict = "\\wmetafile8"
+    else:
+        if len(blob) >= 40:
+            # EMF 头 rclFrame，单位 0.01 mm
+            left, top, right, bottom = struct.unpack("<iiii", blob[24:40])
+            width_tw = (right - left) * 1440 // 2540
+            height_tw = (bottom - top) * 1440 // 2540
+        pict = "\\emfblip"
+    if width_tw <= 0 or height_tw <= 0:
+        width_tw, height_tw = 9000, 6000
+    margin = 360
+    page = (f"\\paperw{width_tw + 2 * margin}\\paperh{height_tw + 2 * margin}"
+            f"\\margl{margin}\\margr{margin}\\margt{margin}\\margb{margin}")
+    size = f"\\picwgoal{width_tw}\\pichgoal{height_tw}"
+    return "{\\rtf1\\ansi" + page + "{\\pict" + pict + size + " " + blob.hex() + "}}"
+
+
+def _pdf_to_png(pdf_path: str, dpi: int = 150) -> Optional[bytes]:
+    """PDF 第一页转 PNG 并裁掉空白边；整页空白返回 None。"""
+    from pdf2image import convert_from_path
+    from PIL import ImageOps
+
+    pages = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
+    if not pages:
+        return None
+    page = pages[0].convert("RGB")
+    bbox = ImageOps.invert(page.convert("L")).getbbox()
+    if not bbox:
+        return None
+    pad = 8
+    bbox = (max(bbox[0] - pad, 0), max(bbox[1] - pad, 0),
+            min(bbox[2] + pad, page.width), min(bbox[3] + pad, page.height))
+    buf = io.BytesIO()
+    page.crop(bbox).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class WordQuestionSplitter:
@@ -331,20 +382,24 @@ class WordQuestionSplitter:
         blob, ext = max(previews, key=lambda item: len(item[0]))
         try:
             with tempfile.TemporaryDirectory(prefix="ole_preview_") as tmp:
-                src = os.path.join(tmp, "preview" + ext)
-                with open(src, "wb") as f:
-                    f.write(blob)
+                # 现网镜像只装了 LibreOffice Writer（没有 Draw），打不开单独的 WMF/EMF：
+                # 包进 RTF 交给 Writer 转 PDF，再光栅化成 PNG
+                src = os.path.join(tmp, "preview.rtf")
+                with open(src, "w", encoding="ascii") as f:
+                    f.write(_metafile_rtf(blob, ext))
                 result = subprocess.run(
                     ["soffice", f"-env:UserInstallation=file://{tmp}/lo_profile", "--headless",
-                     "--convert-to", "png", "--outdir", tmp, src],
+                     "--convert-to", "pdf", "--outdir", tmp, src],
                     capture_output=True, text=True, timeout=self.VECTOR_RENDER_TIMEOUT,
                 )
-                png_path = os.path.join(tmp, "preview.png")
-                if result.returncode != 0 or not os.path.exists(png_path):
+                pdf_path = os.path.join(tmp, "preview.pdf")
+                if result.returncode != 0 or not os.path.exists(pdf_path):
                     logger.warning(f"[图片提取] OLE 预览图渲染失败: {result.stderr[:200]}")
                     return None
-                with open(png_path, "rb") as f:
-                    png = f.read()
+                png = _pdf_to_png(pdf_path)
+            if not png:
+                logger.warning("[图片提取] OLE 预览图渲染为空白")
+                return None
             logger.info(f"[图片提取] 题干缺图，已用 OLE 预览图兜底（{ext}, {len(blob)}B → PNG {len(png)}B）")
             return base64.b64encode(png).decode('utf-8')
         except Exception as e:

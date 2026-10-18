@@ -156,10 +156,11 @@ def _fake_soffice(monkeypatch, calls, ok=True):
         calls.append(cmd)
         outdir = cmd[cmd.index("--outdir") + 1]
         if ok:
-            Path(outdir, "preview.png").write_bytes(_png_bytes())
+            Path(outdir, "preview.pdf").write_bytes(b"%PDF-1.4 fake")
         return subprocess.CompletedProcess(cmd, 0 if ok else 1, "", "" if ok else "boom")
 
     monkeypatch.setattr("word_splitter.subprocess.run", fake_run)
+    monkeypatch.setattr("word_splitter._pdf_to_png", lambda path: _png_bytes())
 
 
 def _question(content, previews):
@@ -176,7 +177,7 @@ def test_missing_figure_falls_back_to_largest_ole_preview(monkeypatch):
     assert result["media_integrity"]["status"] == "ok"
     assert result["media_integrity"]["actual_images"] == 1
     assert "image_from_ole_preview" in result["warnings"]
-    assert len(calls) == 1 and calls[0][-1].endswith("preview.wmf")
+    assert len(calls) == 1 and calls[0][-1].endswith("preview.rtf")
 
 
 def test_no_ole_render_when_question_needs_no_figure(monkeypatch):
@@ -192,3 +193,15 @@ def test_ole_render_failure_keeps_missing_warning(monkeypatch):
     result = WordQuestionSplitter()._question_to_dict(_question("23. 如图所示。", [(b"\x02" * 5700, ".wmf")]))
     assert result["media_integrity"]["status"] == "failed"
     assert "image_media_missing" in result["media_integrity"]["warnings"]
+
+
+def test_metafile_rtf_strips_placeable_header_and_sizes_page():
+    import struct
+    from word_splitter import _metafile_rtf
+    body = b"\x01\x00\x09\x00" + b"\xab" * 10
+    # placeable 头：bbox 0,0 → 2304×1152 逻辑单位，2304 单位/英寸 → 1440×720 twips
+    header = b"\xd7\xcd\xc6\x9a" + b"\x00\x00" + struct.pack("<hhhhH", 0, 0, 2304, 1152, 2304) + b"\x00" * 6
+    rtf = _metafile_rtf(header + body, ".wmf")
+    assert "\\wmetafile8\\picwgoal1440\\pichgoal720 " + body.hex() in rtf
+    assert "d7cdc69a" not in rtf
+    assert "\\paperw2160\\paperh1440" in rtf
