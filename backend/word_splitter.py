@@ -7,7 +7,10 @@ import re
 import base64
 import io
 from typing import List, Dict, Any, Tuple, Optional
-from dataclasses import dataclass
+import os
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
 from docx import Document
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
@@ -29,6 +32,8 @@ class Question:
     media: List[Dict[str, Any]]  # 按文档顺序保存图片和表格
     warnings: List[str]
     section_header: Optional[str] = None  # 分节标题
+    # OLE / VML 对象的矢量预览图（WMF/EMF 原始字节）：题干说「如图」却没取到图时才渲染兜底
+    ole_previews: List[Tuple[bytes, str]] = field(default_factory=list)
 
 
 class WordQuestionSplitter:
@@ -210,14 +215,17 @@ class WordQuestionSplitter:
 
                 # 提取段落中的图片
                 images, image_warnings = self._extract_images_from_paragraph(para, doc)
+                vml_images, ole_previews = self._extract_vml_media(para, doc)
+                images.extend(vml_images)
 
-                if not text and not images:
+                if not text and not images and not ole_previews:
                     continue
 
                 elements.append({
                     "type": "paragraph",
                     "text": text,
                     "images": images,
+                    "ole_previews": ole_previews,
                     "warnings": image_warnings,
                     "element": para
                 })
@@ -282,6 +290,66 @@ class WordQuestionSplitter:
                             warnings.append("image_media_extract_failed")
 
         return images, list(dict.fromkeys(warnings))
+
+    # 公式对象的预览图通常 < 1KB；小于此值的不当作「图」
+    OLE_PREVIEW_MIN_BYTES = 3000
+    VECTOR_RENDER_TIMEOUT = 60
+
+    def _extract_vml_media(self, para: DocxParagraph, doc: Document) -> Tuple[List[str], List[Tuple[bytes, str]]]:
+        """VML 图片（w:pict / w:object 里的 v:imagedata）。
+
+        位图（老版 Word 存的图片）直接当图片返回；WMF/EMF（MathType 公式、OLE 对象预览）
+        只收集为候选，由 _question_to_dict 在题目缺图时兜底渲染。
+        """
+        images: List[str] = []
+        previews: List[Tuple[bytes, str]] = []
+        rel_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
+        fallback_tag = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback'
+        for imagedata in para._p.iter('{urn:schemas-microsoft-com:vml}imagedata'):
+            # mc:AlternateContent 的 VML 兜底与 w:drawing 是同一张图，跳过免重复
+            if any(ancestor.tag == fallback_tag for ancestor in imagedata.iterancestors()):
+                continue
+            rId = imagedata.get(rel_attr)
+            if not rId:
+                continue
+            try:
+                part = doc.part.related_parts[rId]
+            except KeyError:
+                continue
+            blob = part.blob
+            if self._is_valid_image(blob):
+                images.append(base64.b64encode(blob).decode('utf-8'))
+                continue
+            ext = os.path.splitext(str(part.partname))[1].lower()
+            if ext in ('.wmf', '.emf') and len(blob) >= self.OLE_PREVIEW_MIN_BYTES:
+                previews.append((blob, ext))
+        return images, previews
+
+    def _render_largest_ole_preview(self, previews: List[Tuple[bytes, str]]) -> Optional[str]:
+        if not previews:
+            return None
+        blob, ext = max(previews, key=lambda item: len(item[0]))
+        try:
+            with tempfile.TemporaryDirectory(prefix="ole_preview_") as tmp:
+                src = os.path.join(tmp, "preview" + ext)
+                with open(src, "wb") as f:
+                    f.write(blob)
+                result = subprocess.run(
+                    ["soffice", f"-env:UserInstallation=file://{tmp}/lo_profile", "--headless",
+                     "--convert-to", "png", "--outdir", tmp, src],
+                    capture_output=True, text=True, timeout=self.VECTOR_RENDER_TIMEOUT,
+                )
+                png_path = os.path.join(tmp, "preview.png")
+                if result.returncode != 0 or not os.path.exists(png_path):
+                    logger.warning(f"[图片提取] OLE 预览图渲染失败: {result.stderr[:200]}")
+                    return None
+                with open(png_path, "rb") as f:
+                    png = f.read()
+            logger.info(f"[图片提取] 题干缺图，已用 OLE 预览图兜底（{ext}, {len(blob)}B → PNG {len(png)}B）")
+            return base64.b64encode(png).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"[图片提取] OLE 预览图渲染异常: {e}")
+            return None
 
     def _is_valid_image(self, image_bytes: bytes) -> bool:
         """
@@ -454,7 +522,8 @@ class WordQuestionSplitter:
                             for img_base64 in element["images"]
                         ],
                         warnings=list(element.get("warnings", [])),
-                        section_header=current_section_header  # 附加分节标题
+                        section_header=current_section_header,  # 附加分节标题
+                        ole_previews=list(element.get("ole_previews", [])),
                     )
                     logger.debug(f"[题号检测] 识别到题目{question_id}，模式={pattern_type}")
                 else:
@@ -466,6 +535,7 @@ class WordQuestionSplitter:
                             if warning not in current_question.warnings:
                                 current_question.warnings.append(warning)
                         current_question.images.extend(element["images"])
+                        current_question.ole_previews.extend(element.get("ole_previews", []))
                         current_question.media.extend(
                             {"type": "image", "base64": img_base64}
                             for img_base64 in element["images"]
@@ -586,10 +656,16 @@ class WordQuestionSplitter:
                     "base64": item["base64"]
                 })
 
-        table_count = sum(1 for item in media_for_ai if item["type"] == "table")
-        image_count = sum(1 for item in media_for_ai if item["type"] == "image")
         expected_table = bool(self.TABLE_CUE_PATTERN.search(question.content or ""))
         expected_image = bool(self.IMAGE_CUE_PATTERN.search(question.content or ""))
+        if expected_image and not any(item["type"] == "image" for item in media_for_ai):
+            # 题干「如图」却没有位图：图可能画在 MathType / OLE 对象里，渲染其中最大的预览图兜底
+            fallback = self._render_largest_ole_preview(question.ole_previews)
+            if fallback:
+                media_for_ai.append({"type": "image", "base64": fallback})
+                question.warnings.append("image_from_ole_preview")
+        table_count = sum(1 for item in media_for_ai if item["type"] == "table")
+        image_count = sum(1 for item in media_for_ai if item["type"] == "image")
         integrity_warnings = []
         if expected_table and table_count == 0:
             integrity_warnings.append("table_media_missing")

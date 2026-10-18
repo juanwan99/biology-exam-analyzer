@@ -50,6 +50,7 @@ logger = get_logger()
 # 持有后台分析任务引用，防 asyncio 在任务完成前将其 GC 回收（CPython 仅弱引用 task）
 _bg_tasks: set = set()
 import task_manager
+from score_rules import mark_section_mismatch
 
 router = APIRouter(tags=["analysis"])
 
@@ -419,6 +420,9 @@ async def _run_analysis_pipeline(
         questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
         logger.info("所有题目分析完成")
         task_manager.update(task_id, total, "正在生成报告...")
+        score_warnings = mark_section_mismatch(questions)
+        for w in score_warnings:
+            logger.warning(f"[分值] 分节合计不符: {w}")
 
         try:
             competency_list = _build_competency_list(questions)
@@ -464,10 +468,8 @@ async def _run_analysis_pipeline(
             db = await get_db_session()
             try:
                 prediction_service = PredictionService(db)
-                raw_total = sum(
-                    q.get('analysis', {}).get('total_score', q.get('total_score', 0))
-                    for q in questions
-                )
+                from prediction_service import _question_score
+                raw_total = sum(_question_score(q) for q in questions)
                 min_reasonable = len(questions) * 2
                 total_score = 100 if raw_total < min_reasonable else raw_total
                 score_prediction = await prediction_service.predict_exam_score(
@@ -487,12 +489,14 @@ async def _run_analysis_pipeline(
 
         result = {
             "total_count": len(questions),
-            "questions": questions,
+            # 原图 base64 只给 LLM 用，不回前端（湖南卷 1.25MB 结果里占 0.56MB）
+            "questions": [{k: v for k, v in q.items() if k != "_media_for_ai"} for q in questions],
             "processing_time": elapsed_time,
             "mode": mode,
             "competency_summary": competency_summary,
             "exam_statistics": exam_statistics,
             "metadata_quality": metadata_quality,
+            "score_warnings": score_warnings,
             "report_url": report_url,
             "html_report_url": html_report_url,
             "report_error": report_error,
@@ -502,6 +506,11 @@ async def _run_analysis_pipeline(
 
         task_manager.complete(task_id, result)
 
+    except asyncio.CancelledError:
+        # 进程关停 / 重启时任务被取消：标 failed，前端拿到明确提示而不是一直转圈
+        logger.warning(f"[自动分析] 后台任务被取消: {task_id}")
+        task_manager.fail(task_id, task_manager.RESTART_MESSAGE)
+        raise
     except Exception as e:
         logger.error(f"[自动分析] 后台任务失败: {e}", exc_info=True)
         task_manager.fail(task_id, str(e))

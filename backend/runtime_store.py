@@ -206,6 +206,28 @@ def delete_task(task_id):
     _delete("tasks", "task_id", task_id)
 
 
+def fail_unfinished_tasks(message):
+    """进程启动时调用：上次进程里还在 processing 的任务已无人执行，标 failed 让前端收到明确提示。"""
+    try:
+        with _lock:
+            db = _db()
+            rows = db.execute("SELECT task_id, payload FROM tasks").fetchall()
+            failed = 0
+            for row in rows:
+                payload = json.loads(row["payload"])
+                if payload.get("status") != "processing":
+                    continue
+                payload.update({"status": "failed", "error": message, "message": "分析失败: %s" % message})
+                db.execute("UPDATE tasks SET payload = ? WHERE task_id = ?",
+                           (json.dumps(payload, ensure_ascii=False, default=str), row["task_id"]))
+                failed += 1
+            db.commit()
+            return failed
+    except Exception as e:
+        logger.warning("[runtime_store] fail_unfinished_tasks failed: %s", e)
+        return 0
+
+
 def cleanup_tasks(max_age_hours=TASK_TTL_HOURS):
     try:
         with _lock:

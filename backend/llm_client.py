@@ -226,6 +226,22 @@ def _raise_if_incomplete_finish(provider_name: str, finish_reason):
     )
 
 
+def _should_retry_without_thinking(provider: dict, body: dict, exc: Exception) -> bool:
+    return (
+        bool(provider.get("length_retry_without_thinking"))
+        and "thinking" not in body
+        and "finish_reason=length" in str(exc)
+    )
+
+
+def _body_without_thinking(provider: dict, body: dict) -> dict:
+    retry_body = dict(body)
+    retry_body.pop("reasoning_effort", None)
+    retry_body["thinking"] = {"type": "disabled"}
+    retry_body["max_tokens"] = max(int(body.get("max_tokens") or 0), int(provider["max_tokens"]))
+    return retry_body
+
+
 def _deterministic_seed(provider: dict) -> int:
     """确定性复现 seed（temperature<=0 时使用）。统一各 provider 的 seed 注入路径，
     确保可复现性（RC2 根因修复）。"""
@@ -397,7 +413,23 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                 resp.raise_for_status()
                 data = resp.json()
                 _last_provider_usage.set(_extract_usage(provider["api_format"], data))
-                return _extract_text(provider["api_format"], data)
+                try:
+                    return _extract_text(provider["api_format"], data)
+                except RuntimeError as e:
+                    if not _should_retry_without_thinking(provider, body, e):
+                        raise
+                    # 推理模型思考 token 烧光 max_tokens → 输出截断。原地关思考、满额度再发一次，
+                    # 不交给上层逐级缩 max_tokens 的重试阶梯（那只会截得更早）。
+                    body = _body_without_thinking(provider, body)
+                    logger.warning(f"[LLM] {provider['name']} 输出截断(finish_reason=length)，"
+                                   f"关闭思考、max_tokens={body['max_tokens']} 重试一次")
+                    resp = await _http_post(url, headers=headers, json=body,
+                                            timeout=timeout, proxy=proxy,
+                                            trust_env=not no_proxy)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    _last_provider_usage.set(_extract_usage(provider["api_format"], data))
+                    return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e
                 status = e.response.status_code

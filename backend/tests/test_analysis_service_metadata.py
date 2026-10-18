@@ -910,3 +910,52 @@ def _stub_visual_split(monkeypatch):
         lambda file_path, subject="biology": {"questions": [{"id": 1, "content": "Question stem"}]},
         raising=False,
     )
+
+
+class _ScoreAnalyzer(FakeAnalyzer):
+    def __init__(self, llm_score):
+        self.llm_score = llm_score
+
+    async def analyze_question(self, **kwargs):
+        result = await super().analyze_question(**kwargs)
+        result["total_score"] = self.llm_score
+        return result
+
+
+class _RecordingDifficulty(FakeDifficultyEngine):
+    def __init__(self):
+        self.scores = []
+
+    async def evaluate_with_refinement(self, **kwargs):
+        self.scores.append(kwargs["question"]["total_score"])
+        return await super().evaluate_with_refinement(**kwargs)
+
+
+def _score_service(llm_score, difficulty):
+    return AnalysisService(
+        analyzer=_ScoreAnalyzer(llm_score), difficulty_engine=difficulty,
+        competency_analyzer=FakeCompetencyAnalyzer(), knowledge_mapper=None,
+        doc_processor=None, word_splitter=None, pdf_splitter=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_paper_marked_score_beats_llm_score():
+    difficulty = _RecordingDifficulty()
+    q = {"id": 17, "content": "17.（14分）气味分子与小鼠嗅细胞……", "_section_header": "三、非选择题：本题共5小题，共60分。"}
+    result = await _score_service(12, difficulty).analyze_question(q, image_bytes=[], mode="deep")
+    assert result["total_score"] == 14.0
+    assert result["score_source"] == "paper"
+    assert result["score_status"] == "valid"
+    assert difficulty.scores == [14.0]
+
+
+@pytest.mark.asyncio
+async def test_unmarked_big_question_with_zero_llm_score_uses_section_average():
+    difficulty = _RecordingDifficulty()
+    q = {"id": 22, "content": "22. 某二倍体两性花植物……", "_section_header": "三、非选择题：本题共5小题．共55分。"}
+    result = await _score_service(0, difficulty).analyze_question(q, image_bytes=[], mode="deep")
+    assert result["total_score"] == 11.0
+    assert result["score_source"] == "section_average"
+    assert result["score_status"] == "valid"
+    assert difficulty.scores == [11.0]

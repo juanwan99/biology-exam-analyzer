@@ -20,7 +20,7 @@
 
 **统一入口**: `llm_client.llm_call(messages, max_tokens, temperature)`
 **配置中枢**: `llm_config.py` 定义 Provider 列表 + `get_providers()` 过滤已配置 key
-**并发控制**: 每 provider semaphore_limit=10，题目级并发由 `ANALYSIS_CONCURRENCY` 环境变量控制（默认 5）
+**并发控制**: 每 provider semaphore_limit=10，题目级并发由 `MAX_WORKERS` / `ANALYSIS_CONCURRENCY` 环境变量控制（默认 16）
 
 > 400 Bad Request 不 fallback（prompt 问题），401/403 会 fallback。
 

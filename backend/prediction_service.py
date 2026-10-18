@@ -19,6 +19,24 @@ from logger import get_logger
 logger = get_logger()
 
 
+def _number(value) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _question_score(q: Dict) -> float:
+    """题目满分：优先题目层（已核过分值），其次 LLM 分析层；都无效返回 0。"""
+    for value in (q.get('total_score'), (q.get('analysis') or {}).get('total_score')):
+        score = _number(value)
+        if score is not None and score > 0:
+            return score
+    return 0.0
+
+
 class PredictionService:
     """分数预估服务"""
 
@@ -211,20 +229,25 @@ class PredictionService:
         knowledge_points_coverage = {}
 
         # 如果题目没有分值，按总分均分
-        has_scores = any(
-            float(q.get('total_score', q.get('analysis', {}).get('total_score', 0))) > 0
-            for q in questions
-        )
+        has_scores = any(_question_score(q) > 0 for q in questions)
         default_score = total_score / len(questions) if (not has_scores and len(questions) > 0) else 0
+
+        # 难度未评估（final_difficulty=None）的题按卷内已评估题的均值估，不让一题拖垮整卷预估
+        known_diffs = [d for d in (_number((q.get('difficulty') or {}).get('final_difficulty')) for q in questions)
+                       if d is not None]
+        fallback_diff = round(sum(known_diffs) / len(known_diffs), 2) if known_diffs else 5.0
 
         for i, q in enumerate(questions):
             # 提取难度和知识点
-            difficulty_data = q.get('difficulty', {})
-            diff = float(difficulty_data.get('final_difficulty', 5.0))
-            analysis = q.get('analysis', {})
-            kps = analysis.get('knowledge_points', [])
+            difficulty_data = q.get('difficulty') or {}
+            diff = _number(difficulty_data.get('final_difficulty'))
+            if diff is None:
+                diff = fallback_diff
+                warnings.append(f"第{q.get('id', i + 1)}题难度未评估，按卷内均值{fallback_diff}估算")
+            analysis = q.get('analysis') or {}
+            kps = analysis.get('knowledge_points') or []
             chapter = analysis.get('textbook_chapter')
-            q_score = float(q.get('total_score', analysis.get('total_score', 0)))
+            q_score = _question_score(q)
             if q_score <= 0:
                 q_score = default_score
 
