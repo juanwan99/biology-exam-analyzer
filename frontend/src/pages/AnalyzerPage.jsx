@@ -3,7 +3,7 @@ import axios from 'axios'
 import { ScanSearch, FileText, ClipboardEdit, TrendingUp, Crosshair, Brain, LogOut } from 'lucide-react'
 import ResultDisplay from '../components/ResultDisplay'
 
-const isReviewMode = /^\d+\.\d+\.\d+\.\d+$/.test(window.location.hostname)
+const isReviewMode = true  // midterm demo: biology /api/auth, not momowan credits
 const AUTH_API = isReviewMode ? '/api/auth' : 'https://api.momowan.xyz/api/auth'
 
 function AnalyzerPage() {
