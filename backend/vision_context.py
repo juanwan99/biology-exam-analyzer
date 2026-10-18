@@ -20,6 +20,31 @@ from metadata_contracts import LLMCallRecord
 
 VISUAL_CONTEXT_PROMPT_ID = "biology.image_inputs.visual_context"
 VISUAL_CONTEXT_VERSION = "qwen-vision-preprocess-v1"
+# content_hash -> (prompt_context, call_dump)
+# 键为 题干+题型+章节头+图片内容(base64) 的 sha256：跨试卷即便题号相同，
+# 只要题干或图片不同即不会命中，杜绝同题号跨卷串卷污染。
+_visual_context_cache = {}
+_VISUAL_CONTEXT_CACHE_MAX = 256
+
+
+def _visual_context_cache_key(
+    question_text: str,
+    question_type: str,
+    section_header: str,
+    normalized: list[dict[str, str]],
+) -> str:
+    # ①A 视觉去重(GOAL 调研 #1):视觉转写是对整张图的客观抽取(visual_text/ocr/tables/figures),
+    # 与题型/分节/题干无关。缓存键此前掺入 question_type/section_header,而三个消费方
+    # (question_analyzer/feature_extractor/competency_analyzer)传入这两字段不一致(常为空),
+    # 同题同图算出不同 key、缓存被打穿 → 同图被 Qwen-VL 重复转写 2-3 次(全卷 29 次 vs 带图题 11 道)。
+    # 改为仅按图片 base64 做键:同题图片三方同源(派生自同一 media_items)→ 必命中,29→约11 次真调用;
+    # 同图跨题共享转写无害(转写的是整图内容,题干差异由下游 DeepSeek 处理)。
+    # 签名保留 question_text/question_type/section_header 参数以零改调用点,仅不再参与键。
+    h = sha256()
+    for item in normalized:
+        h.update((item.get("base64") or "").encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
 
 
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
@@ -31,7 +56,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+    for key in ("provider_errors", "status", "model_policy", "usage"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata
@@ -97,20 +122,25 @@ def build_visual_context_prompt(
     question_id: int | None = None,
     question_type: str = "",
     section_header: str = "",
+    subject: str = "biology",
 ) -> str:
+    from subject_config import get_subject_name
+    subject_cn = get_subject_name(subject)
     return (
-        "You are the vision preprocessing layer for a high-school biology exam-review system.\n"
+        f"You are the vision preprocessing layer for a high-school {subject_cn} (学科) exam-review system.\n"
         "Extract only visual information from the attached image(s). Do not judge difficulty, "
-        "competencies, answer correctness, or item quality; DeepSeek will perform those tasks later.\n"
-        "Preserve any Chinese text, labels, legends, table entries, units, and option markers exactly "
-        "when visible. If something is unclear, put it in uncertainties instead of guessing.\n\n"
+        "competencies, answer correctness, or item quality; the downstream model will perform those tasks later.\n"
+        "Preserve any Chinese text, labels, legends, table entries, units, formulas, equations, and option "
+        "markers (A/B/C/D and their full option text) exactly when visible. If something is unclear, put it "
+        "in uncertainties instead of guessing.\n\n"
+        f"subject: {subject_cn}\n"
         f"question_id: {question_id}\n"
         f"question_type: {question_type}\n"
         f"section_header: {section_header}\n"
         f"known_question_text:\n{question_text}\n\n"
         "Return one JSON object with these keys only:\n"
         "{\n"
-        '  "visual_text": "concise description of visible biological structures, charts, apparatus, curves, or diagrams",\n'
+        '  "visual_text": "concise description of visible structures, charts, apparatus, curves, diagrams, or formulas",\n'
         '  "ocr_text": "all readable text from the image, preserving Chinese and symbols",\n'
         '  "tables": ["table/axis/curve information, one item per table or chart"],\n'
         '  "figures": ["diagram/apparatus/process information, one item per visual object"],\n'
@@ -126,6 +156,7 @@ async def extract_visual_context(
     question_id: int | None = None,
     question_type: str = "",
     section_header: str = "",
+    subject: str = "biology",
     call_id: str | None = None,
     timeout: float = 120.0,
 ) -> tuple[str, dict | None]:
@@ -133,11 +164,23 @@ async def extract_visual_context(
     if not normalized:
         return "", None
 
+    # 缓存键改为内容哈希后不再依赖 question_id（None 时仍按内容缓存，命中更安全） #semantic-ok
+    cache_key = _visual_context_cache_key(question_text, question_type, section_header, normalized)
+    if cache_key in _visual_context_cache:
+        from logger import get_logger
+        get_logger().info(f"[视觉] 题目{question_id} visual_context 命中内容缓存，跳过 qwen_vision API")
+        # GOAL #8:命中回放标记 usage_from_cache 防双计费(本次零 qwen API 调用)
+        ctx, cached_call = _visual_context_cache[cache_key]
+        cached_call = dict(cached_call)
+        cached_call["metadata"] = {**(cached_call.get("metadata") or {}), "usage_from_cache": True}
+        return ctx, cached_call
+
     prompt = build_visual_context_prompt(
         question_text=question_text,
         question_id=question_id,
         question_type=question_type,
         section_header=section_header,
+        subject=subject,
     )
     response_text = await llm_call(
         messages=messages_with_media(prompt, normalized),
@@ -200,4 +243,7 @@ async def extract_visual_context(
         "Visual context extracted by Qwen Vision for DeepSeek review only:\n"
         f"{context_text}"
     )
+    if len(_visual_context_cache) >= _VISUAL_CONTEXT_CACHE_MAX:
+        _visual_context_cache.pop(next(iter(_visual_context_cache)))
+    _visual_context_cache[cache_key] = (prompt_context, call.model_dump())
     return prompt_context, call.model_dump()

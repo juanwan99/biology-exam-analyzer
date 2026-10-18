@@ -46,6 +46,7 @@ function NotFoundPage() {
 }
 
 function App() {
+  const isReviewMode = /^\d+\.\d+\.\d+\.\d+$/.test(window.location.hostname)
   return (
     <div className="min-h-screen flex flex-col">
       <a href="#main-content" className="skip-link">
@@ -67,15 +68,17 @@ function App() {
             <span className="text-[14px] hidden md:inline" style={{ color: 'var(--color-muted)' }}>
               AI 试卷分析系统
             </span>
-            <a
-              href="https://momowan.xyz"
-              className="nav-external-link no-underline text-[15px] font-medium px-4 py-1.5"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="打开 momowan.xyz"
-            >
-              momowan.xyz
-            </a>
+            {!isReviewMode && (
+              <a
+                href="https://momowan.xyz"
+                className="nav-external-link no-underline text-[15px] font-medium px-4 py-1.5"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="打开 momowan.xyz"
+              >
+                momowan.xyz
+              </a>
+            )}
           </div>
         </div>
       </nav>

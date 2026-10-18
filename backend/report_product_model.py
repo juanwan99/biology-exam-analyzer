@@ -26,6 +26,9 @@ from report_teacher_review_narrative import (
     summarize_student_fit,
     summarize_teacher_priorities,
 )
+from subject_config import (
+    competency_dims_from_distribution,
+)
 
 
 PARSED_FIELDS = [
@@ -122,20 +125,14 @@ PROMPT_CONTRACTS = {
         ],
     },
     "competency_analysis": {
-        "prompt_id": "biology.competency_analysis",
-        "prompt": "backend/prompts/competency_analysis_prompt.txt：映射四类生物核心素养，输出权重、层级与证据。",
+        "prompt_id": "{subject}.competency_analysis",
+        "prompt": "prompts/{subject}/competency_prompt.txt：按学科课标映射各核心素养维度，输出权重、层级与证据。",
         "analysis_dimensions": [
-            "life_concept",
-            "scientific_thinking",
-            "scientific_inquiry",
-            "social_responsibility",
+            "competency_dims",
             "evidence",
         ],
         "parsed_fields": [
-            "生命观念",
-            "科学思维",
-            "科学探究",
-            "社会责任",
+            "核心素养各维度",
             "metadata_confidence",
         ],
     },
@@ -378,8 +375,11 @@ BLOOM_LEVEL_LABELS = {
     6: "创造",
 }
 
+# 生物四维：仅作 subject 缺省时的兜底（get_competency_dims("biology") 等价同序）。
+# 报告动态维度走 _active_competency_dims()，不再直接迭代该常量。
 CORE_COMPETENCIES = ("生命观念", "科学思维", "科学探究", "社会责任")
 
+# 生物专属二级细分规则（仅生物用）。非生物维度查不到 → 返回空 → 二级面板自动跳过。
 COMPETENCY_SUBDIMENSION_RULES = {
     "生命观念": [
         ("稳态与平衡观", ("稳态", "平衡", "调节", "反馈", "内环境", "激素", "神经", "homeostasis", "balance")),
@@ -1121,8 +1121,9 @@ def _competency_pct(value: Any) -> float:
 
 def _missing_competency_dims(competency: Dict) -> List[str]:
     distribution = _as_dict(competency.get("distribution"))
+    # 学科动态维度：从分布实际维度判缺口（兼容九科），无数据回退生物四维
     missing = []
-    for name in ("生命观念", "科学思维", "科学探究", "社会责任"):
+    for name in competency_dims_from_distribution(distribution, None):
         if _competency_pct(distribution.get(name)) <= 0:
             missing.append(name)
     return missing
@@ -1274,6 +1275,16 @@ def _unit_competency_weights(unit: Dict, question: Dict) -> Dict[str, float]:
     if weighted:
         total = sum(value for value in weighted.values() if value > 0)
         return {key: round(value / total, 4) for key, value in weighted.items()} if total > 0 else weighted
+    # A1.5：采分点无自身权重时（典型为大题/构答题采分点），回退到题目级四维素养权重
+    # competency_details，而非单一 primary——保留"多素养都涉及"的信息，避免矩阵塌成单列。
+    detail_weights = {}
+    for dim, info in _as_dict(question.get("competency_details")).items():
+        share = _as_dict(info).get("权重")
+        if isinstance(share, (int, float)) and share > 0:
+            detail_weights[str(dim)] = float(share)
+    if detail_weights:
+        total = sum(detail_weights.values())
+        return {key: round(value / total, 4) for key, value in detail_weights.items()} if total > 0 else detail_weights
     primary = _unit_competency(unit, question)
     return {primary: 1.0} if primary and primary != "未标注素养" else {}
 
@@ -1405,7 +1416,8 @@ def _question_pressure(question: Dict, scoring_units: List[Dict], diagnostic_uni
     }
 
 
-def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List[Dict]:
+def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict],
+                                  subject: str = "biology") -> List[Dict]:
     aggregate: Dict[str, Dict[str, Any]] = {}
 
     def bucket(name: str) -> Dict[str, Any]:
@@ -1422,7 +1434,7 @@ def _build_knowledge_exhibit_rows(knowledge: Dict, seu_rows: List[Dict]) -> List
 
     def _canon(raw_value: Any) -> tuple[str, str]:
         raw_name = str(raw_value or "未标注知识点")
-        label, _diag = canonicalize_knowledge_point(raw_name)
+        label, _diag = canonicalize_knowledge_point(raw_name, subject=subject)
         return (label or raw_name), raw_name
 
     # 源1：采分点贡献（per-link）。归一知识点名作分组 key，seu_id 去重计数。
@@ -1520,17 +1532,20 @@ def _aggregate_competency_detail_rows(rows: List[Dict]) -> List[Dict]:
 
 
 def _competency_distribution_scores(distribution: Dict, detail_rows: List[Dict]) -> Dict[str, float]:
+    distribution = _as_dict(distribution)
+    # 学科动态维度：从分布实际维度取（生物4/化学5/数学6…），无分布回退生物四维
     scores = {}
-    for name in CORE_COMPETENCIES:
-        value = _competency_pct(_as_dict(distribution).get(name))
+    for name in competency_dims_from_distribution(distribution, None):
+        value = _competency_pct(distribution.get(name))
         scores[name] = round(value * 100, 1) if 0 < value <= 1 else value
     if any(value > 0 for value in scores.values()):
         return scores
-    totals = {name: 0.0 for name in CORE_COMPETENCIES}
+    # 兜底：从 detail_rows 实际素养统计（不预设维度，兼容任意学科）
+    totals: Dict[str, float] = {}
     for row in detail_rows:
         competency = str(row.get("competency") or "")
-        if competency in totals:
-            totals[competency] += _num(row.get("score_contribution"))
+        if competency:
+            totals[competency] = totals.get(competency, 0.0) + _num(row.get("score_contribution"))
     total = sum(totals.values())
     return {name: round(value / total * 100, 1) if total else 0.0 for name, value in totals.items()}
 
@@ -1544,7 +1559,7 @@ def _build_competency_gap_rows(distribution: Dict, detail_rows: List[Dict]) -> L
         "社会责任": "可引入健康生活、生态治理、生物安全或技术伦理情境。",
     }
     rows = []
-    for name in CORE_COMPETENCIES:
+    for name in scores:
         value = scores.get(name, 0.0)
         if value <= 0:
             status = "缺失"
@@ -1556,7 +1571,7 @@ def _build_competency_gap_rows(distribution: Dict, detail_rows: List[Dict]) -> L
             "competency": name,
             "share": round(value, 1),
             "status": status,
-            "recommendation": recommendations[name],
+            "recommendation": recommendations.get(name, f"可增加显性考查「{name}」的采分点与情境设计。"),
         })
     return rows
 
@@ -2491,8 +2506,6 @@ def _build_evidence_integrity(
     metadata = _as_dict(report_data.get("metadata_quality"))
     knowledge = _as_dict(report_data.get("knowledge"))
     insights = _as_dict(insights)
-    grounding_checks = _as_list(insights.get("_grounding_checks"))
-    grounding_status = str(insights.get("_grounding_status") or "").strip()
     seu_rows = _as_list(fine_exhibits.get("seu_rows"))
     competency_rows = _as_list(fine_exhibits.get("competency_evidence_rows"))
     allocation_counts = Counter(row.get("allocation_source") or "unknown" for row in seu_rows)
@@ -2547,24 +2560,6 @@ def _build_evidence_integrity(
     knowledge_non_textbook_points = _as_list(knowledge.get("non_textbook_points"))
 
     items: List[Dict] = []
-    if grounding_checks:
-        first_grounding = _as_dict(grounding_checks[0])
-        status = str(first_grounding.get("status") or grounding_status or "unknown")
-        score = _num(first_grounding.get("support_score"), 0.0)
-        threshold = _num(first_grounding.get("threshold"), 0.6)
-        severity = "info" if status == "ok" and score >= threshold else "warning"
-        items.append({
-            "id": "report_grounding",
-            "title": "整卷结论证据校验",
-            "value": f"{score:.2f}",
-            "detail": (
-                f"证据核查状态 {status}，阈值 {threshold:.2f}；"
-                f"声明数={int(_num(first_grounding.get('claim_count'), 0))}，"
-                f"引用证据块={int(_num(first_grounding.get('cited_chunk_count'), 0))}。"
-                "低于阈值时，整卷总结需要人工复核。"
-            ),
-            "severity": severity,
-        })
     for event in _as_list(insights.get("_report_failure_events")):
         if isinstance(event, dict):
             items.append({
@@ -2775,8 +2770,6 @@ def _build_evidence_integrity(
         "knowledge_unmapped_points": knowledge_unmapped_points,
         "knowledge_non_textbook_count": knowledge_non_textbook_count,
         "knowledge_non_textbook_points": knowledge_non_textbook_points,
-        "grounding_status": grounding_status,
-        "grounding_checks": grounding_checks,
         "missing_purpose_questions": missing_purpose_questions,
         "source_counts": {
             "seu_allocation": dict(allocation_counts),
@@ -2885,6 +2878,7 @@ def build_report_product_model(report_data: Dict, insights: Dict | None = None) 
     knowledge_exhibit_rows = _build_knowledge_exhibit_rows(
         _as_dict(report_data.get("knowledge")),
         _as_list(fine_exhibits.get("knowledge_contribution_rows")) or _as_list(fine_exhibits.get("seu_rows")),
+        subject=exam.get("subject"),
     )
     evidence_integrity = _build_evidence_integrity(report_data, questions, fine_exhibits, insights)
     findings = _build_findings(report_data, rows, fine_exhibits, knowledge_exhibit_rows)

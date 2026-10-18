@@ -2,13 +2,9 @@
 教材资料服务
 处理教材上传、解析、存储和检索
 """
-import os
-import re
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List, Dict, Optional
 from sqlalchemy import select, and_, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from models import TextbookVersion, TextbookChapter, TextbookContent, KnowledgePoint
 from logger import get_logger
@@ -285,7 +281,7 @@ class TextbookService:
         keyword: str = None,
     ) -> Dict:
         """获取所有教材切片内容（带分页和筛选）- 使用textbook_chunks表"""
-        from sqlalchemy import func, and_, text
+        from sqlalchemy import text
 
         # 使用原生SQL查询textbook_chunks表
         count_sql = "SELECT COUNT(*) FROM textbook_chunks WHERE 1=1"

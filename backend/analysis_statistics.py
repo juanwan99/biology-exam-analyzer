@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from deps import get_knowledge_mapper
 from logger import get_logger
+from subject_config import normalize_subject
 
 logger = get_logger()
 _DEFAULT_GET_KNOWLEDGE_MAPPER = get_knowledge_mapper
@@ -151,6 +152,7 @@ def _safe_positive_float(value: Any, default: float) -> float:
 def _normalised_knowledge_links(
     links: List[Dict[str, Any]],
     knowledge_mapper=None,
+    subject: str = "biology",
 ) -> List[tuple[str, float]]:
     valid = []
     for link in links or []:
@@ -159,7 +161,7 @@ def _normalised_knowledge_links(
             continue
         kp = kp.strip()
         if not _is_non_textbook_skill_point(kp):
-            kp, _ = canonicalize_knowledge_point(kp, knowledge_mapper=knowledge_mapper)
+            kp, _ = canonicalize_knowledge_point(kp, knowledge_mapper=knowledge_mapper, subject=subject)
         if not kp:
             continue
         raw_share = link.get("share", 1.0)
@@ -211,6 +213,8 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
     6. Bloom 认知层级分布（分值加权）
     """
     knowledge_mapper = _get_knowledge_mapper_for_statistics()
+    # 知识点规范化为生物专属知识库，按真实学科门控（非生物学科原样保留，避免跨学科误改写）。A-1 根因修复。
+    subject = normalize_subject((questions or [{}])[0].get("subject"))
 
     BLOOM_LABELS = {1: "识记", 2: "理解", 3: "应用", 4: "分析", 5: "评价", 6: "创造"}
 
@@ -333,6 +337,7 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                     for kp, link_share in _normalised_knowledge_links(
                         seu.get("knowledge_links", []),
                         knowledge_mapper,
+                        subject=subject,
                     ):
                         w = seu_score * link_share
                         if _is_non_textbook_skill_point(kp):
@@ -364,7 +369,7 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
                         kp_list_canonical.append(raw_kp)
                         continue
                     kp_list_canonical.append(
-                        canonicalize_knowledge_point(raw_kp, knowledge_mapper=knowledge_mapper)[0]
+                        canonicalize_knowledge_point(raw_kp, knowledge_mapper=knowledge_mapper, subject=subject)[0]
                     )
                 kp_list_canonical = [kp for kp in kp_list_canonical if kp]
                 kp_list_filtered = [
@@ -413,12 +418,18 @@ def generate_exam_statistics(questions: List[Dict], competency_summary: Dict) ->
         all_knowledge_points = [kp for kp, _ in kp_with_weights]
         kp_weight_list = [w for _, w in kp_with_weights]
         logger.info(f"[知识点映射] 开始映射 {len(all_knowledge_points)} 个知识点到教材")
-        mapped_points = knowledge_mapper.map_knowledge_points(all_knowledge_points)
+        mapped_points = knowledge_mapper.map_knowledge_points(all_knowledge_points, subject=subject)
 
-        textbook_distribution = {
-            tb: {"weighted_score": 0.0, "chapters": {}}
-            for tb in ["必修1", "必修2", "选择性必修1", "选择性必修2", "选择性必修3"]
-        }
+        # 教材册名("必修1"…"选择性必修3")为生物人教版专属；非生物学科无对应教材库，
+        # 骨架置空，避免非生物报告出现这 5 个生物册名 0% 空行(教材归因残留)。
+        # biology 保持原 5 册骨架，逐字零回归。A-1 根因修复(教材分布骨架按学科门控)。
+        if normalize_subject(subject) == "biology":
+            textbook_distribution = {
+                tb: {"weighted_score": 0.0, "chapters": {}}
+                for tb in ["必修1", "必修2", "选择性必修1", "选择性必修2", "选择性必修3"]
+            }
+        else:
+            textbook_distribution = {}
 
         mapped_count = 0
         unmapped_weighted = {}

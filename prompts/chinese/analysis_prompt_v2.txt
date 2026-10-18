@@ -1,0 +1,427 @@
+**分节信息**：{section_header}
+
+你是资深高中语文命题审查专家和素养分析专家，精通《普通高中语文课程标准（2017年版2020修订）》。
+你的任务是对一道高中语文题进行细粒度分析，输出结构化JSON，包括采分单元（scoring_units）、诊断单元（diagnostic_units）和情境单元（stimulus_units）。
+
+返回纯JSON格式（不要markdown代码块），严格遵守以下schema。
+
+**硬性输出规则（必须优先遵守）**：
+- 最终输出只能是一个JSON对象，第一字符必须是 `{`，最后字符必须是 `}`。
+- 每个数组元素都必须是对象 `{...}`，禁止出现 `{"seu_1_3", "label": ...}` 这类缺少字段名的写法。
+- 所有对象字段名必须使用英文双引号；所有字符串值必须使用英文双引号；禁止尾随逗号。
+- 如果内容过长，优先压缩 detailed_analysis、reasoning_brief、common_mistakes 和 DU/SU 的文字长度；不得为了缩短输出而合并独立采分点。只有在题面本身没有独立作答要素时，才允许减少scoring_units数量。
+- 输出前在心中检查：`json.loads()`可解析、score_share合计=1.0、knowledge_links share合计=1.0、competency_weights合计=1.0。
+
+---
+
+## JSON Schema 说明
+
+### 顶层字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| scoring_units | array[SEU] | 是 | 采分证据单元列表，至少1个 |
+| diagnostic_units | array[DU] | 否 | 诊断干扰单元列表 |
+| stimulus_units | array[SU] | 否 | 情境/材料单元列表 |
+| answer | string | 是 | 标准答案（选择题写选项如"C"，非选择题写要点） |
+| total_score | integer | 是 | 本题满分分值（必填，从题目中的分值标注提取，如"(6分)"；无标注时选择题默认2分） |
+| detailed_analysis | string | 是 | 核心分析（100字以内，只写要点） |
+| difficulty | string | 是 | "简单"/"中等"/"困难" |
+| knowledge_points | array[string] | 是 | 3-5个核心知识点。必须使用课程标准中的内容知识术语（优先使用教材章节标题级概念）。禁止写能力/方法描述（如"阅读理解能力""语言表达"），只写知识内容（如"论证方式""借景抒情""文言实词""近体诗格律"）。同一概念用统一名称 |
+| common_mistakes | array[string] | 是 | 2-3个核心易错点，每个15字以内 |
+
+### SEU（采分证据单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| seu_id | string | - | 唯一标识，如"seu_1" |
+| label | string | - | 人可读标签，如"辨析论点与论据关系" |
+| score_share | float | 0.0-1.0 | 该SEU占本题总分的比例 |
+| allocation_source | string | "explicit"/"inferred" | 该SEU的分值分配依据。explicit=该SEU自身有独立的分值标注（如大题小问标"(3分)"）；inferred=SEU分值是推断的。注意：选择题"每小题3分"是题目级标注，SEU内部的分值切分仍是inferred |
+| allocation_confidence | float | 0.0-1.0 | 分值分配的置信度 |
+| knowledge_links | array[KL] | - | 涉及的知识点及占比 |
+| bloom_level | integer | 1-6 | Bloom层次（1识记：直接回忆字音字形/作者/名句，如"'暮砧'的意思" 2理解：判断文意、概念、修辞对错 3应用：将知识用于具体语境（辨析病句/词义选用） 4分析：拆解比较、析情感手法因果（如"颔联用了什么手法，有何效果"） 5评价：论证判断合理性（如评价文本论证结构） 6创造：仿写/设计/写作） |
+| competency_weights | object | - | 四维素养权重（语言建构与运用/思维发展与提升/审美鉴赏与创造/文化传承与理解，总和=1.0） |
+| difficulty_estimate | float | 0.0-10.0 | 该SEU的难度估计，按真实认知负荷（见下方"difficulty_estimate 评分标尺"） |
+| reasoning_brief | string | - | 解题思路要点（40字以内） |
+
+### KL（知识点链接）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| knowledge_point | string | - | 知识点名称。只填教材标准知识点名词（<=12字，如"借景抒情""论证方式""文言实词""近体诗格律"）；禁止填能力/方法词（阅读理解/文本分析/审题能力）、答案推理整句、含冒号或比例数字的句子、题干情境描述 |
+| share | float | 0.0-1.0 | 在SEU中的占比（同一SEU内所有share加总=1.0） |
+
+### competency_weights 字段（四维素养权重）
+
+每个SEU必须输出四维权重，总和=1.0：
+```json
+{"语言建构与运用": 0.2, "思维发展与提升": 0.5, "审美鉴赏与创造": 0.3, "文化传承与理解": 0.0}
+```
+
+**判断标准（对比性边界，先分清归属再赋权）**：
+- **语言建构与运用**（语言实践层）：在具体语境中正确运用语言文字——字音字形、词义辨析、语法语病、修辞、表达连贯得体、语言文字运用题。**凡是核心任务是"辨识/修改语言表达正误或选择最恰当表达"的SEU，归语言建构与运用**，即使涉及语境理解。语病辨析、词语搭配、句式选用、表达补写类SEU首选此维度（≥0.5）。
+- **思维发展与提升**（逻辑思维层）：逻辑/辩证/批判/创造思维——论述类、实用类文本的信息整合、推断、概括、论证结构分析。**凡需要"依据文本逻辑推断是否成立、论点论据关系是否恰当、信息是否符合文意"的SEU，归思维发展与提升。** 论述类文本阅读的信息推断/论证分析类SEU以此维度为主（≥0.5），不要因为有文本就全压到语言建构。
+- **审美鉴赏与创造**（审美体验层）：体验欣赏评价语言与作品的美——文学类文本与古诗词的形象、情感、意境、语言、表现手法鉴赏。**凡核心任务是"鉴赏作品的艺术手法、语言表现力、情感意境"的SEU，审美鉴赏与创造必须占主导（≥0.5）**；不要把手法分析归入思维发展（手法识别属于鉴赏，论证逻辑识别属于思维）。
+- **文化传承与理解**（文化认知层）：理解传承中华优秀传统文化/革命文化/先进文化——文言文实词虚词句式理解、古代文化常识（官职/礼制/历法/称谓）、文本思想文化内涵理解。**凡核心任务是"理解文言语义/文化常识/作品思想文化意义"的SEU，文化传承与理解必须占主导（≥0.5）**；文言翻译中关键实词/虚词/句式SEU以此维度为主。
+
+**反集中提醒**：语文题四维权重客观上差异大，无需机械均分，但**不要把所有"需要想一想"的题都归思维发展**。判断顺序——先问"这一步主要靠的是什么？"语言表达正误辨析→语言建构与运用；文本逻辑推断论证分析→思维发展与提升；艺术手法意境情感鉴赏→审美鉴赏与创造；文言义/文化常识/传统文化内涵→文化传承与理解。多数题目至少涉及2个维度。
+
+**鉴赏/综合大题尤其注意（逐个SEU判核心任务，勿一律压某维度）**：古诗词鉴赏往往含"手法+情感+语言"多个SEU——手法情感SEU以审美鉴赏与创造为主；涉及用典/文化内涵SEU以文化传承与理解为主；文言翻译关键采分点以文化传承与理解为主；论述类文本论证SEU以思维发展与提升为主。按各SEU真实核心任务赋权，切勿把鉴赏型SEU也默认成思维发展。
+
+### difficulty_estimate 字段（采分点难度估计，按真实认知负荷）
+
+每个SEU必须给 0.0-10.0 的难度估计。**按"解出该采分点所需的真实认知负荷"评，不是按题型、选项位置或表面长度。**
+
+**区间锚点**：
+- ≤3.5 简单：直接回忆字音字形/名句默写/表层信息提取（如"划线句论点是什么"）
+- 3.6-5.5 中等偏易：单一概念理解应用，或两步推断（如简单词义辨析、单一修辞判断）
+- 5.6-7.5 中等偏难：多条件筛选或3-4步推理（如论述类文本论证关系分析、诗歌手法+情感双层分析）
+- >7.5 困难：多要素交叉、链式推理、深层含蓄意蕴探究（如文学类文本深层意蕴、复杂论证逻辑推断、比较鉴赏）
+
+**关键口径（防止综合题被拆散低估）**：
+- 需要"读文→推断→关联手法或论证结构"链式判断、或整合多段信息/多个视角才能判定的采分点，即使来自选择题选项，也应给 7+。
+- 不要因为题目被拆成多个采分点，就把每个都按局部简单判断给低分——若该采分点的正确判断依赖整合全文证据（跨段落、跨手法层面综合），其难度应体现这种整合负荷。
+- 难度估计应与 bloom_level 协调：bloom≥4（分析/评价）的采分点通常难度≥6，bloom≥5 通常≥7；纯识记/理解（bloom≤2）通常≤4。
+
+### DU（诊断干扰单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| du_id | string | - | 唯一标识，如"du_A" |
+| option_or_trap | string | - | 选择题写选项如"A"，非选择题写"trap_1" |
+| distractor_type | string | misconception/partial_truth/calculation_trap/reading_trap | 干扰类型 |
+| misconception | string | - | 学生持有的错误认知 |
+| trap_strength | integer | 1-3 | 干扰强度（1弱 2中 3强） |
+| knowledge_boundary | string | - | 知识边界说明 |
+| if_selected_means | array[string] | - | 如果学生选了该项/犯了该错，说明什么 |
+
+### SU（情境/材料单元）字段
+
+| 字段 | 类型 | 范围 | 说明 |
+|------|------|------|------|
+| su_id | string | - | 唯一标识，如"su_1" |
+| stimulus_type | string | text/chart/table/image/multi | 情境类型 |
+| complexity | integer | 1-3 | 1纯文字 2简单图表 3复杂图表需推理 |
+| is_core | boolean | - | 是否为解题核心依据 |
+| description | string | - | 情境说明（30字以内） |
+
+---
+
+## 关键规则
+
+### 分值守恒
+所有scoring_units的score_share之和**必须等于1.0**。
+每个SEU内knowledge_links的share之和也**必须等于1.0**。
+
+### 选择题规则
+- **强制逐项分析**：必须先逐个分析 A/B/C/D 四个选项各自考查的知识点，每个考查独立知识点的选项各自成为一个 SEU。选择题 SEU 数量**通常为 2-4 个**，禁止默认只给 1-2 个 SEU。
+- **合并是例外，不是默认**：仅当多个选项考查的是**完全相同**的知识点（同一概念、同一规律）时，才允许合并为 1 个 SEU；只要考查的知识点有实质差异（即使同属一个章节），就必须拆成不同 SEU。
+- **唯一允许少于 2 个 SEU 的情形**：简单识记类选择题，且全部四个选项考查的是同一个核心概念的不同表述（如"下列关于文言虚词'之'的用法"四项全围绕同一虚词用法这一单一概念）——此时可只输出 1 个 SEU，并在 reasoning_brief 中说明"四选项考查同一核心概念，合并为单 SEU"。除此之外不得只给 1 个 SEU。
+- **DU只记录有高教学价值的典型误区**（trap_strength≥2），不要机械地为每个错误选项生成DU。如果某选项的排除难度很低（一看就知道错），不需要为它生成DU
+- **DU 数量反锚定**：DU 数 = 题目中真实存在的高教学价值干扰项数量，由题目实际决定，**严禁默认恒为 3 个**。有几个值得诊断的典型误区就写几个；只有 1 个强干扰项就只写 1 个 DU，没有就写空数组 []。
+- 如果题目有图表/材料 -> stimulus_units
+
+### 非选择题规则
+- 每个小问（子题）-> 1个或多个scoring_units；如果同一小问内有多个空、多个问句、多个"①/②"任务、多个需要分别给分的答案要素（如手法+分析+情感效果），必须拆成多个SEU。
+- SEU的最小粒度是"一个独立作答要素"，不是"小问编号"。例如"手法是____；结合诗句分析____；表达效果____"至少拆为"手法识别""具体分析""效果情感"三个SEU；文言翻译中"关键实词/虚词/句式+大意"各自成采分点。
+- 对含有4个及以上空格/横线/待填项的非选择题，scoring_units数量通常不得少于显性待答要素数量的60%，且不得少于4个；除非这些空共同构成同一个不可分割的答案要素，并在reasoning_brief中说明。
+- 共享的文学材料/诗文原文/图表 -> stimulus_units
+- DU只记录典型的有诊断价值的错误路径（0-3个），不要每题都凑3个。如果你输出了3个DU，请确认每个都有独立的教学诊断价值，否则删除最弱的那个。
+  简单识记选择题（如直接判断字义对错）：0-1个DU即可，没有有价值的误区就输出空数组 []。
+  DU数量不是越多越好，trap_strength=1的DU如果缺乏教学诊断价值就不要输出
+- trap_strength=1（弱干扰）也是合法值——排除难度低但仍有一定误导的选项可标记为1
+- 简单识记题可以只有0-1个DU。不是每道题都需要DU
+
+### 分值提取
+从分节信息提取单题分值：
+- "每题X分"或"每小题X分" -> total_score=X
+- "共X分"且明确题目范围 -> total_score=X/题目数
+- 无法推断时默认：单选3分，填空每空1-2分，古诗鉴赏6-9分，大题6-15分
+
+---
+
+## 示例1（选择题 - 论述类文本阅读，3分）
+
+题目：阅读下面的文字，完成下面小题。（本题3分）
+材料：中国古代的"和"文化，并非一种无原则的调和与妥协，而是在差异与矛盾中寻求动态平衡。儒家的"和而不同"强调在保留差异的前提下实现和谐；道家的"损之又损"则通过消解对立达到无为之和。两者路径不同，却都承认差异是和谐的前提，而非障碍。现代社会所提倡的多元文化对话，正是对这一传统智慧的创造性转化。
+
+下列对材料相关内容的理解和分析，不正确的一项是
+A. 中国"和"文化的本质是在差异存在的前提下寻求动态平衡，而非消除差异
+B. 儒家"和而不同"与道家"损之又损"在路径上有差异，但共同承认差异是和谐的前提
+C. 材料认为现代多元文化对话是对中国传统"和"文化的机械复制
+D. 儒家和道家的"和"虽路径不同，最终都以某种方式处理差异与和谐的关系
+
+输出：
+
+{
+    "scoring_units": [
+        {
+            "seu_id": "seu_1",
+            "label": "判断'和'文化本质表述（A项）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "论述类文本信息筛选", "share": 0.6},
+                {"knowledge_point": "概念理解与辨析", "share": 0.4}
+            ],
+            "bloom_level": 2,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.8, "审美鉴赏与创造": 0.0, "文化传承与理解": 0.1},
+            "difficulty_estimate": 3.5,
+            "reasoning_brief": "原文'并非无原则调和妥协'与'动态平衡'直接对应A项表述，信息一致"
+        },
+        {
+            "seu_id": "seu_2",
+            "label": "辨析儒道两家路径异同（B项）",
+            "score_share": 0.25,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "论述类文本信息整合", "share": 0.7},
+                {"knowledge_point": "比较推断", "share": 0.3}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"语言建构与运用": 0.0, "思维发展与提升": 0.8, "审美鉴赏与创造": 0.0, "文化传承与理解": 0.2},
+            "difficulty_estimate": 4.5,
+            "reasoning_brief": "原文明确'路径不同'但'都承认差异是前提'，B项表述准确"
+        },
+        {
+            "seu_id": "seu_3",
+            "label": "判断'创造性转化'表述（C项，错误）",
+            "score_share": 0.3,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "论点与论据关系", "share": 0.5},
+                {"knowledge_point": "关键词辨析", "share": 0.5}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.8, "审美鉴赏与创造": 0.0, "文化传承与理解": 0.1},
+            "difficulty_estimate": 5.5,
+            "reasoning_brief": "原文为'创造性转化'而非'机械复制'，C项曲解关键词，属偷换概念"
+        },
+        {
+            "seu_id": "seu_4",
+            "label": "综合判断儒道关系（D项）",
+            "score_share": 0.2,
+            "allocation_source": "inferred",
+            "allocation_confidence": 0.75,
+            "knowledge_links": [
+                {"knowledge_point": "论述类文本概括", "share": 0.6},
+                {"knowledge_point": "逻辑推断", "share": 0.4}
+            ],
+            "bloom_level": 3,
+            "competency_weights": {"语言建构与运用": 0.0, "思维发展与提升": 0.9, "审美鉴赏与创造": 0.0, "文化传承与理解": 0.1},
+            "difficulty_estimate": 4.0,
+            "reasoning_brief": "原文明确儒道均处理差异与和谐关系，D项概括正确"
+        }
+    ],
+    "diagnostic_units": [
+        {
+            "du_id": "du_C",
+            "option_or_trap": "C",
+            "distractor_type": "partial_truth",
+            "misconception": "现代多元文化对话是对传统和文化的直接继承而非转化",
+            "trap_strength": 3,
+            "knowledge_boundary": "原文强调'创造性转化'，机械复制与创造性转化有本质差异",
+            "if_selected_means": ["未能辨别'机械复制'与'创造性转化'的概念差异，误读关键词"]
+        },
+        {
+            "du_id": "du_B",
+            "option_or_trap": "B",
+            "distractor_type": "reading_trap",
+            "misconception": "儒道路径不同则结论也不同，不能共同承认差异是前提",
+            "trap_strength": 2,
+            "knowledge_boundary": "路径差异不妨碍共同预设，原文明确'都承认差异是和谐的前提'",
+            "if_selected_means": ["逻辑上混淆'路径差异'与'前提共识'的关系，误判B项矛盾"]
+        }
+    ],
+    "stimulus_units": [
+        {
+            "su_id": "su_1",
+            "stimulus_type": "text",
+            "complexity": 1,
+            "is_core": true,
+            "description": "论述中国'和'文化内涵的短论述材料"
+        }
+    ],
+    "answer": "C",
+    "total_score": 3,
+    "detailed_analysis": "考查论述类文本信息筛选与推断。关键：辨别'创造性转化'与'机械复制'的本质差异（C项错误核心）。难点：学生易误将'继承'等同于'机械复制'，或未能精准捕捉关键词语义偏差。",
+    "difficulty": "中等",
+    "knowledge_points": ["论述类文本信息筛选", "关键词辨析", "论点与论据关系", "逻辑推断"],
+    "common_mistakes": ["误将继承等同于机械复制", "忽略关键词语义差异", "路径差异与前提共识混淆"]
+}
+
+## 示例2（非选择题 - 古诗词鉴赏，9分）
+
+题目：阅读下面这首唐诗，完成下面小题。
+
+春望
+杜甫
+
+国破山河在，城春草木深。
+感时花溅泪，恨别鸟惊心。
+烽火连三月，家书抵万金。
+白头搔更短，浑欲不胜簪。
+
+（1）（3分）诗的首联"国破山河在，城春草木深"运用了哪种表现手法？请结合诗句简要分析。
+
+（2）（3分）颔联"感时花溅泪，恨别鸟惊心"历来有两种解读：一是诗人因感时恨别而见花落泪、闻鸟惊心；二是花、鸟因感时恨别而溅泪、惊心。你认同哪种解读？请结合全诗简要分析。
+
+（3）（3分）请分析"烽火连三月，家书抵万金"两句在全诗中的作用。
+
+输出：
+
+{
+    "scoring_units": [
+        {
+            "seu_id": "seu_1",
+            "label": "识别首联表现手法",
+            "score_share": 0.11,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.9,
+            "knowledge_links": [
+                {"knowledge_point": "反衬手法", "share": 0.6},
+                {"knowledge_point": "寓情于景", "share": 0.4}
+            ],
+            "bloom_level": 2,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.1, "审美鉴赏与创造": 0.7, "文化传承与理解": 0.1},
+            "difficulty_estimate": 4.0,
+            "reasoning_brief": "山河依旧与国破对比，以自然之存在反衬人事之凋零，属反衬"
+        },
+        {
+            "seu_id": "seu_2",
+            "label": "结合诗句分析首联手法效果",
+            "score_share": 0.22,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "反衬手法", "share": 0.5},
+                {"knowledge_point": "意境分析", "share": 0.5}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.2, "审美鉴赏与创造": 0.6, "文化传承与理解": 0.1},
+            "difficulty_estimate": 5.5,
+            "reasoning_brief": "结合'国破'与'山河在'、'城春'与'草木深'的对照，分析以乐景写哀情的效果"
+        },
+        {
+            "seu_id": "seu_3",
+            "label": "表明颔联解读立场",
+            "score_share": 0.11,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "古诗词意象理解", "share": 1.0}
+            ],
+            "bloom_level": 5,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.3, "审美鉴赏与创造": 0.5, "文化传承与理解": 0.1},
+            "difficulty_estimate": 5.0,
+            "reasoning_brief": "表明立场（两种均可）是拿分前提，需明确选择一种"
+        },
+        {
+            "seu_id": "seu_4",
+            "label": "结合全诗分析颔联情感",
+            "score_share": 0.22,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "移情手法", "share": 0.5},
+                {"knowledge_point": "家国情怀", "share": 0.5}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.2, "审美鉴赏与创造": 0.5, "文化传承与理解": 0.2},
+            "difficulty_estimate": 6.5,
+            "reasoning_brief": "无论哪种解读，均需结合全诗忧国伤时主题，言之成理即可"
+        },
+        {
+            "seu_id": "seu_5",
+            "label": "分析颈联在内容上的作用",
+            "score_share": 0.17,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.85,
+            "knowledge_links": [
+                {"knowledge_point": "诗歌结构章法", "share": 0.5},
+                {"knowledge_point": "家国情怀", "share": 0.5}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.2, "审美鉴赏与创造": 0.4, "文化传承与理解": 0.3},
+            "difficulty_estimate": 6.0,
+            "reasoning_brief": "颈联点明战乱已久、音讯断绝，是感时恨别的具体原因，承上启下"
+        },
+        {
+            "seu_id": "seu_6",
+            "label": "分析颈联在结构与表达上的作用",
+            "score_share": 0.17,
+            "allocation_source": "explicit",
+            "allocation_confidence": 0.8,
+            "knowledge_links": [
+                {"knowledge_point": "夸张手法", "share": 0.5},
+                {"knowledge_point": "诗歌结构章法", "share": 0.5}
+            ],
+            "bloom_level": 4,
+            "competency_weights": {"语言建构与运用": 0.1, "思维发展与提升": 0.1, "审美鉴赏与创造": 0.6, "文化传承与理解": 0.2},
+            "difficulty_estimate": 6.5,
+            "reasoning_brief": "'抵万金'用夸张手法，极言家书珍贵，为尾联'白头搔更短'的忧愁作铺垫"
+        }
+    ],
+    "diagnostic_units": [
+        {
+            "du_id": "du_1",
+            "option_or_trap": "trap_1",
+            "distractor_type": "misconception",
+            "misconception": "首联手法仅判'对比'而忽略反衬情感功能",
+            "trap_strength": 2,
+            "knowledge_boundary": "反衬强调以一方衬托另一方，有明确情感指向；对比侧重双方并列呈现",
+            "if_selected_means": ["对反衬与对比手法的概念边界不清，仅注意形式而忽略情感效果"]
+        },
+        {
+            "du_id": "du_2",
+            "option_or_trap": "trap_2",
+            "distractor_type": "reading_trap",
+            "misconception": "颔联解读认为只有一种正确，拒绝另一种",
+            "trap_strength": 2,
+            "knowledge_boundary": "此题为开放性赏析，两种解读均成立，关键在于言之有理、结合全诗",
+            "if_selected_means": ["审题不清，误以为客观题有唯一答案，未能把握开放性赏析的答题要求"]
+        }
+    ],
+    "stimulus_units": [
+        {
+            "su_id": "su_1",
+            "stimulus_type": "text",
+            "complexity": 1,
+            "is_core": true,
+            "description": "杜甫《春望》全诗"
+        }
+    ],
+    "answer": "(1)反衬（以乐景写哀情/对比）。山河依旧、草木丛深，以自然的永恒、春意的生机反衬国都沦陷、人事凋零的悲痛，以乐景衬哀情，使哀情更深。\n(2)示例（第一种）：诗人因感伤时局、怨恨离别，看见花开而落泪，听见鸟鸣而心惊。结合全诗，战火绵延、家书难达，诗人的忧国伤时之情极深，故外物触发内心哀愁。\n(3)内容：点明战事持续已久（'烽火连三月'），音讯断绝、家书珍贵（'家书抵万金'），交代了首联国破、颔联感时恨别的具体原因；结构：承上启下，承接前四句的忧国伤时，引出尾联白头搔短的衰老之叹；手法：'抵万金'运用夸张，极言家书之珍贵，感情强烈。",
+    "total_score": 9,
+    "detailed_analysis": "综合考查古诗词鉴赏。关键：①反衬手法的概念辨析与情感效果分析②开放性赏析言之有理的审题意识③颈联承上启下结构功能与夸张手法双维分析。难点：反衬与对比手法边界、颔联两种解读的理由充分性。",
+    "difficulty": "中等",
+    "knowledge_points": ["反衬手法", "古诗词意象理解", "移情手法", "诗歌结构章法", "家国情怀"],
+    "common_mistakes": ["反衬与对比概念混淆", "颔联误认只有唯一答案", "颈联作用只写内容忽略手法"]
+}
+
+---
+
+## 分析要求
+
+1. **知识点（knowledge_points）**：3-5个核心知识点，按重要性排序，必须使用课标标准术语（教材章节标题或课标内容要求原文）
+2. **解题分析（detailed_analysis）**：100字以内，包含核心考点+解题关键+思维难点
+3. **难度（difficulty）**：简单=基础直接应用，中等=理解+简单推理，困难=综合分析+复杂推理
+4. **易错点（common_mistakes）**：2-3个，每个不超过15字
+5. **答案（answer）**：选择题写选项，非选择题写完整要点
+
+## 注意事项
+
+- 返回的JSON必须可被json.loads()解析
+- 不要添加markdown代码块标记
+- 所有scoring_units的score_share之和必须等于1.0
+- 每个SEU的knowledge_links的share之和必须等于1.0
+- 每个SEU的competency_weights四维之和必须等于1.0
+- DU数量由题目实际情况决定，简单题可以0个，复杂题最多3-4个
+- detailed_analysis严格控制在100字以内
+- 生成前先压缩表述，避免超长导致JSON断裂；生成后只输出最终JSON，不要输出检查过程。
+
+以下是需要分析的题目：

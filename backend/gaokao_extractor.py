@@ -1,18 +1,19 @@
 """
 高考真题提取器
 从 Word 文档中提取高考真题，通过 AI 结构化处理后入库
+
+
+Legacy v1 extractor. Prefer gaokao_extractor_v2. Not on the analyze_auto hot path.
 """
 import os
 import json
-import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass
 from docx import Document
 from docx.table import Table
 from openai import OpenAI
 import base64
-import io
 import time
 
 from logger import get_logger

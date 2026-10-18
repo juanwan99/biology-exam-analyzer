@@ -15,27 +15,18 @@ logger = get_logger()
 _clients: dict[str, httpx.AsyncClient] = {}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _last_call_metadata: ContextVar[dict] = ContextVar("last_llm_call_metadata", default={})
-_review_channel: ContextVar[str | None] = ContextVar("llm_review_channel", default=None)
-_evidence_gateway = None
+# GOAL #8 成本计量:成功 provider 的 token usage 旁路回传,经 llm_call 并入 _last_call_metadata
+_last_provider_usage: ContextVar = ContextVar("last_provider_usage", default=None)
+_user_api_keys: ContextVar = ContextVar("user_api_keys", default=None)
+
+
+def set_user_api_keys(keys):
+    _user_api_keys.set(keys)
 
 
 def get_last_llm_call_metadata() -> dict:
     """Return audit metadata for the last llm_call in the current async context."""
     return dict(_last_call_metadata.get({}) or {})
-
-
-def set_llm_review_channel(channel: str | None):
-    """Set the review channel for LLM calls in the current async context."""
-    normalized = None
-    if channel is not None:
-        from services.review_channel import normalize_review_channel
-
-        normalized = normalize_review_channel(channel)
-    return _review_channel.set(normalized)
-
-
-def reset_llm_review_channel(token) -> None:
-    _review_channel.reset(token)
 
 
 def _provider_error_message(error: Exception) -> str:
@@ -65,15 +56,11 @@ def _provider_error_summary(errors: list) -> list[dict]:
 
 
 async def close_llm_clients():
-    global _evidence_gateway
     """关闭所有缓存的 HTTP 客户端（FastAPI shutdown 时调用）。"""
     for client in _clients.values():
         if not client.is_closed:
             await client.aclose()
     _clients.clear()
-    if _evidence_gateway is not None:
-        await _evidence_gateway.evidence_client.aclose()
-        _evidence_gateway = None
 
 
 class AllProvidersFailed(Exception):
@@ -90,7 +77,7 @@ async def _get_client(proxy: str = None, trust_env: bool = True) -> httpx.AsyncC
     if client is None or client.is_closed:
         kwargs = dict(
             timeout=120.0,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
             trust_env=trust_env,
         )
         if proxy:
@@ -108,7 +95,16 @@ def _get_semaphore(provider: dict) -> asyncio.Semaphore:
 
 
 def _get_headers(provider: dict) -> dict:
-    key = os.environ.get(provider["key_env"], "")
+    key = ""
+    user_keys = _user_api_keys.get(None)
+    if user_keys:
+        key_env = provider.get("key_env", "")
+        if key_env == "DEEPSEEK_API_KEY" and user_keys.get("deepseek"):
+            key = user_keys["deepseek"]
+        elif key_env in ("QWEN_API_KEY", "DASHSCOPE_API_KEY") and user_keys.get("qwen"):
+            key = user_keys["qwen"]
+    if not key:
+        key = os.environ.get(provider.get("key_env", ""), "")
     fmt = provider["api_format"]
     headers = {"Content-Type": "application/json"}
     if fmt == "anthropic":
@@ -337,134 +333,26 @@ def _extract_text(api_format: str, data: dict) -> str:
     return text
 
 
-def _channel_requires_app_builder_generation() -> bool:
-    channel = _review_channel.get()
-    if not channel:
-        return False
-    from services.review_channel import channel_requires_grounded_generation
-
-    return channel_requires_grounded_generation(channel)
-
-
-def _app_builder_model_id(model: str | None) -> str:
-    model = str(model or "").strip()
-    if "/models/" in model:
-        return model.rsplit("/models/", 1)[-1]
-    if model.startswith("models/"):
-        return model.split("/", 1)[1]
-    return model
-
-
-def _message_content_text(content) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return str(content or "")
-    parts = []
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "text":
-            parts.append(str(item.get("text") or ""))
-            continue
-        if item.get("type") == "image_url":
-            raise RuntimeError(
-                "app_builder grounded generation does not support image_url inputs; "
-                "provide extracted/OCR text or switch to the model channel"
-            )
-        raise RuntimeError(
-            f"app_builder grounded generation unsupported content type: {item.get('type')}"
-        )
-    return "\n".join(part for part in parts if part)
-
-
-def _messages_to_grounded_generation(messages: list) -> tuple[str, str | None]:
-    system_parts: list[str] = []
-    conversation_parts: list[str] = []
-    for message in messages:
-        role = str(message.get("role") or "user")
-        text = _message_content_text(message.get("content")).strip()
-        if not text:
-            continue
-        if role == "system":
-            system_parts.append(text)
-        else:
-            conversation_parts.append(f"{role}: {text}")
-    prompt = "\n\n".join(conversation_parts).strip()
-    if not prompt:
-        raise RuntimeError("app_builder grounded generation prompt is empty")
-    system_instruction = "\n\n".join(system_parts).strip() or None
-    return prompt, system_instruction
-
-
-def _grounding_facts_from_prompt(prompt: str) -> list[dict]:
-    max_chars = int(os.environ.get("EVIDENCE_GENERATION_FACT_CHARS", "3500"))
-    max_facts = int(os.environ.get("EVIDENCE_GENERATION_MAX_FACTS", "12"))
-    text = str(prompt or "").strip()
-    facts = []
-    for idx in range(0, min(len(text), max_chars * max_facts), max_chars):
-        chunk = text[idx:idx + max_chars].strip()
-        if not chunk:
-            continue
-        facts.append({
-            "factText": chunk,
-            "attributes": {
-                "title": f"prompt_context_{len(facts) + 1}",
-                "source": "llm_prompt",
-            },
-        })
-    if not facts:
-        raise RuntimeError("app_builder grounded generation facts are empty")
-    return facts
-
-
-def _get_evidence_gateway():
-    global _evidence_gateway
-    if _evidence_gateway is None:
-        from services.evidence_gateway import EvidenceGateway
-
-        _evidence_gateway = EvidenceGateway()
-    return _evidence_gateway
-
-
-async def _call_app_builder_grounded_generation(
-    messages: list,
-    max_tokens: int,
-    temperature: float,
-    purpose: str | None,
-    model: str | None,
-) -> str:
-    from llm_policy import resolve_model_profile
-
-    profile = resolve_model_profile(purpose=purpose, model_override=model)
-    configured_model = os.environ.get("EVIDENCE_GENERATION_MODEL", "").strip()
-    model_id = _app_builder_model_id(configured_model or profile.model)
-    prompt, system_instruction = _messages_to_grounded_generation(messages)
-    facts = _grounding_facts_from_prompt(prompt)
-    gateway = _get_evidence_gateway()
-    result = await gateway.generate_grounded_content(
-        prompt=prompt,
-        grounding_facts=facts,
-        model_id=model_id,
-        system_instruction=system_instruction,
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-    )
-    _last_call_metadata.set({
-        "status": "ok",
-        "provider": "evidence_service",
-        "model": model_id,
-        "review_channel": _review_channel.get(),
-        "purpose": purpose or profile.purpose,
-        "model_role": profile.role,
-        "model_policy": "exam-review-app-builder-grounded-generation",
-        "fallback_count": 0,
-        "provider_errors": [],
-        "operation": "generate_grounded_content",
-        "fact_count": len(facts),
-        "grounding_score": result.get("grounding_score"),
-    })
-    return result["text"]
+def _extract_usage(api_format: str, data: dict):
+    """从响应提取 token usage(GOAL #8 成本计量)。None-safe,无 usage 返回 None。
+    deepseek 多 reasoning_tokens 与前缀缓存命中数;qwen/responses 缺则为 None。纯落盘,不改任何调用。"""
+    if not isinstance(data, dict):
+        return None
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    out = {
+        "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+        "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+    }
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+        out["reasoning_tokens"] = details.get("reasoning_tokens")
+    for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        if usage.get(k) is not None:
+            out[k] = usage.get(k)
+    return out
 
 
 # ── HTTP 调用 ─────────────────────────────────────────────────────
@@ -508,6 +396,7 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
                     )
                 resp.raise_for_status()
                 data = resp.json()
+                _last_provider_usage.set(_extract_usage(provider["api_format"], data))
                 return _extract_text(provider["api_format"], data)
             except httpx.HTTPStatusError as e:
                 last_err = e
@@ -554,33 +443,7 @@ async def llm_call(
 ) -> str:
     """统一 LLM 调用入口，内置 fallback 链。"""
     _last_call_metadata.set({})
-    if _channel_requires_app_builder_generation():
-        try:
-            return await _call_app_builder_grounded_generation(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                purpose=purpose,
-                model=model,
-            )
-        except Exception as exc:
-            _last_call_metadata.set({
-                "status": "provider_failed",
-                "provider": "evidence_service",
-                "model": None,
-                "review_channel": _review_channel.get(),
-                "purpose": purpose,
-                "model_role": None,
-                "model_policy": "exam-review-app-builder-grounded-generation",
-                "fallback_count": 0,
-                "provider_errors": [{
-                    "provider": "evidence_service",
-                    "error_type": type(exc).__name__,
-                    "message": str(exc)[:500],
-                }],
-                "operation": "generate_grounded_content",
-            })
-            raise
+    _last_provider_usage.set(None)
     requires_images = _messages_include_images(messages)
     providers = get_providers(
         purpose=purpose,
@@ -592,7 +455,6 @@ async def llm_call(
             "status": "provider_failed",
             "provider": None,
             "model": None,
-            "review_channel": _review_channel.get(),
             "purpose": purpose,
             "model_role": None,
             "model_policy": None,
@@ -614,12 +476,12 @@ async def llm_call(
                 "status": "ok",
                 "provider": provider.get("name"),
                 "model": provider.get("model"),
-                "review_channel": _review_channel.get(),
                 "purpose": purpose or provider.get("purpose"),
                 "model_role": provider.get("model_role"),
                 "model_policy": provider.get("model_policy"),
                 "fallback_count": len(errors),
                 "provider_errors": _provider_error_summary(errors),
+                "usage": _last_provider_usage.get(),
             })
             return result
         except httpx.HTTPStatusError as e:
@@ -662,7 +524,6 @@ async def llm_call(
         "status": "provider_failed",
         "provider": None,
         "model": None,
-        "review_channel": _review_channel.get(),
         "purpose": purpose,
         "model_role": None,
         "model_policy": None,

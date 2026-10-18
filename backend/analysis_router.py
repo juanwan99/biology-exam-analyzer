@@ -14,7 +14,6 @@
 - generate_exam_statistics   — 整卷统计（从 analysis_statistics 导入，SEU 精确聚合）
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Body
-from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -24,23 +23,22 @@ import os
 import json
 import re
 import aiofiles
-import base64
-import time
 
 from logger import get_logger
+from visual_word_splitter import split_word_with_visual
 from config import UPLOAD_DIR, REPORTS_DIR
+from report_signing import sign_report_path
 import credits_service
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 from session_manager import save_session, get_session
-from utils import infer_question_type
 from analysis_statistics import generate_exam_statistics, _build_competency_list
+from subject_config import normalize_subject, is_valid_subject, get_subject_name
+from llm_client import set_user_api_keys
+from analysis_options import set_analysis_options
 from deps import (
     get_analysis_service,
-    get_analyzer,
-    get_difficulty_engine,
     get_competency_analyzer,
-    get_knowledge_mapper,
     get_doc_processor,
     get_word_splitter,
     get_pdf_splitter,
@@ -49,10 +47,11 @@ from deps import (
 
 logger = get_logger()
 
-router = APIRouter(tags=["analysis"])
+# 持有后台分析任务引用，防 asyncio 在任务完成前将其 GC 回收（CPython 仅弱引用 task）
+_bg_tasks: set = set()
+import task_manager
 
-_APP_BUILDER_READY_CACHE: Dict[str, float] = {}
-_APP_BUILDER_READY_TTL_SECONDS = 300
+router = APIRouter(tags=["analysis"])
 
 
 # ============ 枚举（路由参数用） ============
@@ -69,7 +68,6 @@ async def analyze_question_full(
     question: Dict[str, Any],
     image_bytes: List[bytes],
     mode: str = "deep",
-    exam_review_channel: Optional[str] = None,
 ) -> Dict[str, Any]:
     """单题完整分析 — 委托给 AnalysisService。"""
     svc = get_analysis_service()
@@ -77,7 +75,6 @@ async def analyze_question_full(
         question,
         image_bytes,
         mode,
-        exam_review_channel=exam_review_channel,
     )
 
 
@@ -93,49 +90,6 @@ def _validate_report_metadata_for_route(questions: List[Dict[str, Any]]) -> None
     get_analysis_service().validate_report_metadata(questions)
 
 
-def _ensure_review_channel_ready(exam_review_channel: Optional[str]) -> str | None:
-    """Fail fast before consuming user credits when App Builder is unavailable."""
-    from services.review_channel import channel_uses_app_builder, normalize_review_channel
-
-    channel = normalize_review_channel(exam_review_channel)
-    if not channel_uses_app_builder(exam_review_channel):
-        return channel
-
-    try:
-        from services.evidence_client_loader import EvidenceClient, EvidenceConfig
-
-        config = EvidenceConfig.from_env()
-        credentials_path = Path(config.credentials_file)
-        if not credentials_path.is_file():
-            raise RuntimeError(f"credentials file not found: {config.credentials_file}")
-
-        cache_key = "|".join(
-            [
-                config.project_id,
-                config.credentials_file,
-                config.location,
-                config.ranking_config,
-                config.grounding_config,
-            ]
-        )
-        now = time.time()
-        if _APP_BUILDER_READY_CACHE.get(cache_key, 0) > now:
-            return channel
-
-        EvidenceClient(config)._access_token()
-        _APP_BUILDER_READY_CACHE.clear()
-        _APP_BUILDER_READY_CACHE[cache_key] = now + _APP_BUILDER_READY_TTL_SECONDS
-        return channel
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("[审题渠道] App Builder preflight failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            503,
-            detail=f"1000赠金审题渠道不可用，请切换普通模型渠道或检查 证据服务配置：{exc}",
-        ) from exc
-
-
 async def _generate_route_report_artifacts(
     questions: List[Dict[str, Any]],
     competency_summary: Dict[str, Any],
@@ -143,22 +97,22 @@ async def _generate_route_report_artifacts(
     exam_info: Dict[str, Any],
     report_mode: str,
     pdf_path: Path,
-    exam_review_channel: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
     """Generate PDF and HTML reports for legacy route-level flows."""
     from report_data import aggregate_report_data
     from report_insights import generate_insights
     from report_product_publish import write_report_artifacts
-    from services.review_channel import channel_grounding_enabled
+
+    # 学科贯通：把首题 subject 注入 exam_info，供报告层动态素养维度与学科文案使用。
+    if isinstance(exam_info, dict) and not exam_info.get("subject") and questions:
+        first_q = questions[0] if isinstance(questions[0], dict) else {}
+        if first_q.get("subject"):
+            exam_info = {**exam_info, "subject": first_q.get("subject")}
 
     rdata = aggregate_report_data(
         questions, competency_summary, exam_statistics, exam_info
     )
-    insights = await generate_insights(
-        rdata,
-        mode=report_mode,
-        grounding_enabled=channel_grounding_enabled(exam_review_channel),
-    )
+    insights = await generate_insights(rdata, mode=report_mode)
     return write_report_artifacts(rdata, insights, mode=report_mode, pdf_path=pdf_path)
 
 
@@ -173,69 +127,12 @@ async def analyze_document(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
-    exam_review_channel: Optional[str] = Form(None),
 ):
-    """主接口：上传文档并完成完整分析流程。"""
-    svc = get_analysis_service()
-    start_time = datetime.now()
-    logger.info(f"收到文件上传: {file.filename}, 类型: {file.content_type}")
+    """主接口：上传文档并完成完整分析流程。
 
-    file_path = None
-    try:
-        effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
-        file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-        async with aiofiles.open(file_path, 'wb') as f:
-            file_content = await file.read()
-            if len(file_content) > MAX_UPLOAD_SIZE:
-                raise HTTPException(413, detail=f"文件过大，上限 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
-            await f.write(file_content)
-
-        exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result = await svc.run_full_analysis(
-            file_path=str(file_path),
-            filename=file.filename,
-            mode=mode,
-            generate_report=generate_report,
-            report_mode=report_mode,
-            reports_dir=str(REPORTS_DIR),
-            exam_id=exam_id,
-            exam_review_channel=effective_review_channel,
-        )
-
-        elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info(f"完整流程完成，总耗时: {elapsed:.2f}秒")
-
-        return {
-            "questions": result["questions"],
-            "total_count": len(result["questions"]),
-            "processing_time": elapsed,
-            "competency_summary": result["competency_summary"],
-            "exam_statistics": result["exam_statistics"],
-            "metadata_quality": result.get("metadata_quality") or _compute_route_metadata_quality(result["questions"]),
-            "report_url": result.get("report_url"),
-            "html_report_url": result.get("html_report_url"),
-            "report_error": result.get("report_error"),
-            "mode": mode,
-            "exam_review_channel": effective_review_channel,
-        }
-
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.warning(f"分析参数错误: {e}")
-        raise HTTPException(400, detail=str(e))
-    except RuntimeError as e:
-        if "未配置" in str(e):
-            raise HTTPException(503, detail=str(e))
-        logger.error(f"分析运行时错误: {e}", exc_info=True)
-        raise HTTPException(500, detail="服务器内部错误")
-    except Exception as e:
-        logger.error(f"分析流程失败: {str(e)}", exc_info=True)
-        raise HTTPException(500, detail="服务器内部错误")
-    finally:
-        if file_path and file_path.exists():
-            file_path.unlink()
-            logger.debug(f"已删除临时文件: {file_path}")
+    【已下线】此端点无认证无计费，已被 /api/analyze_auto（带认证+计费）取代，
+    前端无任何调用方，保留路由仅返回 410，杜绝绕过付费墙的免费分析。"""
+    raise HTTPException(410, detail="此接口已下线，请使用 /api/analyze_auto")
 
 
 # ============ 积分查询 ============
@@ -259,13 +156,54 @@ async def get_credits_balance(authorization: Optional[str] = Header(None)):
 
 # ============ 规则拆分 + 自动分析 API（v3.3支持PDF）============
 
+async def _resolve_user_and_review(authorization: Optional[str]):
+    """统一认证 + 评审旁路。返回 (user_id, review_mode)。
+    - 本地 reviewer token（active_tokens 中 username==reviewer）→ (id, True)，调用方跳过扣费
+    - momowan token → verify_token → (id, False)，调用方负责扣费
+    与 analyze_auto 的评审旁路语义保持一致。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="请先登录")
+    token = authorization[7:]
+
+    from auth_router import active_tokens as _admin_tokens
+    _rev = _admin_tokens.get(token)
+    if _rev and _rev.get("username") == "reviewer":
+        logger.info("[评审] reviewer 评审模式，跳过积分")
+        return _rev["id"], True
+
+    try:
+        user_info = await credits_service.verify_token(token)
+        logger.info(f"[积分] 用户 {user_info['id']} ({user_info.get('email')}) 通过认证")
+        return user_info["id"], False
+    except credits_service.InvalidTokenError as e:
+        raise HTTPException(401, detail=str(e))
+    except Exception as e:
+        logger.error(f"[认证] 失败: {e}")
+        raise HTTPException(401, detail="认证失败，请重新登录")
+
+
+async def _ensure_balance(user_id: int, review_mode: bool):
+    """非评审模式下检查积分余额，不足抛 402。"""
+    if review_mode:
+        return
+    try:
+        balance = await credits_service.get_balance(user_id)
+        if balance < credits_service.ANALYSIS_COST:
+            raise HTTPException(402, detail=f"积分不足：余额 {balance}，需要 {credits_service.ANALYSIS_COST}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[积分] 余额查询失败: {e}")
+        raise HTTPException(500, detail="积分查询失败，请稍后重试")
+
+
 @router.post("/api/analyze_auto")
 async def analyze_auto(
     file: UploadFile = File(...),
     mode: AnalysisMode = Form(AnalysisMode.DEEP),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
-    exam_review_channel: Optional[str] = Form(None),
+    subject: str = Form("biology"),
     authorization: Optional[str] = Header(None),
 ):
     """
@@ -283,11 +221,26 @@ async def analyze_auto(
     token = authorization[7:]
 
     from auth_router import active_tokens as _admin_tokens
+    _user_api_keys_dict = None
     _rev = _admin_tokens.get(token)
-    if _rev and _rev.get("username") == "reviewer":
+    if _rev:
         _review_mode = True
         user_id = _rev["id"]
-        logger.info(f"[评审] reviewer 评审模式，跳过积分")
+        username = _rev.get("username", "")
+        _uses_system = username in ("admin", "reviewer") or username.startswith("teacher")
+        if _uses_system:
+            logger.info(f"[系统Key] {username} 使用系统 API Key")
+        else:
+            from database import async_session as _async_session_factory
+            from models import AdminUser
+            from sqlalchemy import select as sa_select
+            async with _async_session_factory() as _db:
+                _r = await _db.execute(sa_select(AdminUser).where(AdminUser.id == user_id))
+                _u = _r.scalar_one_or_none()
+                if not _u or not _u.deepseek_api_key or not _u.qwen_api_key:
+                    raise HTTPException(403, detail="请先在首页配置 DeepSeek 和 Qwen 的 API Key")
+                _user_api_keys_dict = {"deepseek": _u.deepseek_api_key, "qwen": _u.qwen_api_key}
+                logger.info(f"[用户Key] {username} 使用自己的 API Key")
     else:
         try:
             user_info = await credits_service.verify_token(token)
@@ -308,8 +261,6 @@ async def analyze_auto(
         except Exception as e:
             logger.error(f"[积分] 余额查询失败: {e}")
             raise HTTPException(500, detail="积分查询失败，请稍后重试")
-
-    effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
 
     doc_processor = get_doc_processor()
     word_splitter = get_word_splitter()
@@ -341,7 +292,8 @@ async def analyze_auto(
         if file_ext == 'docx':
             logger.info("使用Word原生拆分题目...")
             try:
-                split_result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+                split_result = await loop.run_in_executor(
+                    None, lambda: split_word_with_visual(str(file_path), subject=subject))
             except Exception as e:
                 err_msg = str(e)
                 logger.error(f"[Word拆分] 格式错误: {err_msg}")
@@ -364,6 +316,19 @@ async def analyze_auto(
             # PDF的图片已包含在 _media_for_ai 中
             image_bytes = []
 
+        # 注入学科：service/analyzer/competency/difficulty 链路均从 question["subject"] 取学科
+        _subject = normalize_subject(subject)
+        # G 根因修复：未注册学科被静默降级为 biology 会产出"学科错误但无告警"的脏报告。
+        # 此处显式告警 + 在题目上保留 raw_subject 原值，供排障/未来报告层提示。
+        if subject and not is_valid_subject(subject):
+            logger.warning(
+                f"[学科] 上传学科 '{subject}' 未在九科注册，已降级为 {get_subject_name(_subject)}"
+                f"（{_subject}）；本卷将按该学科分析出报告，请确认前端学科选择是否正确。"
+            )
+        for _q in questions:
+            _q["subject"] = _subject
+            _q["raw_subject"] = subject
+
         # 3.5 文件拆分成功，扣除积分（评审模式跳过）
         if not _review_mode:
             try:
@@ -377,137 +342,32 @@ async def analyze_auto(
         else:
             logger.info("[评审] 跳过扣费")
 
-        # 4. 并发分析所有题目（分析+难度+素养一次完成）
-        logger.info(f"开始并发分析 {len(questions)} 道题（{MAX_WORKERS}线程）...")
-        sem = asyncio.Semaphore(MAX_WORKERS)
+        # 4. 创建异步任务，立即返回 task_id
+        task_id = task_manager.create(len(questions))
 
-        async def analyze_one(q):
-            async with sem:
-                try:
-                    return await analyze_question_full(
-                        q,
-                        image_bytes,
-                        mode,
-                        exam_review_channel=effective_review_channel,
-                    )
-                except Exception as e:
-                    logger.error(f"题目 {q.get('id')} 分析失败: {e}")
-                    q["error"] = str(e)
-                    return q
+        # 捕获变量供后台任务使用
+        _bg_filename = file.filename
+        _bg_questions = questions
+        _bg_image_bytes = image_bytes
+        _bg_mode = mode
+        _bg_generate_report = generate_report
+        _bg_report_mode = report_mode
+        _bg_competency_analyzer = competency_analyzer
+        _bg_start_time = start_time
 
-        questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
+        if _user_api_keys_dict:
+            set_user_api_keys(_user_api_keys_dict)
+        set_analysis_options(generate_report=_bg_generate_report, report_mode=_bg_report_mode)
+        _bg_task = asyncio.create_task(_run_analysis_pipeline(
+            task_id, _bg_questions, _bg_image_bytes, _bg_mode,
+            _bg_competency_analyzer,
+            _bg_generate_report, _bg_report_mode, _bg_filename,
+            _bg_start_time,
+        ))
+        _bg_tasks.add(_bg_task)
+        _bg_task.add_done_callback(_bg_tasks.discard)
 
-        logger.info(f"所有题目分析完成")
-
-        # 6. 聚合统计数据（分值加权）
-        try:
-            competency_list = _build_competency_list(questions)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
-        except Exception as e:
-            logger.error(f"素养聚合失败: {str(e)}")
-            competency_summary = {}
-
-        # 7. 计算整卷统计（移到 PDF 生成之前）
-        try:
-            exam_statistics = generate_exam_statistics(questions, competency_summary)
-        except Exception as e:
-            logger.error(f"整卷统计失败: {str(e)}")
-            exam_statistics = {}
-
-        metadata_quality = _compute_route_metadata_quality(questions)
-
-        # 8. 生成PDF报告（可选）
-        report_url = None
-        html_report_url = None
-        report_error = None
-        if generate_report:
-            try:
-                _validate_report_metadata_for_route(questions)
-
-                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
-
-                artifacts = await _generate_route_report_artifacts(
-                    questions, competency_summary, exam_statistics,
-                    {"name": file.filename, "total": len(questions), "mode": mode},
-                    report_mode, pdf_path, effective_review_channel,
-                )
-
-                report_url = f"/api/reports/{exam_id}.pdf"
-                if artifacts.get("html_path"):
-                    html_report_url = f"/api/reports/{exam_id}.html"
-                logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
-            except Exception as e:
-                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
-                report_error = f"报告生成失败: {str(e)}"
-
-        # 8.5 分数预估（如果数据库可用）
-        score_prediction = None
-        try:
-            from database import get_db_session
-            from prediction_service import PredictionService
-
-            # 获取数据库会话
-            db = await get_db_session()
-            try:
-                prediction_service = PredictionService(db)
-
-                # 计算试卷总分
-                # AI 可能只提取部分题目分值，导致总分不完整
-                # 策略：如果提取的总分 < 题目数*2（不合理），使用默认 100 分
-                raw_total = sum(
-                    q.get('analysis', {}).get('total_score', q.get('total_score', 0))
-                    for q in questions
-                )
-                min_reasonable = len(questions) * 2  # 每题至少 2 分
-                if raw_total < min_reasonable:
-                    total_score = 100
-                    logger.info(f"[自动分析] 提取总分 {raw_total} 不合理（< {min_reasonable}），使用默认 100 分")
-                else:
-                    total_score = raw_total
-
-                # 推断年级（默认高三，后续可以从文件名或内容推断）
-                grade = "高三"
-
-                # 进行预估
-                score_prediction = await prediction_service.predict_exam_score(
-                    questions=questions,
-                    total_score=total_score,
-                    grade=grade,
-                    exam_name=file.filename,
-                    save_prediction=True
-                )
-                logger.info(f"[自动分析] 分数预估完成: 预测均分={score_prediction.get('predicted_average')}")
-            finally:
-                await db.close()
-        except ImportError:
-            pass  # 数据库模块不可用，跳过
-        except Exception as e:
-            logger.warning(f"[自动分析] 分数预估失败（不影响主流程）: {str(e)}")
-
-        # 9. 返回结果
-        elapsed_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"[自动分析] 完成！总耗时: {elapsed_time:.1f}秒")
-
-        result = {
-            "total_count": len(questions),
-            "questions": questions,
-            "processing_time": elapsed_time,
-            "mode": mode,
-            "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,
-            "metadata_quality": metadata_quality,
-            "report_url": report_url,
-            "html_report_url": html_report_url,
-            "report_error": report_error,
-            "exam_review_channel": effective_review_channel,
-        }
-
-        # 添加分数预估（如果有）
-        if score_prediction:
-            result["score_prediction"] = score_prediction
-
-        return result
+        return {"task_id": task_id, "status": "processing", "total": len(questions)}
 
     except HTTPException:
         raise
@@ -524,12 +384,156 @@ async def analyze_auto(
                 logger.warning(f"删除临时文件失败: {str(e)}")
 
 
+
+async def _run_analysis_pipeline(
+    task_id, questions, image_bytes, mode,
+    competency_analyzer,
+    generate_report, report_mode, filename,
+    start_time,
+):
+    """后台分析管线 — analyze_auto 返回后异步执行。"""
+    try:
+        total = len(questions)
+        completed = [0]
+
+        set_analysis_options(generate_report=generate_report, report_mode=report_mode)
+        logger.info(f"开始并发分析 {total} 道题（并发 {MAX_WORKERS}）...")
+        sem = asyncio.Semaphore(MAX_WORKERS)
+
+        async def analyze_one(q):
+            async with sem:
+                try:
+                    result = await analyze_question_full(
+                        q, image_bytes, mode,
+                    )
+                    completed[0] += 1
+                    task_manager.update(task_id, completed[0], f"已分析 {completed[0]}/{total} 题")
+                    return result
+                except Exception as e:
+                    completed[0] += 1
+                    task_manager.update(task_id, completed[0], f"已分析 {completed[0]}/{total} 题")
+                    logger.error(f"题目 {q.get('id')} 分析失败: {e}")
+                    q["error"] = str(e)
+                    return q
+
+        questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
+        logger.info("所有题目分析完成")
+        task_manager.update(task_id, total, "正在生成报告...")
+
+        try:
+            competency_list = _build_competency_list(questions)
+            _subj = normalize_subject(questions[0].get("subject") if questions else None)
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list, _subj)
+        except Exception as e:
+            logger.error(f"素养聚合失败: {str(e)}")
+            competency_summary = {}
+
+        try:
+            exam_statistics = generate_exam_statistics(questions, competency_summary)
+        except Exception as e:
+            logger.error(f"整卷统计失败: {str(e)}")
+            exam_statistics = {}
+
+        metadata_quality = _compute_route_metadata_quality(questions)
+
+        report_url = None
+        html_report_url = None
+        report_error = None
+        if generate_report:
+            try:
+                _validate_report_metadata_for_route(questions)
+                exam_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+                pdf_path = REPORTS_DIR / f"{exam_id}.pdf"
+                artifacts = await _generate_route_report_artifacts(
+                    questions, competency_summary, exam_statistics,
+                    {"name": filename, "total": len(questions), "mode": mode},
+                    report_mode, pdf_path,
+                )
+                report_url = f"/api/reports/{exam_id}.pdf?{sign_report_path(f'{exam_id}.pdf')}"
+                if artifacts.get("html_path"):
+                    html_report_url = f"/api/reports/{exam_id}.html?{sign_report_path(f'{exam_id}.html')}"
+                logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
+            except Exception as e:
+                logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
+                report_error = f"报告生成失败: {str(e)}"
+
+        score_prediction = None
+        try:
+            from database import get_db_session
+            from prediction_service import PredictionService
+            db = await get_db_session()
+            try:
+                prediction_service = PredictionService(db)
+                raw_total = sum(
+                    q.get('analysis', {}).get('total_score', q.get('total_score', 0))
+                    for q in questions
+                )
+                min_reasonable = len(questions) * 2
+                total_score = 100 if raw_total < min_reasonable else raw_total
+                score_prediction = await prediction_service.predict_exam_score(
+                    questions=questions, total_score=total_score,
+                    grade="高三", exam_name=filename, save_prediction=True,
+                )
+                logger.info(f"[自动分析] 分数预估完成: 预测均分={score_prediction.get('predicted_average')}")
+            finally:
+                await db.close()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"[自动分析] 分数预估失败（不影响主流程）: {str(e)}")
+
+        elapsed_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[自动分析] 完成！总耗时: {elapsed_time:.1f}秒")
+
+        result = {
+            "total_count": len(questions),
+            "questions": questions,
+            "processing_time": elapsed_time,
+            "mode": mode,
+            "competency_summary": competency_summary,
+            "exam_statistics": exam_statistics,
+            "metadata_quality": metadata_quality,
+            "report_url": report_url,
+            "html_report_url": html_report_url,
+            "report_error": report_error,
+        }
+        if score_prediction:
+            result["score_prediction"] = score_prediction
+
+        task_manager.complete(task_id, result)
+
+    except Exception as e:
+        logger.error(f"[自动分析] 后台任务失败: {e}", exc_info=True)
+        task_manager.fail(task_id, str(e))
+
+
+@router.get("/api/analysis/status/{task_id}")
+async def analysis_status(task_id: str):
+    """轮询分析任务状态。"""
+    task = task_manager.get(task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    resp = {
+        "status": task["status"],
+        "progress": task["progress"],
+        "total": task["total"],
+        "message": task["message"],
+    }
+    if task["status"] == "completed":
+        resp["result"] = task["result"]
+    elif task["status"] == "failed":
+        resp["error"] = task["error"]
+    return resp
+
+
+
 # ============ Word文档题目拆分 API（v3.0优化）============
 
 @router.post("/api/analyze/auto_split")
 async def auto_split_questions(
     file: UploadFile = File(...),
-    use_rule: bool = Form(True)  # 保留参数兼容性，v3.0固定使用Word提取
+    use_rule: bool = Form(True),  # 保留参数兼容性，v3.0固定使用Word提取
+    authorization: Optional[str] = Header(None),
 ):
     """
     第一阶段：自动拆分题目（v3.0：仅支持Word文档）
@@ -546,6 +550,9 @@ async def auto_split_questions(
             "method": "word_native"
         }
     """
+    # 认证（仅鉴权防滥用；拆分不扣费，扣费在 confirm_split）
+    await _resolve_user_and_review(authorization)
+
     word_splitter = get_word_splitter()
 
     start_time = datetime.now()
@@ -569,7 +576,8 @@ async def auto_split_questions(
         # 3. 使用Word提取器拆分
         logger.info("[自动拆分] 使用Word原生提取器")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, word_splitter.split, str(file_path))
+        result = await loop.run_in_executor(
+            None, lambda: split_word_with_visual(str(file_path), subject=None))
 
         # 4. 分离前端数据和AI数据
         # 前端数据：移除_media_for_ai字段
@@ -647,7 +655,8 @@ async def confirm_split(
     mode: AnalysisMode = Form(AnalysisMode.FAST),
     generate_report: bool = Form(False),
     report_mode: str = Form("full"),
-    exam_review_channel: Optional[str] = Form(None),
+    subject: str = Form("biology"),
+    authorization: Optional[str] = Header(None),
 ):
     """
     第二阶段：确认拆分结果（人工修正后）并继续分析（v3.0：使用Word媒体数据）
@@ -661,14 +670,17 @@ async def confirm_split(
     Returns:
         完整分析结果（同/api/analyze）
     """
+    # 认证 + 评审旁路（reviewer 跳过扣费，与 analyze_auto 一致）
+    user_id, review_mode = await _resolve_user_and_review(authorization)
+    await _ensure_balance(user_id, review_mode)
+
     competency_analyzer = get_competency_analyzer()
 
     start_time = datetime.now()
-    logger.info(f"[确认拆分] session_id={session_id}, mode={mode}")
+    logger.info(f"[确认拆分] session_id={session_id}, mode={mode}, 用户={user_id}, 评审={review_mode}")
 
     try:
         # 1. 获取session数据
-        effective_review_channel = _ensure_review_channel_ready(exam_review_channel)
         session_data = get_session(session_id)
         if not session_data:
             raise HTTPException(404, "Session已过期或不存在")
@@ -685,7 +697,36 @@ async def confirm_split(
                 raise HTTPException(400, f"第{i+1}项不是有效的题目对象")
             if "id" not in q:
                 raise HTTPException(400, f"第{i+1}项缺少 id 字段")
-        logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目")
+        # 注入学科（下游链路从 question["subject"] 取）
+        _subject = normalize_subject(subject)
+        # G 根因修复：未注册学科静默降级告警 + 保留 raw_subject 原值。
+        if subject and not is_valid_subject(subject):
+            logger.warning(
+                f"[学科] 上传学科 '{subject}' 未在九科注册，已降级为 {get_subject_name(_subject)}"
+                f"（{_subject}）；本卷将按该学科分析出报告，请确认前端学科选择是否正确。"
+            )
+        for q in corrected_questions_list:
+            q["subject"] = _subject
+            q["raw_subject"] = subject
+        logger.info(f"[确认拆分] 收到{len(corrected_questions_list)}道修正后的题目 (subject={_subject})")
+
+        # 题目校验通过，扣除积分（评审模式跳过；同 session 幂等，防刷新/重试重复扣费 DR-01）
+        if not review_mode:
+            if session_data.get("charged"):
+                logger.info(f"[积分] session {session_id} 已扣费，跳过重复扣费（幂等）")
+            else:
+                try:
+                    await credits_service.consume(user_id, credits_service.ANALYSIS_COST, f"智能审题确认-{session_id}")
+                    session_data["charged"] = True
+                    save_session(session_id, session_data)
+                    logger.info(f"[积分] 确认拆分已扣费 {credits_service.ANALYSIS_COST} 积分")
+                except credits_service.InsufficientCreditsError as e:
+                    raise HTTPException(402, detail=f"积分不足：余额 {e.balance}，需要 {e.required}")
+                except Exception as e:
+                    logger.error(f"[积分] 扣费失败: {e}")
+                    raise HTTPException(500, detail="积分扣费失败，请稍后重试")
+        else:
+            logger.info("[评审] 确认拆分跳过扣费")
 
         # 3. 获取原始题目数据（含_media_for_ai）
         original_questions = session_data.get("auto_split_result", {}).get("questions", [])
@@ -765,7 +806,6 @@ async def confirm_split(
                         q,
                         [],
                         mode,
-                        exam_review_channel=effective_review_channel,
                     )
                     if "_media_for_ai" in result:
                         del result["_media_for_ai"]
@@ -782,7 +822,8 @@ async def confirm_split(
         # 6. 聚合素养统计（分值加权）
         try:
             competency_list = _build_competency_list(questions_with_media)
-            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list)
+            _subj = normalize_subject(questions_with_media[0].get("subject") if questions_with_media else None)
+            competency_summary = competency_analyzer.aggregate_exam_competencies(competency_list, _subj)
         except Exception as e:
             logger.error(f"素养聚合失败: {str(e)}")
             competency_summary = {"error": str(e)}
@@ -812,12 +853,12 @@ async def confirm_split(
                 artifacts = await _generate_route_report_artifacts(
                     questions_with_media, competency_summary, exam_statistics,
                     {"name": session_data["filename"], "total": len(questions_with_media), "mode": mode},
-                    report_mode, pdf_path, effective_review_channel,
+                    report_mode, pdf_path,
                 )
 
-                report_url = f"/api/reports/{exam_id}.pdf"
+                report_url = f"/api/reports/{exam_id}.pdf?{sign_report_path(f'{exam_id}.pdf')}"
                 if artifacts.get("html_path"):
-                    html_report_url = f"/api/reports/{exam_id}.html"
+                    html_report_url = f"/api/reports/{exam_id}.html?{sign_report_path(f'{exam_id}.html')}"
                 logger.info(f"报告生成成功: {report_url}, html={html_report_url}")
             except Exception as e:
                 logger.error(f"报告生成失败: {str(e)}", exc_info=True)
@@ -845,7 +886,6 @@ async def confirm_split(
             "html_report_url": html_report_url,
             "report_error": report_error,
             "mode": mode,
-            "exam_review_channel": exam_review_channel,
         }
 
     except Exception as e:

@@ -1,0 +1,422 @@
+"""report_insights LLM 分析层测试（mock GPT 调用）"""
+import pytest
+import json
+from unittest.mock import patch, AsyncMock
+
+MOCK_OVERALL_RESPONSE = json.dumps({
+    "overall_assessment": "本卷难度适中，知识覆盖较全面。",
+    "recommendations": [
+        {"category": "难度结构", "content": "建议增加过渡题", "priority": "high"},
+        {"category": "知识覆盖", "content": "选修3覆盖不足", "priority": "medium"},
+    ],
+    "difficulty_analysis": "难度梯度呈递增趋势...",
+    "knowledge_analysis": "知识点集中在必修1...",
+    "competency_analysis": "科学探究素养覆盖不足...",
+    "bloom_analysis": "高阶思维占比偏低...",
+})
+
+MOCK_COMMENTS_RESPONSE = json.dumps({
+    "question_comments": {
+        "1": "本题考查光合作用基本概念，属于识记层级。",
+        "2": "本题需要分析系谱图推导基因型。",
+    }
+})
+
+
+@pytest.fixture
+def sample_report_data():
+    return {
+        "exam_info": {"name": "测试卷", "total_questions": 2, "total_score": 10, "mode": "fast"},
+        "metrics": {"avg_difficulty": 5.0, "avg_cognitive_level": 5.0,
+                    "difficulty_distribution": {"简单": 1, "中等": 1, "困难": 0},
+                    "difficulty_distribution_by_score": {},
+                    "bloom_distribution": {"应用": 0.6, "识记": 0.4}},
+        "difficulty_curve": [],
+        "difficulty_gradient": {"front": 3.0, "middle": 5.0, "back": 7.0, "gradient_type": "前易后难（递增）"},
+        "knowledge": {"top_points": [{"name": "光合作用", "weighted_score": 6.0}],
+                      "textbook_distribution": {}},
+        "competency": {"distribution": {}, "primary_distribution": {}},
+        "feature_profile": {"avg_per_dimension": {"bloom": 3.0, "reasoning_steps": 4.0,
+                            "knowledge_breadth": 2.0, "info_density": 2.0,
+                            "novelty": 2.0, "representation_complexity": 1.0},
+                           "top_difficulty_factors": ["bloom", "reasoning_steps", "knowledge_breadth"]},
+        "questions": [
+            {"id": 1, "total_score": 6, "difficulty": 3.0, "bloom": 2,
+             "knowledge_points": ["光合作用"], "primary_competency": "生命观念",
+             "detailed_analysis": "步骤1...", "common_mistakes": ["错误1"]},
+            {"id": 2, "total_score": 4, "difficulty": 7.0, "bloom": 4,
+             "knowledge_points": ["遗传学"], "primary_competency": "科学思维",
+             "detailed_analysis": "步骤1...", "common_mistakes": ["错误1"]},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+class TestGenerateInsights:
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_brief_mode_one_call(self, mock_gpt, sample_report_data):
+        """精简档只调用 1 次 GPT"""
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        assert mock_gpt.call_count == 2  # overall + teaching
+        assert "overall_assessment" in result
+        assert len(result["recommendations"]) >= 1
+        assert "teaching_suggestions" in result
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_full_mode_one_call_with_comments_from_data(self, mock_gpt, sample_report_data):
+        """完整档只调用 1 次 GPT（逐题点评从 report_data 复用）"""
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+        # 模拟 teacher_comment 已在 feature_extractor 中提取
+        sample_report_data["questions"][0]["teacher_comment"] = "本题考查光合作用基本概念。"
+        sample_report_data["questions"][1]["teacher_comment"] = "需要综合分析系谱图。"
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="full")
+        assert mock_gpt.call_count == 2  # overall + teaching
+        assert "question_comments" in result
+        assert "1" in result["question_comments"]
+        assert "teaching_suggestions" in result
+
+
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_structure(self, mock_gpt, sample_report_data):
+        """教学建议返回包含三个子键"""
+        mock_teaching = json.dumps({
+            "error_categories": [
+                {"category": "概念混淆", "description": "光合与呼吸混淆", "related_questions": [1], "frequency": "高"}
+            ],
+            "lecture_outline": [
+                {"topic": "光合作用vs呼吸作用", "duration_minutes": 15, "key_points": ["区别要点"], "related_errors": ["概念混淆"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "光合作用", "exercise_type": "判断题", "difficulty": "中等"}
+            ]
+        })
+        mock_gpt.side_effect = [MOCK_OVERALL_RESPONSE, mock_teaching]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        ts = result["teaching_suggestions"]
+        assert len(ts["error_categories"]) == 1
+        assert ts["error_categories"][0]["category"] == "概念混淆"
+        assert len(ts["lecture_outline"]) == 1
+        assert len(ts["remedial_exercises"]) == 1
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_only_failure_degrades_not_raises(self, mock_gpt, sample_report_data):
+        """改动C：仅教学建议三级重试全失败（综合分析成功）→ 板块降级，不 raise。
+        返回占位空结构 + _degraded_sections 标注，综合分析与统计数据不受影响。"""
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("API timeout"),
+            RuntimeError("compact timeout"),
+            RuntimeError("ultra compact timeout"),
+        ]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        # 综合分析正常
+        assert result["overall_assessment"] == "本卷难度适中，知识覆盖较全面。"
+        # 教学建议降级为占位空结构（不 raise、不伪装成功内容）
+        assert result["teaching_suggestions"] == {
+            "error_categories": [], "lecture_outline": [], "remedial_exercises": []
+        }
+        # 降级板块被标注
+        assert "report_teaching_suggestions" in result["_degraded_sections"]
+        assert "report_insights" not in result["_degraded_sections"]
+        # 降级 call 不泄漏 provider_errors，metadata.degraded=True，prompt_hash=degraded
+        teaching_call = next(
+            c for c in result["_llm_calls"] if c["purpose"] == "report_teaching_suggestions"
+        )
+        assert teaching_call["metadata"]["degraded"] is True
+        assert teaching_call["prompt_hash"] == "degraded"
+        assert "provider_errors" not in teaching_call["metadata"]
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_both_sections_failure_fail_closed_raises(self, mock_gpt, sample_report_data):
+        """改动C fail-closed 护栏：综合分析与教学建议均不可用（疑似 provider 整体不可用）
+        → raise，不出空壳报告。"""
+        mock_gpt.side_effect = RuntimeError("All LLM providers failed")
+        from report_insights import generate_insights
+        with pytest.raises(RuntimeError, match="LLM .*生成失败"):
+            await generate_insights(sample_report_data, mode="brief")
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_compact_retry_succeeds(self, mock_gpt, sample_report_data):
+        """教学建议长输出失败时可用短格式重试，但仍必须来自 LLM JSON。"""
+        compact_teaching = json.dumps({
+            "error_categories": [
+                {"category": "审题不清", "description": "忽略限定词", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "限定词辨析", "duration_minutes": 10, "key_points": ["圈画关键词"], "related_errors": ["审题不清"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "激素调节", "exercise_type": "选择题", "difficulty": "中等"}
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("finish_reason=length"),
+            compact_teaching,
+        ]
+        from report_insights import generate_insights
+
+        result = await generate_insights(sample_report_data, mode="brief")
+
+        assert mock_gpt.call_count == 3
+        assert result["teaching_suggestions"]["error_categories"][0]["category"] == "审题不清"
+        teaching_call = result["_llm_calls"][-1]
+        assert teaching_call["metadata"]["retry_count"] == 1
+        assert teaching_call["metadata"]["compact_retry"] is True
+        assert teaching_call["metadata"]["retry_strategy"] == "compact"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_suggestions_ultra_compact_retry_succeeds(self, mock_gpt, sample_report_data):
+        """普通短格式仍超长时，继续用更硬的短 JSON 模板重试。"""
+        ultra_teaching = json.dumps({
+            "error_categories": [
+                {"category": "推理错误", "description": "证据链不完整", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "证据推理", "duration_minutes": 8, "key_points": ["先证后结"], "related_errors": ["推理错误"]},
+                {"topic": "图表判断", "duration_minutes": 10, "key_points": ["读轴看量"], "related_errors": ["推理错误"]},
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "遗传分析", "exercise_type": "选择题", "difficulty": "中等"},
+                {"knowledge_point": "图表分析", "exercise_type": "非选择题", "difficulty": "中等"},
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("finish_reason=length"),
+            RuntimeError("finish_reason=length"),
+            ultra_teaching,
+        ]
+        from report_insights import generate_insights
+
+        result = await generate_insights(sample_report_data, mode="brief")
+
+        assert mock_gpt.call_count == 4
+        assert result["teaching_suggestions"]["error_categories"][0]["category"] == "推理错误"
+        teaching_call = result["_llm_calls"][-1]
+        assert teaching_call["metadata"]["retry_count"] == 2
+        assert teaching_call["metadata"]["compact_retry"] is True
+        assert teaching_call["metadata"]["retry_strategy"] == "ultra_compact"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_teaching_budget_adequate_and_non_shrinking(self, mock_gpt, sample_report_data):
+        """RC6: deepseek-v4-pro 推理模型 reasoning 先吃预算，teaching 预算必须充足且重试不缩。
+        防回归到 4096/1536/768 shrink 阶梯（对推理模型必然 finish_reason=length -> 报告崩）。"""
+        valid_teaching = json.dumps({
+            "error_categories": [
+                {"category": "推理错误", "description": "因果倒置", "related_questions": [2], "frequency": "中"}
+            ],
+            "lecture_outline": [
+                {"topic": "证据推理", "duration_minutes": 10, "key_points": ["先证后断"], "related_errors": ["推理错误"]}
+            ],
+            "remedial_exercises": [
+                {"knowledge_point": "遗传规律", "exercise_type": "非选择题", "difficulty": "中等"}
+            ],
+        })
+        mock_gpt.side_effect = [
+            MOCK_OVERALL_RESPONSE,
+            RuntimeError("openai_chat provider_incomplete_response: finish_reason=length"),
+            RuntimeError("openai_chat provider_incomplete_response: finish_reason=length"),
+            valid_teaching,
+        ]
+        from report_insights import generate_insights
+        result = await generate_insights(sample_report_data, mode="brief")
+        assert "teaching_suggestions" in result
+        budgets = [
+            c.kwargs["max_tokens"]
+            for c in mock_gpt.call_args_list
+            if c.kwargs.get("purpose") == "report_teaching_suggestions"
+        ]
+        assert budgets, "未捕获到 teaching 调用"
+        assert budgets[0] >= 8192, f"primary 预算不足: {budgets[0]}"
+        assert all(b >= 8192 for b in budgets), f"重试预算饥饿: {budgets}"
+        assert budgets == sorted(budgets), f"重试预算应单调不降(不缩): {budgets}"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_gpt_failure_raises(self, mock_gpt, sample_report_data):
+        """GPT 失败直接抛异常，不降级"""
+        mock_gpt.side_effect = RuntimeError("API 超时")
+        from report_insights import generate_insights
+        with pytest.raises(RuntimeError, match="LLM 分析生成失败"):
+            await generate_insights(sample_report_data, mode="brief")
+
+    async def test_evidence_facts_are_section_cards_and_traceable(self, sample_report_data):
+        from report_insights import _build_evidence_facts
+
+        facts = _build_evidence_facts(sample_report_data)
+        sources = {
+            (fact.get("attributes") or {}).get("source")
+            for fact in facts
+        }
+
+        assert 5 <= len(facts) <= 20
+        assert "report.data_card.overall" in sources
+        assert "report.data_card.difficulty" in sources
+        assert "report.data_card.difficulty_distribution_detail" in sources
+        assert "report.data_card.bloom" in sources
+        assert "report.data_card.knowledge" in sources
+        assert "report.data_card.competency" in sources
+        assert "report.data_card.feature_profile" in sources
+        assert "report.data_card.summary" in sources
+        assert "report.data_card.recommendation_basis" in sources
+        assert "report.data_card.recommendation_policy" in sources
+        assert all(len(str(fact.get("factText") or "")) <= 1200 for fact in facts)
+        assert "report.metrics" not in sources
+        difficulty_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.difficulty"
+        )
+        assert "avg_difficulty" in difficulty_card["factText"]
+        assert "difficulty_gradient" in difficulty_card["factText"]
+        difficulty_detail_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source")
+            == "report.data_card.difficulty_distribution_detail"
+        )
+        assert "简单题为1题。" in difficulty_detail_card["factText"]
+        assert "中等题为1题。" in difficulty_detail_card["factText"]
+        assert "困难题为0题。" in difficulty_detail_card["factText"]
+        summary_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.summary"
+        )
+        assert "top_difficulty_factors" in summary_card["factText"]
+        recommendation_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.recommendation_basis"
+        )
+        assert "recommendation_basis" in recommendation_card["factText"]
+        policy_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.recommendation_policy"
+        )
+        assert "recommendation_policy" in policy_card["factText"]
+        assert "hard_score_share" in policy_card["factText"]
+        feature_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.feature_profile"
+        )
+        assert "top_difficulty_factor_aliases" in feature_card["factText"]
+        assert "对难度贡献最大的维度包含" in feature_card["factText"]
+
+    async def test_evidence_facts_expand_all_primary_competency_counts(self, sample_report_data):
+        from report_insights import _build_evidence_facts
+
+        sample_report_data["competency"]["primary_distribution"] = {
+            "生命观念": 11,
+            "科学思维": 10,
+            "科学探究": 0,
+            "社会责任": 0,
+        }
+
+        facts = _build_evidence_facts(sample_report_data)
+        competency_card = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.competency"
+        )
+
+        assert "主要素养分布中科学思维为10题" in competency_card["factText"]
+        assert "主要素养分布中生命观念为11题" in competency_card["factText"]
+
+    async def test_evidence_facts_include_ranked_knowledge_detail(self, sample_report_data):
+        from report_insights import _build_evidence_facts
+
+        sample_report_data["knowledge"]["top_points"] = [
+            {"name": "\u57fa\u56e0\u7684\u5206\u79bb\u5b9a\u5f8b", "weighted_score": 4.5, "question_count": 3},
+            {"name": "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406", "weighted_score": 4.1, "question_count": 2},
+        ]
+
+        facts = _build_evidence_facts(sample_report_data)
+        detail = next(
+            fact for fact in facts
+            if (fact.get("attributes") or {}).get("source") == "report.data_card.knowledge_detail"
+        )
+
+        assert "\u7b2c\u4e8c\u9ad8\u6743\u91cd\u77e5\u8bc6\u70b9\u4e3a\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406" in detail["factText"]
+        assert "\u751f\u6001\u5de5\u7a0b\u7684\u57fa\u672c\u539f\u7406\u52a0\u6743\u5206\u503c\u4e3a4.1" in detail["factText"]
+
+    async def test_overall_prompt_requires_data_anchored_short_claims(self, sample_report_data):
+        from report_insights import _build_overall_prompt
+
+        prompt = _build_overall_prompt(sample_report_data)
+
+        assert "事实性要求" in prompt
+        assert "数据事实卡片" in prompt
+        assert "每句只包含一个主要事实" in prompt
+        assert "优先使用上方数据事实卡片" in prompt
+        assert "不要写“信度”" in prompt
+
+    async def test_evidence_facts_include_exact_zero_primary_summary(self, sample_report_data):
+        from report_insights import _build_evidence_facts
+
+        sample_report_data["competency"]["primary_distribution"] = {
+            "生命观念": 1,
+            "科学思维": 1,
+            "科学探究": 0,
+            "社会责任": 0,
+        }
+
+        facts = _build_evidence_facts(sample_report_data)
+        joined = "\n".join(fact["factText"] for fact in facts)
+
+        assert "主要素养为0题的维度为科学探究、社会责任" in joined
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_llm_calls_record_actual_provider_model(self, mock_gpt, sample_report_data, monkeypatch):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+        import report_insights
+
+        monkeypatch.setattr(
+            report_insights,
+            "get_last_call_metadata",
+            lambda: {
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "fallback_count": 0,
+                "provider_errors": [],
+            },
+            raising=False,
+        )
+
+        result = await report_insights.generate_insights(
+            sample_report_data,
+            mode="brief",
+        )
+
+        calls = result["_llm_calls"]
+        assert calls[0]["purpose"] == "report_insights"
+        assert calls[0]["provider"] == "deepseek"
+        assert calls[0]["model"] == "deepseek-v4-pro"
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_llm_uses_deterministic_temperature(self, mock_gpt, sample_report_data):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        from report_insights import generate_insights
+
+        await generate_insights(sample_report_data, mode="brief")
+
+        temperatures = [
+            call.kwargs.get("temperature")
+            for call in mock_gpt.call_args_list
+        ]
+        assert temperatures
+        assert all(value == 0.0 for value in temperatures)
+
+    @patch("report_insights.send_message_gpt", new_callable=AsyncMock)
+    async def test_report_overall_call_uses_large_enough_token_budget(self, mock_gpt, sample_report_data):
+        mock_gpt.return_value = MOCK_OVERALL_RESPONSE
+
+        from report_insights import generate_insights
+
+        await generate_insights(sample_report_data, mode="brief")
+
+        assert mock_gpt.call_args_list[0].kwargs["purpose"] == "report_insights"
+        assert mock_gpt.call_args_list[0].kwargs["max_tokens"] >= 4096

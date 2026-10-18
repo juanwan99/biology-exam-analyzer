@@ -7,8 +7,9 @@
 3. 映射失败时返回LLM原始内容
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from logger import get_logger
+from subject_config import normalize_subject
 
 logger = get_logger()
 
@@ -621,6 +622,19 @@ class KnowledgeMapper:
         "植物脱毒技术": ["选择性必修3", "第2章", "2.1"],
         "植物病毒分布与脱毒": ["选择性必修3", "第2章", "2.1"],
         "植物病毒分布与茎尖特点": ["选择性必修3", "第2章", "2.1"],
+        # --- 类II 真知识点措辞扩充（治模型措辞与教材关键词不一致的映射漏） ---
+        "膜转运蛋白": ["必修1", "第4章", "4.2"],
+        "膜转运蛋白的功能": ["必修1", "第4章", "4.2"],
+        "转运蛋白的功能": ["必修1", "第4章", "4.2"],
+        "碳的存在形式": ["选择性必修2", "第3章", "3.3"],
+        "碳的存在形式与转化": ["选择性必修2", "第3章", "3.3"],
+        "同源基因比较": ["必修2", "第6章", "6.1"],
+        "同源基因": ["必修2", "第6章", "6.1"],
+        "配子结合与受精": ["必修2", "第2章", "2.1"],
+        "植物病毒分布": ["选择性必修3", "第2章", "2.1"],
+        "植物病毒分布特点": ["选择性必修3", "第2章", "2.1"],
+        "定向改变": ["必修2", "第6章", "6.2"],
+        "定向改变的含义": ["必修2", "第6章", "6.2"],
         "茎尖培养脱毒": ["选择性必修3", "第2章", "2.1"],
         "茎尖脱毒原理": ["选择性必修3", "第2章", "2.1"],
         "脱毒苗培养的原理": ["选择性必修3", "第2章", "2.1"],
@@ -865,16 +879,25 @@ class KnowledgeMapper:
             "mapped": False
         }
 
-    def map_knowledge_points(self, knowledge_points: List[str]) -> List[Dict[str, Any]]:
+    def map_knowledge_points(self, knowledge_points: List[str],
+                             subject: str = "biology") -> List[Dict[str, Any]]:
         """
         批量映射知识点
 
         Args:
             knowledge_points: LLM返回的知识点列表
+            subject: 学科 key。教材结构(TEXTBOOK_STRUCTURE)与关键词表为生物学科专属，
+                非生物学科无对应教材库，一律返回 mapped=False，避免把化学/地理等知识点
+                经模糊兜底强行塞进生物教材章节（污染报告"教材章节归因/教材覆盖率"）。
+                默认 biology 保证既有生物调用零回归。 —— A-1 根因修复（教材映射加 subject 门控）。
 
         Returns:
             映射结果列表
         """
+        if normalize_subject(subject) != "biology":
+            logger.info(f"[知识点映射] 学科={normalize_subject(subject)} 非生物，跳过生物教材映射（{len(knowledge_points)}个知识点按未映射处理）")
+            return [{"original": kp, "mapped": False, "reason": "non_biology_subject"}
+                    for kp in knowledge_points]
         results = []
         for kp in knowledge_points:
             results.append(self.map_knowledge_point(kp))

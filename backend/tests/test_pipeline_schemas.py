@@ -1,5 +1,4 @@
 """Tests for pipeline schemas and DTO conversions."""
-import pytest
 from pipeline.schemas import (
     DocumentArtifact, QuestionDraft, QuestionAnalysis,
     ReportData, StepResult, StepStatus, AnalysisRun,

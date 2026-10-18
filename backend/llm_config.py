@@ -13,12 +13,33 @@ TEXT_REVIEW_PURPOSES = {
     "big_question_feature_extraction",
     "competency_analysis",
     "feature_extraction",
+    # 方案B 特征提取拆分子任务：deepseek 主审优先（与 feature_extraction 同口径）
+    "feature_difficulty",
+    "feature_quality",
+    "feature_teaching",
     "missing_evidence_repair",
     "question_analysis",
     "question_analysis_retry",
     "report_insights",
     "report_teaching_suggestions",
 }
+LIGHTWEIGHT_PURPOSES = {
+    "feature_extraction",
+    "big_question_feature_extraction",
+    "competency_analysis",
+    "report_insights",
+    "report_teaching_suggestions",
+}
+
+# 方案B：特征提取拆分子任务的 max_tokens 提额白名单。
+# 给足 16384（= provider 硬上限），让每组 reasoning 收敛后仍留出 output；
+# 绝不超过 16384（provider 端 _build_request_body 也会 min-cap 兜底）。
+FEATURE_SPLIT_PURPOSES = {
+    "feature_difficulty",
+    "feature_quality",
+    "feature_teaching",
+}
+FEATURE_SPLIT_MAX_TOKENS = 16384
 
 PROVIDERS = [
     {
@@ -36,7 +57,7 @@ PROVIDERS = [
         "model_role": "vision",
         "model_policy": "exam-review-qwen-vision",
         "max_tokens": 8192,
-        "semaphore_limit": 6,
+        "semaphore_limit": 15,
         "retry_count": 1,
         "no_proxy": True,
     },
@@ -70,7 +91,7 @@ PROVIDERS = [
         "model_role": "analysis_text",
         "model_policy": "exam-review-qwen-text",
         "max_tokens": 8192,
-        "semaphore_limit": 6,
+        "semaphore_limit": 15,
         "retry_count": 1,
         "no_proxy": True,
     },
@@ -159,6 +180,12 @@ def _apply_purpose_preference(
             provider for provider in providers
             if provider.get("name") != "qwen_text"
         ]
+    if normalized in LIGHTWEIGHT_PURPOSES:
+        priority = {"qwen_text": 0, "deepseek": 1}
+        return sorted(
+            providers,
+            key=lambda provider: priority.get(provider.get("name"), 50),
+        )
     if normalized in TEXT_REVIEW_PURPOSES:
         priority = {"deepseek": 0, "qwen_text": 1}
         return sorted(
@@ -178,8 +205,11 @@ def get_providers(
 
     for template in PROVIDERS:
         p = dict(template)
-        if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions", "report_grounding_check") and p.get("subq_max_tokens"):
+        if purpose in ("question_analysis_subquestion", "report_insights", "report_teaching_suggestions") and p.get("subq_max_tokens"):
             p["max_tokens"] = p["subq_max_tokens"]
+        elif purpose in FEATURE_SPLIT_PURPOSES:
+            # 提额到 16384（不超过 provider 硬上限），保证拆分后每组留出 output。
+            p["max_tokens"] = min(FEATURE_SPLIT_MAX_TOKENS, p.get("max_tokens", FEATURE_SPLIT_MAX_TOKENS))
         if p.get("vision_only") and not requires_images:
             continue
         if requires_images and not p.get("supports_images", False):

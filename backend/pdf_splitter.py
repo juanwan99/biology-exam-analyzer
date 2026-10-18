@@ -1,6 +1,9 @@
 """
 PDF文档题目拆分器
 基于pdfplumber提取文字，使用AI进行智能拆分
+
+
+Deprecated for the Word-only UI. analyze_auto still accepts PDF via API; do not add new analyze_auto logic here.
 """
 
 import re
@@ -10,7 +13,6 @@ from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 import pdfplumber
 from pdf2image import convert_from_path
-from PIL import Image
 from logger import get_logger
 
 logger = get_logger()

@@ -3,7 +3,7 @@
 
 提供历史数据管理和分数预估的业务逻辑
 """
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from decimal import Decimal
 from datetime import datetime
 import math
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from models import ExamHistory, QuestionPerformance, ScorePrediction, DifficultyMapping
-from difficulty_mapper import DifficultyMapper, DIFFICULTY_BINS, MIN_SAMPLES
+from difficulty_mapper import DifficultyMapper, MIN_SAMPLES
 from logger import get_logger
 
 logger = get_logger()

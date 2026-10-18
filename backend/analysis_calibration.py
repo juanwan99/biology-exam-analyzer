@@ -1,15 +1,14 @@
 """Calibration helpers for model-produced exam analysis structures.
 
-The functions here are deliberately deterministic. An evidence service supplies
-the textbook/rubric anchors in the prompt and metadata; this module then keeps
-the downstream score math stable by normalizing noisy model labels before they
-are aggregated.
+The functions here are deliberately deterministic. This module normalizes noisy
+model output labels so that the downstream score aggregation stays stable.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from logger import get_logger
+from subject_config import normalize_subject
 
 logger = get_logger()
 
@@ -182,6 +181,15 @@ _NON_TEXTBOOK_PATTERNS = (
     "连接点分析",
     "假说演绎法",
     "LEC2",
+    # --- 能力/方法词扩充（治上游误送，用完整措辞避免子串误杀）---
+    "读图分析",
+    "曲线解读",
+    "曲线判读",
+    "表格数据的对比分析",
+    "表格数据对比",
+    "数据的对比分析",
+    "固定装片观察的局限性",
+    "观察的局限性",
 )
 
 
@@ -287,6 +295,9 @@ _CANONICAL_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("跨膜质子梯度",), "光合作用的光反应"),
     (("质子动力势",), "光合作用的光反应"),
     (("化学渗透",), "光合作用的光反应"),
+    (("质子梯度",), "光合作用的光反应"),
+    (("H+浓度差",), "光合作用的光反应"),
+    (("H＋浓度差",), "光合作用的光反应"),
     (("光系统I", "光系统II"), "光合作用的光反应"),
     (("光系统I和II", "功能"), "光合作用的光反应"),
     (("光呼吸", "能量效率"), "光合作用"),
@@ -468,28 +479,84 @@ _CANONICAL_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 
+import re as _re
+
+# 连续的大小写交替字母段（基因型符号 Aa/Bb/AaBb/aabb 等），排除 ATP/DNA 等全大写缩写。
+_GENOTYPE_RE = _re.compile(r"(?:[A-Za-z][a-z]){2,}|[A-Za-z]{2,}[a-z][A-Za-z]*[A-Z]")
+# 比例数字，如 1:1 / 3:1 / 9:3:3:1（半角或全角冒号分隔的数字）。
+_RATIO_RE = _re.compile(r"\d+\s*[:：]\s*\d+")
+_ANSWER_SENTENCE_MARKERS = (
+    "致死",
+    "方可",
+    "不育",
+    "破坏",
+    "插入破坏",
+)
+
+
+def _looks_like_answer_sentence(value: Any) -> bool:
+    """确定性识别"答案推理整句"，与纯名词知识点区分。
+
+    仅当文本较长(>16字)且命中答案句特征才返回 True：
+    含冒号陈述 / 含比例数字(1:1) / 含"致死""方可""不育"等推理词 /
+    含基因型符号(连续大小写字母如 aabb/AaBb) / 多个"/"或"；"分隔的多要点。
+    安全：纯名词长知识点(细胞膜的流动镶嵌模型/光合作用的光反应和暗反应阶段)不命中。
+    """
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) <= 16:
+        return False
+    # 冒号陈述（半角:或全角：作分隔的陈述句，如"安全机制设计：..."）
+    if "：" in text or ":" in text:
+        return True
+    if "比例" in text or _RATIO_RE.search(text):
+        return True
+    if any(marker in text for marker in _ANSWER_SENTENCE_MARKERS):
+        return True
+    # 含成对全角括号的补充说明（答案/题干情境特征，如"…（质子梯度）增大"）
+    if ("（" in text and "）" in text) or ("(" in text and ")" in text):
+        return True
+    if _GENOTYPE_RE.search(text):
+        return True
+    # 多个 "/" 或 "；" 分隔的并列要点（答案罗列特征）
+    if text.count("/") >= 2 or text.count("；") >= 2:
+        return True
+    return False
+
+
 def is_non_textbook_skill_point(value: Any) -> bool:
     """Return True for ability/method tags that should not dilute content scores."""
     if not isinstance(value, str):
         return False
     text = value.strip()
-    return any(pattern in text for pattern in _NON_TEXTBOOK_PATTERNS)
+    if any(pattern in text for pattern in _NON_TEXTBOOK_PATTERNS):
+        return True
+    return _looks_like_answer_sentence(text)
 
 
 def canonicalize_knowledge_point(
     value: Any,
     *,
     knowledge_mapper: Any | None = None,
+    subject: str = "biology",
 ) -> tuple[str, dict[str, Any]]:
     """Map a model knowledge label to a stable aggregation label.
 
     The canonical label remains concept-level when possible. If the model emits
     an unmapped or overly broad phrase, the fallback is the textbook section
     name produced by ``KnowledgeMapper`` rather than the raw phrase.
+
+    规范化规则表(_CANONICAL_RULES)、同义词/关键词/教材分节(KnowledgeMapper)均为生物
+    学科专属知识库。非生物学科没有对应知识库，统一原样返回 raw 标签，避免把化学/地理等
+    知识点误改写成生物术语(如 富集作用→生物富集、盐类水解→水解)。subject 默认 biology
+    保证既有生物调用零回归。  —— A-1 根因修复（去生物污染：知识点规范化加 subject 门控）。
     """
     raw = " ".join(str(value or "").strip().split())
     if not raw:
         return "", {"mapped": False, "reason": "empty"}
+    if normalize_subject(subject) != "biology":
+        return raw, {"mapped": False, "strategy": "raw_non_biology", "original": raw}
     if raw == "PCR技术":
         return raw, {
             "mapped": True,
@@ -548,6 +615,7 @@ def normalize_knowledge_links(
     *,
     knowledge_mapper: Any | None = None,
     max_links: int = 3,
+    subject: str = "biology",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Canonicalize, merge and renormalize knowledge links for one SEU."""
     buckets: dict[str, float] = {}
@@ -569,6 +637,7 @@ def normalize_knowledge_links(
         canonical, meta = canonicalize_knowledge_point(
             point,
             knowledge_mapper=knowledge_mapper,
+            subject=subject,
         )
         if not canonical:
             continue
@@ -605,6 +674,7 @@ def calibrate_fine_grained_analysis(
     *,
     knowledge_mapper: Any | None = None,
     max_links_per_seu: int = 3,
+    subject: str = "biology",
 ) -> dict[str, Any]:
     """Normalize SEU knowledge links in-place and refresh summary knowledge points."""
     if not isinstance(analysis, dict):
@@ -625,6 +695,7 @@ def calibrate_fine_grained_analysis(
             unit.get("knowledge_links") or [],
             knowledge_mapper=knowledge_mapper,
             max_links=max_links_per_seu,
+            subject=subject,
         )
         if normalized:
             unit["knowledge_links"] = normalized

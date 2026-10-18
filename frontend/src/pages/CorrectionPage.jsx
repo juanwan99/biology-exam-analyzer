@@ -132,8 +132,12 @@ function CorrectionPage() {
       formData.append('mode', mode)
       formData.append('generate_report', generateReport)
 
+      const token = localStorage.getItem('token')
       const response = await axios.post('/api/analyze/confirm_split', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
       })
 
       // 保存结果并显示在当前页面

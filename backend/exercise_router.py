@@ -1,14 +1,12 @@
 """
 题库管理API路由
 """
-from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, or_, and_, Integer, cast, text, delete
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select, func, and_, text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-import os
 
 from database import get_db
 from models import ExerciseBank, ExerciseSource

@@ -1,0 +1,169 @@
+{
+ "group": "services",
+ "actions": [
+  {
+   "file": "backend/services/evidence_client_loader.py",
+   "type": "delete_file",
+   "location": "L1-15（整个文件）",
+   "what": "tracked 降级桥接壳：try-import 六件套之一 services._kb_backend 并重导出 EvidenceClient/EvidenceConfig/EvidenceError；本地克隆（=生产降级态）import 永远失败，三个符号恒为 None/None/兜底 Exception。六件套删除后此壳再无存在意义。",
+   "risk": "唯一消费方是 analysis_router.py L110 `_ensure_review_channel_ready` 的 preflight（在 try/except Exception 内）。即使 router 暂不改，删除本文件后该 import 抛 ImportError 被 except 捕获并 raise 503——与当前生产行为（preflight 因依赖缺失 503）完全一致，因此删除顺序无关、零风险；router 侧清理属收尾非阻塞。"
+  },
+  {
+   "file": "backend/services/review_channel.py",
+   "type": "edit",
+   "location": "L7-11 常量 + L14-29 normalize_review_channel() + L32-64 六个 channel_* 函数",
+   "what": "本文件是纯粹的 App Builder/证据渠道开关，经查证与 reviewer 免扣费语义零耦合（免扣费在 analysis_router._resolve_user_and_review L271-294，基于 auth token username=='reviewer'，不读 review_channel）。删除：APP_BUILDER_ALIASES/EVIDENCE_CHANNELS/AGENT_SEARCH_CHANNELS/GROUNDED_GENERATION_CHANNELS 四个常量（L7-10）、channel_uses_app_builder（L32-34）、channel_uses_evidence（L37-38）、channel_uses_agent_search（L41-42）、channel_requires_grounded_generation（L45-46）、channel_evidence_ranking_enabled（L49-55）、channel_grounding_enabled（L58-64）。保留 normalize_review_channel（llm_client L31-33 用它给 LLM call metadata 打 review_channel 标签——无害透传）和 MODEL_CHANNELS。",
+   "replacement": "收缩为：MODEL_CHANNELS = {model, llm, standard}；RETIRED_CHANNELS = {app_builder, grant, 1000_grant, evidence, evidence_enhanced, agent_evidence, agent_search, grounded_generation, evidence_generation}；normalize_review_channel() 保留 env 回退 + strip/lower/连字符归一，model 系→\"model\"，其余原样返回（不再映射 evidence 系）；新增 channel_is_retired(value) -> bool 供 analysis_router 把已下线渠道直接拒绝（保持生产 app_builder→503 的实际行为）。",
+   "risk": "消失的 6 个函数有 3 个外部调用方：analysis_router L103/106（preflight）、analysis_router L157/165（grounding_enabled 透传）、llm_client L344（channel_requires_grounded_generation）——均为生产里恒走 False/None 分支的死路径，但必须同步改否则 ImportError。normalize 对 'app_builder' 的返回值从 'evidence' 变为 'app_builder'：仅影响 LLM call metadata 标签，且此类请求在 preflight 即被拒，生产成功调用里该标签从未出现过 'evidence' 值。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "edit",
+   "location": "L104-116 analyze_question()",
+   "what": "删除 L104-107 的 `from services.review_channel import channel_evidence_ranking_enabled, channel_uses_agent_search` 和 L114-115 传给 analyzer.analyze_question 的 `evidence_ranking_enabled=`/`agent_search_enabled=` 两个 kwargs。",
+   "replacement": "analyzer.analyze_question(question_text=..., question_images=..., question_id=..., question_type=..., section_header=...) 五参调用。question_analyzer 侧这两个参数默认值是 None（L757-758），与生产实际传入的 False/None 等价（均为 falsy→证据路径关闭），删除顺序无关。保留 L88-89/L293/L332 的 set_llm_review_channel 上下文（通用 metadata 标签透传，无害）。",
+   "risk": "低。需 question_analyzer 组后续把这两个形参从签名删掉（见 cross_file_notes）。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "edit",
+   "location": "L525-547 generate_report()",
+   "what": "删除 L525 `from services.review_channel import channel_grounding_enabled`；L529-533 的 generate_insights 调用去掉 `grounding_enabled=channel_grounding_enabled(...)` kwarg（生产实际值恒 None/False→grounding 跳过）；L536-540 的 build_pipeline_audit 调用去掉 `exam_review_channel=exam_review_channel` kwarg；删除 L542-547（self._last_channel_usage 赋值 + assert_channel_usage(..., require_grounding=...) 整段）。",
+   "replacement": "insights = await generate_insights(rdata, mode=mode)；audit 两参调用；保留 L519 validate_report_metadata、L526-527/534-535 的 set_llm_review_channel 包裹、L541 self._last_report_insights = insights、L548 assert_pipeline_ready、L549 write_report_artifacts。生产中 assert_channel_usage 因 channel 非 evidence 恒在入口 return（L868），删除=行为一致。",
+   "risk": "低。generate_insights 的 grounding_enabled 形参有默认值 None（report_insights L1268），删 kwarg 后等价；report_insights 组同步删参数时注意顺序无碍。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "delete_block",
+   "location": "L80 __init__()",
+   "what": "删除 `self._last_channel_usage = None`（其唯一写点 L542 和读点 L1285/L1396 均随本清单删除）。",
+   "risk": "无外部访问方（全仓 grep 确认仅本文件 5 处 + 测试）。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "edit",
+   "location": "L718-852 build_pipeline_audit()",
+   "what": "①L720 签名删 `exam_review_channel: str | None = None` 形参；②L811 条件删 `and purpose != \"report_grounding_check\"` 豁免子句（该 purpose 的调用今后不可能存在）；③L814-841 整段删除（grounding_required 判定 + _grounding_checks/_grounding_status 校验 + report_grounding/grounding_not_ok blocker——生产中 channel_grounding_enabled 恒返回 False/None，本块从未触发）；④L848-851 返回 dict 删 `\"report_grounding_status\"` 键（生产恒 None；tracked 代码无消费方——report_product_model 读的是 insights._grounding_status 而非此键）。",
+   "replacement": "返回 dict 为 {status, blockers, warnings, metadata_quality} 四键。注意保留 L740 `\"evidence_gap_questions\": (\"evidence_units\", \"evidence_gap\")`——已查证它来自 report_data.compute_metadata_quality L448-505，统计的是 LLM 细粒度 diagnostic_units/stimulus_units 缺失，是『LLM 答案依据』语义，与 Google 证据服务无关，属保留红线。",
+   "risk": "中低：删 report_grounding_status 键改变 pipeline_audit dict 形状；该 dict 出现在 run_* 返回值里但 /api/analyze 响应（router L217-229）不含 pipeline_audit，前端不读。test_report_product_model.py L36 的同名测试属其他组，测的是 insights 路径非本键。若极度保守可改为硬编码 None 保形状。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "delete_block",
+   "location": "L854-860 build_channel_usage()",
+   "what": "整方法删除。它 `from services.evidence_audit import summarize_evidence_usage`——注意此 import 没有 try/except 降级（与任务前提『import 都有降级』不符的唯一例外），六件套删除后任何调用都会 ImportError 炸掉 run_full_analysis/run_auto_analysis，必须删而非留。",
+   "risk": "其产出 channel_usage 仅进 run_* 返回 dict 和测试断言，/api/analyze 响应不含该键，前端不读（全仓 grep 确认）→ 删除对 API 零影响。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "delete_block",
+   "location": "L862-917 assert_channel_usage()",
+   "what": "整方法删除（含 @staticmethod 装饰器和 L866 的 review_channel import）。Ranking/Check Grounding/answer_query 门禁全部是 Google 证据服务专属校验；生产中 channel 恒非 evidence，L868 入口即 return，方法是纯 no-op。",
+   "risk": "删除=把 no-op 固化，行为与生产完全一致。调用方 4 处（L543、L1262、L1286、L1397）随本清单一并删除；测试调用 7 处在 test_analysis_service_metadata.py 删除项里。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "edit",
+   "location": "L1261-1306 run_full_analysis()",
+   "what": "删除 L1261-1262（channel_usage = build_channel_usage + assert_channel_usage）、L1285-1290（报告生成后的 channel_usage 重算 + assert_channel_usage(require_grounding=True)——生产中因 channel 非 evidence 恒 no-op）、L1306 返回 dict 的 `\"channel_usage\": channel_usage,` 键。",
+   "replacement": "保留 L1259-1260 pipeline_audit、L1268-1284 报告生成与 report_insights/pipeline_audit 回填、L1269 assert_pipeline_ready。返回 dict 少 channel_usage 一键；router /api/analyze 响应本就不透传该键，对外零变化。",
+   "risk": "低。exam_review_channel 形参保留（API 契约、set_llm_review_channel 标签仍用）。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "edit",
+   "location": "L1371-1418 run_auto_analysis()",
+   "what": "与 run_full_analysis 对称：删除 L1371-1372、L1396-1401（require_grounding=True 断言段）、L1418 返回 dict 的 channel_usage 键。",
+   "replacement": "保留其余编排不动。run_auto_analysis 在 tracked 代码中无 router 调用方（auto 路由在 analysis_router 内联实现），返回 dict 形状变化仅影响本组测试。",
+   "risk": "低。"
+  },
+  {
+   "file": "backend/services/analysis_service.py",
+   "type": "keep",
+   "location": "L740 evidence_gap_questions / L1142-1152 successful_evidence_repair / L88-89·293·332·445-450·526-527 set_llm_review_channel / L1246·1357·1384 _accepts_kwarg 兼容探测 / 各方法的 exam_review_channel 形参",
+   "what": "全部保留：①evidence_gap_questions 与 missing_evidence_repair（prompt biology.question_analysis.v2.evidence_retry）是 LLM『答案依据单元』补修语义，名字带 evidence 但与 Google 无关，是生产降级路径的正常组成；②set_llm_review_channel 是通用 contextvar→metadata 标签透传（无害字典操作）；③exam_review_channel 参数贯穿保留以维持 API/调用契约（前端 AnalyzerPage L182 仍发送该 Form 字段）。",
+   "risk": "无。误删 missing_evidence_repair 豁免会把成功的依据补修标成 llm_retry 警告→pipeline blocker→生产报告被错误阻断，务必不动。"
+  },
+  {
+   "file": "backend/test_review_channel.py",
+   "type": "delete_file",
+   "location": "L1-29（整个文件，3 个测试）",
+   "what": "三个测试全部断言被删符号的证据渠道语义（app_builder→evidence 别名、grounded_generation fail-closed、agent_search 模式），import 的 5/6 个函数在 review_channel.py 收缩后消失，无一可保留。",
+   "replacement": "可选新建 2 个极小测试：normalize_review_channel('MODEL')=='model'、channel_is_retired('app_builder') is True，护住收缩后模块的行为。",
+   "risk": "无生产风险；删除后 review_channel 仅靠 router preflight 测试覆盖。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L44-62 _ready_question_with_ranked_evidence()",
+   "what": "构造带 evidence_service rank metadata 的题目 fixture，仅被 4 处即将删除的测试引用（L337、L1047、L1116、L1159 附近）。",
+   "risk": "删除前确认无其他引用（已 grep 确认仅上述 4 处）。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L134-227 三个渠道 kwarg 测试（test_analyze_question_app_builder_channel_enables_evidence_ranking / ..._agent_search_channel_enables_answer_context / ..._model_channel_disables_evidence_ranking，含 L134/166/198 装饰器）",
+   "what": "断言 analyzer 收到 evidence_ranking_enabled/agent_search_enabled kwargs——kwargs 已删，测试必死。",
+   "replacement": "可选补一个反向测试：断言 analyzer.calls[0] 中不含 'evidence_ranking_enabled'/'agent_search_enabled' 键，防回归。",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L230-266 test_auto_analysis_blocks_app_builder_when_ranking_usage_missing（含 L230 装饰器）",
+   "what": "断言 app_builder 渠道缺 Ranking 证据时 RuntimeError——assert_channel_usage 已删。",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L269-311 四个 assert_channel_usage 单测（test_evidence_channel_allows_direct_model_generation_when_ranking_recorded / test_evidence_channel_blocks_question_missing_ranked_evidence / test_agent_search_channel_requires_answer_query_evidence / test_agent_search_channel_accepts_rank_and_answer_query_evidence）",
+   "what": "直接调用已删除的 AnalysisService.assert_channel_usage 静态方法。",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L314-355 test_auto_analysis_reports_app_builder_channel_usage_when_ranking_recorded（含 L314 装饰器）",
+   "what": "断言 result['channel_usage'] 的 evidence_rank_count 等键——channel_usage 键已从 run_auto_analysis 返回值删除；且本测试在本地克隆当前就因 evidence_audit 缺失无法运行。",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "edit",
+   "location": "L970-1021 test_generate_report_delegates_grounding_to_environment_and_stores_report_insights",
+   "what": "唯一覆盖『generate_report 存储 _last_report_insights + 返回 pdf_path』的测试，不能整删。改写：去掉 grounding 相关——fake_generate_insights 不再捕获 grounding_enabled（L991）、返回值删 _grounding_status/_grounding_checks/report_grounding_check 调用记录（L994-996）、删断言 L1019（grounding_enabled is None）和 L1020-1021 的 grounding 字段断言。",
+   "replacement": "改名 test_generate_report_stores_report_insights；fake_generate_insights 返回 {'overall_assessment': 'ok', '_llm_calls': [_call('report-insights', 'report_insights', 'InsightsResult')]}；保留断言 result == str(pdf_path) 与 service._last_report_insights['overall_assessment'] == 'ok'；可加断言 generate_insights 未收到 grounding_enabled kwarg。",
+   "risk": "低；若 report_insights 组保留 grounding_enabled 形参默认 None，本测试两种写法都过。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "delete_block",
+   "location": "L1024-1171 四个 grounding 测试（test_generate_report_app_builder_channel_enables_grounding / ..._model_channel_disables_grounding / ..._blocks_app_builder_grounding_needs_review / ..._grounding_validation_error_is_readable_block，含各装饰器）",
+   "what": "断言 grounding_enabled 透传、_grounding_status=needs_review 阻断、report_grounding.grounding_not_ok blocker——对应的 build_pipeline_audit grounding 块（L814-841）和 assert_channel_usage 均已删除。",
+   "risk": "无。L1173 起的 test_auto_analysis_blocks_report_generation_when_llm_fallback_warning_exists 及之后全部保留（exam_review_channel='model' 入参仍合法）。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "keep",
+   "location": "L725-777 test_successful_evidence_repair_call_is_not_a_retry_warning / L853-868 test_metadata_retry_on_parse_or_evidence_gap_warnings",
+   "what": "保留：测的是 LLM 依据补修（missing_evidence_repair purpose / evidence_retry prompt）和细粒度单元缺口（diagnostic/stimulus units）警告语义，名字带 evidence 但与 Google 链路无关，是降级路径=唯一路径后的核心防回归测试。",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_discovery_engine_client.py",
+   "type": "delete_file",
+   "location": "整个文件（本地克隆不存在）",
+   "what": "本地克隆中不存在（ls backend/test_*.py 已实证）。若远程随六件套以 untracked/gitignored 形式存在，连同六件套一并删除。",
+   "risk": "unknown: 本地无法验证远程是否存在该文件及其内容；删除六件套后它必然 import 失败，留着只会污染测试收集。"
+  },
+  {
+   "file": "backend/test_evidence_context.py",
+   "type": "delete_file",
+   "location": "整个文件（本地克隆不存在）",
+   "what": "同上：本地克隆中不存在。若远程存在则随六件套删除。",
+   "risk": "unknown: 同 test_discovery_engine_client.py。"
+  }
+ ],
+ "cross_file_notes": "本组对外消失的符号与调用方改法：(1) services.review_channel 收缩后消失的 6 个函数 → 外部调用方 3 处：analysis_router.py L103/106 `_ensure_review_channel_ready` 用 channel_uses_app_builder + EvidenceConfig/EvidenceClient 做 preflight，应改写为「if channel_is_retired(channel): raise HTTPException(503, '证据增强审题渠道已下线，请使用普通模型渠道')」——这精确复刻生产实际行为（app_builder 请求今天就是 503，从未成功过）；analysis_router.py L157/165 `_generate_route_report_artifacts` 删 channel_grounding_enabled import 与 generate_insights 的 grounding_enabled kwarg；llm_client.py L344 删 channel_requires_grounded_generation 分支（grounded generation 走 Google generateGroundedContent，生产从未触达）。normalize_review_channel 保留，llm_client L31-33 与 analysis_router L105 不受影响。(2) services.evidence_client_loader 删除 → 唯一消费方 analysis_router L110 在 try/except 内，即使不同步改也表现为 503（与生产一致），无顺序依赖。(3) AnalysisService.build_channel_usage/assert_channel_usage 删除、run_full_analysis/run_auto_analysis 返回 dict 不再含 channel_usage 键 → tracked 消费方仅本组测试；/api/analyze 响应（analysis_router L217-229）与前端均不读该键，API 零变化。(4) analyzer.analyze_question 不再收到 evidence_ranking_enabled/agent_search_enabled → question_analyzer.py L757-758 两形参有 None 默认值，删除顺序无关；question_analyzer 组应随后删形参及内部证据分支。(5) generate_insights 不再收到 grounding_enabled → report_insights.py L1268 形参默认 None，顺序无关；report_insights 组删 _grounding_status/_grounding_checks 产出（L1258-1259、L1338、L1353）时注意 report_product_model.py L2494-2566/L2778-2779 读 insights 这两个键（生产恒缺失→块从未触发，可一并删）。(6) 必须保留的红线已验证不在本组删除范围：reviewer 免扣费 = analysis_router._resolve_user_and_review（L271-294，token username=='reviewer'），与 review_channel.py 零耦合；evidence_gap_questions / missing_evidence_repair / evidence_retry 是 LLM 答案依据语义（report_data.py L448-505、question_analyzer.py L2323+），全部保留。(7) 例外提醒：analysis_service L858 对 services.evidence_audit 的 import 没有 try/except 降级（任务前提『import 均有降级』的唯一反例），若只删六件套不改本组文件，所有 run_* 调用会直接 ImportError——本组 build_channel_usage 删除项必须与六件套删除同批落地。"
+}

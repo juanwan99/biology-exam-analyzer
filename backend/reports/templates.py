@@ -356,7 +356,7 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
 
     # 封面
     cover = f'''<div class="cover">
-<h1>生物试卷质量评估报告</h1>
+<h1>试卷质量评估报告</h1>
 <p class="subtitle">{exam["name"]}</p>
 <p>题目总数: {exam["total_questions"]} | 总分: {exam["total_score"]}分 |
 模式: {"深度" if exam["mode"]=="deep" else "快速"} |
@@ -386,8 +386,8 @@ def _render_html(data: dict, insights: dict, charts: dict, mode: str) -> str:
 
     # Footer
     sections.append('''<div class="footer">
-<p>本报告由 生物试卷智能分析系统 自动生成</p>
-<p>基于《普通高中生物学课程标准（2017年版2020修订）》</p>
+<p>本报告由 试卷智能分析系统 自动生成</p>
+<p>基于普通高中各学科课程标准核心素养</p>
 </div>''')
 
     return f'''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">

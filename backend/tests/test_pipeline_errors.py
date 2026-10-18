@@ -1,5 +1,4 @@
 """Tests for pipeline error classification and checkpoint."""
-import pytest
 import httpx
 from pipeline.errors import PipelineError, ErrorCategory, StepCheckpoint
 

@@ -43,8 +43,118 @@ class WordQuestionSplitter:
     TABLE_CUE_PATTERN = re.compile(r"(如下表|下表|结果如下表|表中|表格|表\s*\d+|table)", re.IGNORECASE)
     IMAGE_CUE_PATTERN = re.compile(r"(如下图|下图|如图|图中|图\s*\d+|曲线|电泳|figure|fig)", re.IGNORECASE)
 
+    # OOXML 命名空间（Clark 记法，与 lxml element.tag 对齐）
+    WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    MATH_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+    # OMML 上/下标 → Unicode（化学式/离子符号/电子排布式还原；无法映射时退回 _x / ^x 文本）
+    SUBSCRIPT_MAP = {
+        "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+        "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+        "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+        "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ", "k": "ₖ",
+        "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ", "p": "ₚ", "r": "ᵣ",
+        "s": "ₛ", "t": "ₜ", "u": "ᵤ", "v": "ᵥ", "x": "ₓ",
+    }
+    SUPERSCRIPT_MAP = {
+        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+        "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+        "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+        "n": "ⁿ", "i": "ⁱ",
+    }
+
     def __init__(self):
         logger.info("[Word拆分器] 初始化完成")
+
+    # ── OMML（Word 公式编辑器）文本还原 ──────────────────────────
+    # python-docx 的 para.text / cell.text 只读 w:t，会丢弃 m:oMath（化学式、
+    # 离子符号、电子排布式、Ksp、反应方程式等公式对象）。下列方法按文档顺序把
+    # OMML 文本回填到题面原位置，避免化学/物理/数学题面被掏空（治本：根因①）。
+
+    def _paragraph_text_with_omml(self, para: DocxParagraph) -> str:
+        """段落文本 = 普通 w:t + 原位置回填的 OMML 公式文本（文档顺序）。"""
+        try:
+            return self._node_text_in_order(para._p)
+        except Exception as e:
+            logger.warning(f"[OMML提取] 段落解析失败，回退 para.text: {e}")
+            return para.text
+
+    def _cell_text_with_omml(self, cell) -> str:
+        """表格单元格文本（含 OMML 还原），按段落拼接。"""
+        try:
+            text = "\n".join(
+                self._paragraph_text_with_omml(p) for p in cell.paragraphs
+            )
+            # OMML 走查无文本（无段落结构 / 异常 mock 等）→ 退回 cell.text，避免掏空
+            return text if text.strip() else cell.text
+        except Exception as e:
+            logger.warning(f"[OMML提取] 单元格解析失败，回退 cell.text: {e}")
+            return cell.text
+
+    def _node_text_in_order(self, node) -> str:
+        """按文档顺序递归取文本：w:t 原文 + m:oMath 公式还原；m:oMath 作为整体处理不再下钻。"""
+        W, M = self.WORD_NS, self.MATH_NS
+        tag = node.tag
+        if not isinstance(tag, str):
+            return ""  # 注释 / ProcessingInstruction 节点
+        if tag == M + "oMath":
+            return self._omml_to_text(node)
+        if tag == W + "t":
+            return node.text or ""
+        if tag == W + "tab":
+            return "\t"
+        if tag in (W + "br", W + "cr"):
+            return "\n"
+        if tag == W + "delText":
+            return ""  # 修订删除的文本，不计入
+        return "".join(self._node_text_in_order(c) for c in node)
+
+    def _omml_to_text(self, el) -> str:
+        """把单个 OMML 子树还原为线性文本，处理常见结构（上下标/分式/根式/定界）。"""
+        M = self.MATH_NS
+        tag = el.tag
+        if not isinstance(tag, str):
+            return ""
+        local = tag.split("}")[-1]
+        if local == "t":
+            return el.text or ""
+        if local == "sSub":  # 下标（H₂O 的 ₂、SO₄ 的 ₄）
+            base = self._omml_child_text(el, M + "e")
+            return base + self._fmt_script(self._omml_child_text(el, M + "sub"), True)
+        if local == "sSup":  # 上标（Fe³⁺ 的 ³⁺、电荷）
+            base = self._omml_child_text(el, M + "e")
+            return base + self._fmt_script(self._omml_child_text(el, M + "sup"), False)
+        if local == "sSubSup":  # 上下标兼有（SO₄²⁻）
+            base = self._omml_child_text(el, M + "e")
+            sub = self._fmt_script(self._omml_child_text(el, M + "sub"), True)
+            sup = self._fmt_script(self._omml_child_text(el, M + "sup"), False)
+            return base + sub + sup
+        if local == "f":  # 分式
+            num = self._omml_child_text(el, M + "num")
+            den = self._omml_child_text(el, M + "den")
+            return f"({num})/({den})" if (num or den) else ""
+        if local == "rad":  # 根式
+            return "√(" + self._omml_child_text(el, M + "e") + ")"
+        # m:d（括号定界）/ m:nary / m:func 等：默认按文档顺序线性展开子节点
+        return "".join(self._omml_to_text(c) for c in el)
+
+    def _omml_child_text(self, el, child_tag: str) -> str:
+        """取 el 下指定标签（如 m:e / m:sub / m:num）直接子节点的 OMML 文本。"""
+        out = []
+        for c in el:
+            if isinstance(c.tag, str) and c.tag == child_tag:
+                out.append("".join(self._omml_to_text(g) for g in c))
+        return "".join(out)
+
+    def _fmt_script(self, s: str, sub: bool) -> str:
+        """上/下标还原：能整体映射 Unicode 就映射（Cu₂S、SO₄²⁻），否则退回 _x / ^x 文本。"""
+        s = (s or "").strip()
+        if not s:
+            return ""
+        table = self.SUBSCRIPT_MAP if sub else self.SUPERSCRIPT_MAP
+        if all(ch in table for ch in s):
+            return "".join(table[ch] for ch in s)
+        prefix = "_" if sub else "^"
+        return prefix + (s if len(s) == 1 else "{" + s + "}")
 
     def split(self, docx_path: str) -> Dict[str, Any]:
         """
@@ -96,7 +206,7 @@ class WordQuestionSplitter:
             if isinstance(element, CT_P):
                 # 段落
                 para = DocxParagraph(element, doc)
-                text = para.text.strip()
+                text = self._paragraph_text_with_omml(para).strip()
 
                 # 提取段落中的图片
                 images, image_warnings = self._extract_images_from_paragraph(para, doc)
@@ -157,7 +267,11 @@ class WordQuestionSplitter:
 
                             # 验证是否为有效图片格式（过滤MathType对象）
                             if not self._is_valid_image(image_bytes):
+                                # 根因④：非标准图片多为 MathType/OLE 公式对象。OMML 已被
+                                # _paragraph_text_with_omml 还原；此处剩下的是无法转文本的
+                                # 公式真图，不再静默丢弃——记一个告警计入"未提取"（供目标C消费）。
                                 logger.debug(f"[图片提取] 跳过非标准图片格式（可能是公式对象）")
+                                warnings.append("formula_image_unextracted")
                                 continue
 
                             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
@@ -196,8 +310,7 @@ class WordQuestionSplitter:
         logger.debug(f"[图片验证] 未知格式，magic bytes: {image_bytes[:16].hex()}")
         return False
 
-    @staticmethod
-    def _table_to_markdown(table: DocxTable) -> str:
+    def _table_to_markdown(self, table: DocxTable) -> str:
         """将 Word 表格转为 Markdown 文本。"""
         if not table.rows:
             return ""
@@ -209,7 +322,7 @@ class WordQuestionSplitter:
                 if cell._tc is prev_tc:
                     continue  # skip merged cell duplicate
                 prev_tc = cell._tc
-                row_data.append(cell.text.strip().replace("\n", " "))
+                row_data.append(self._cell_text_with_omml(cell).strip().replace("\n", " "))
             rows_data.append(row_data)
         if not rows_data:
             return ""
@@ -229,10 +342,10 @@ class WordQuestionSplitter:
         将Word表格转为图片（截图方式）
         """
         try:
-            # 提取表格文本数据
+            # 提取表格文本数据（含 OMML 还原 → 合成表格图不再因公式被掏空而空白；根因②/约束③）
             rows_data = []
             for row in table.rows:
-                row_data = [cell.text.strip() for cell in row.cells]
+                row_data = [self._cell_text_with_omml(cell).strip() for cell in row.cells]
                 rows_data.append(row_data)
 
             # 使用PIL绘制表格图片

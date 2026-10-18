@@ -5,9 +5,8 @@
 """
 import re
 import fitz  # PyMuPDF
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Optional, Tuple
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from logger import get_logger
 

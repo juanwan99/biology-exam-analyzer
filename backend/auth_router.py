@@ -2,7 +2,7 @@
 用户认证和操作日志API
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict
 from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,13 +14,14 @@ import string
 from database import get_db
 from models import AdminUser, OperationLog
 from logger import get_logger
+import runtime_store
 
 logger = get_logger()
 
 router = APIRouter(prefix="/api/auth", tags=["认证管理"])
 
 # 简单的token存储（生产环境应使用Redis）
-active_tokens: Dict[str, dict] = {}
+active_tokens = runtime_store.TokenMap()
 
 # 登录限流：IP -> (失败次数, 首次失败时间)
 _login_attempts: Dict[str, tuple] = {}
@@ -59,6 +60,11 @@ class UserUpdate(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[int] = None
+
+
+class ApiKeysUpdate(BaseModel):
+    deepseek_api_key: Optional[str] = None
+    qwen_api_key: Optional[str] = None
 
 
 class OperationLogQuery(BaseModel):
@@ -231,7 +237,9 @@ async def login(
             "id": user.id,
             "username": user.username,
             "display_name": user.display_name,
-            "role": user.role
+            "role": user.role,
+            "has_api_keys": bool(user.deepseek_api_key and user.qwen_api_key),
+            "uses_system_keys": user.username in ("admin", "reviewer") or user.username.startswith("teacher"),
         }
     )
 
@@ -472,6 +480,64 @@ async def delete_user(
 
     logger.info(f"[删除用户] {admin['username']} 删除了 {username}")
     return {"success": True, "message": "用户已删除"}
+
+
+# ============ 用户 API Key 管理 ============
+
+@router.get("/me/api-keys")
+async def get_my_api_keys(
+    user: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(AdminUser).where(AdminUser.id == user["id"])
+    )
+    db_user = result.scalar_one_or_none()
+    if not db_user:
+        raise HTTPException(404, detail="用户不存在")
+    return {
+        "success": True,
+        "has_deepseek": bool(db_user.deepseek_api_key),
+        "has_qwen": bool(db_user.qwen_api_key),
+        "deepseek_key_preview": (db_user.deepseek_api_key[:8] + "..." + db_user.deepseek_api_key[-4:]) if db_user.deepseek_api_key else None,
+        "qwen_key_preview": (db_user.qwen_api_key[:8] + "..." + db_user.qwen_api_key[-4:]) if db_user.qwen_api_key else None,
+        "uses_system_keys": db_user.username in ("admin", "reviewer") or db_user.username.startswith("teacher"),
+    }
+
+
+@router.put("/me/api-keys")
+async def update_my_api_keys(
+    request: Request,
+    data: ApiKeysUpdate,
+    user: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(AdminUser).where(AdminUser.id == user["id"])
+    )
+    db_user = result.scalar_one_or_none()
+    if not db_user:
+        raise HTTPException(404, detail="用户不存在")
+
+    if data.deepseek_api_key is not None:
+        db_user.deepseek_api_key = data.deepseek_api_key.strip() or None
+    if data.qwen_api_key is not None:
+        db_user.qwen_api_key = data.qwen_api_key.strip() or None
+    await db.commit()
+
+    await log_operation(
+        db, user, "update_api_keys", "user",
+        target_id=user["id"],
+        target_name=user["username"],
+        ip_address=request.client.host if request.client else None
+    )
+
+    return {
+        "success": True,
+        "message": "API Key 已更新",
+        "has_deepseek": bool(db_user.deepseek_api_key),
+        "has_qwen": bool(db_user.qwen_api_key),
+    }
 
 
 # ============ 操作日志查询 ============

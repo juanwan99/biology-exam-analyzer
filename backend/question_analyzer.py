@@ -1,20 +1,30 @@
 import json
 import re
 import base64
-import time
 import asyncio
 from hashlib import sha256
-from pathlib import Path
 from logger import get_logger
 from config import PROMPT_DIR
 from llm_client import llm_call, get_last_llm_call_metadata as get_last_call_metadata
 from llm_media import media_input_refs, messages_with_media
 from metadata_contracts import LLMCallRecord
 from vision_context import extract_visual_context
+from prompt_loader import PromptLoader
+from subject_config import normalize_subject, get_competency_dims, get_subject_name
 
 logger = get_logger()
+_split_merge_sem = asyncio.Semaphore(8)  # 全局：限制 split-merge 子问总并发，防网关过载
 
 SCORE_SHARE_NORMALIZATION_MAX_DEVIATION = 0.10
+
+
+async def _call_with_timeout(coro, timeout):
+    """等价 asyncio.wait_for,但用 asyncio.timeout(3.11+)上下文管理器:不创建子 task,
+    故不隔离 ContextVar —— llm_call 内 set 的 _last_call_metadata(provider/fallback/usage)
+    能回传父 context。修复 wait_for 子 task copy_context 致文本调用 usage/provider 元数据丢失
+    (GOAL #8 成本目标:文本调用 token usage 落盘)。超时同样抛 TimeoutError,except 兼容。"""
+    async with asyncio.timeout(timeout):
+        return await coro
 
 
 def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
@@ -26,7 +36,7 @@ def _llm_call_trace(metadata: dict | None = None) -> tuple[str, str, int, dict]:
     provider = trace.get("provider") or "llm_client"
     model = trace.get("model") or "configured_provider_chain"
     fallback_count = int(trace.get("fallback_count") or 0)
-    for key in ("provider_errors", "status", "operation", "fact_count", "grounding_score", "model_policy"):
+    for key in ("provider_errors", "status", "model_policy", "usage"):
         if trace.get(key) is not None:
             metadata[key] = trace.get(key)
     return provider, model, fallback_count, metadata
@@ -752,9 +762,7 @@ class QuestionAnalyzer:
         question_id: int,
         question_type: str = "unknown",
         section_header: str = None,
-        evidence_context_provider=None,
-        evidence_ranking_enabled: bool | str | None = None,
-        agent_search_enabled: bool | str | None = None,
+        subject: str = "biology",
     ) -> dict:
         """
         第二次调用：分析单道题目
@@ -778,28 +786,25 @@ class QuestionAnalyzer:
         """
         logger.info(f"[分析] 开始分析题目 {question_id}，题型: {question_type}，分节: {section_header}")
 
-        # 优先加载 v2 prompt（细粒度 SEU/DU/SU 分析）
+        # 优先加载 v2 prompt（细粒度 SEU/DU/SU 分析），按学科取模板。
+        # 仅替换"取模板字符串"这一步；模板变量仍在下方用 .replace 注入（与历史一致）。
+        normalized_subject = normalize_subject(subject)
+        loader = PromptLoader(normalized_subject)
         use_v2 = False
-        v2_path = PROMPT_DIR / "analysis_prompt_v2.txt"
-        v1_path = PROMPT_DIR / "analysis_prompt.txt"
         try:
-            if v2_path.exists():
-                with open(str(v2_path), 'r', encoding='utf-8') as f:
-                    analysis_prompt_template = f.read()
+            if loader.exists("analysis_prompt_v2"):
+                analysis_prompt_template = loader.load("analysis_prompt_v2")
                 use_v2 = True
-                logger.info(f"[分析] 题目{question_id} 使用 v2 prompt（细粒度分析）")
+                logger.info(f"[分析] 题目{question_id} 使用 {normalized_subject} v2 prompt（细粒度分析）")
             else:
-                with open(str(v1_path), 'r', encoding='utf-8') as f:
-                    analysis_prompt_template = f.read()
-                logger.debug(f"[分析] 题目{question_id} 使用 v1 prompt")
+                analysis_prompt_template = loader.load("analysis_prompt")
+                logger.debug(f"[分析] 题目{question_id} 使用 {normalized_subject} v1 prompt")
         except FileNotFoundError:
             analysis_prompt_template = self._get_default_analysis_prompt()
             logger.warning(f"[分析] 使用默认Prompt")
 
         prompt_hash = sha256(analysis_prompt_template.encode("utf-8")).hexdigest()
-        analysis_prompt_id = "biology.question_analysis." + ("v" + "2" if use_v2 else "v1")
-        evidence_context_meta = None
-        evidence_context_text = ""
+        analysis_prompt_id = f"{normalized_subject}.question_analysis." + ("v" + "2" if use_v2 else "v1")
         question_media_items = _question_images_to_media_items(question_images)
         question_media_refs = media_input_refs(question_media_items)
         visual_context_text = ""
@@ -819,8 +824,6 @@ class QuestionAnalyzer:
             }
             if metadata_extra:
                 metadata.update(metadata_extra)
-            if evidence_context_meta:
-                metadata["evidence_context"] = evidence_context_meta
             if visual_context_text:
                 metadata["visual_context_source"] = "qwen_vision"
             provider, model, fallback_count, metadata = _llm_call_trace(metadata)
@@ -859,8 +862,6 @@ class QuestionAnalyzer:
                 validation_errors,
                 **call_kwargs,
             ))
-            if evidence_context_meta:
-                payload["_evidence_context"] = evidence_context_meta
             payload["_llm_calls"] = calls
             return payload
 
@@ -870,64 +871,6 @@ class QuestionAnalyzer:
 
         # 构造完整Prompt
         prompt_sections = [analysis_prompt]
-        from services.evidence_context import (
-            QuestionEvidenceContextBuilder,
-            evidence_ranking_enabled as _evidence_ranking_enabled,
-        )
-        def _is_transient_evidence_context_error(exc: Exception) -> bool:
-            text = str(exc).lower()
-            transient_markers = (
-                "access token failed",
-                "transporterror",
-                "proxyerror",
-                "remote end closed connection",
-                "connectionpool",
-                "read timed out",
-                "connect timeout",
-                "temporarily unavailable",
-                "connection reset",
-            )
-            return any(marker in text for marker in transient_markers)
-
-        if _evidence_ranking_enabled(evidence_ranking_enabled):
-            provider = evidence_context_provider or QuestionEvidenceContextBuilder()
-            evidence_context = None
-            evidence_context_errors = []
-            for attempt in range(3):
-                try:
-                    evidence_context = await provider.build_question_context(
-                        question_text=question_text,
-                        question_id=question_id,
-                        question_type=question_type,
-                        section_header=section_header,
-                        agent_search_enabled=agent_search_enabled,
-                    )
-                    break
-                except Exception as exc:
-                    evidence_context_errors.append(str(exc))
-                    if attempt < 2 and _is_transient_evidence_context_error(exc):
-                        wait_seconds = 2 ** attempt
-                        logger.warning(
-                            "[证据重排] 题目%s transient error，%ss 后重试 %s/2: %s",
-                            question_id,
-                            wait_seconds,
-                            attempt + 1,
-                            str(exc)[:160],
-                        )
-                        await asyncio.sleep(wait_seconds)
-                        continue
-                    raise RuntimeError(
-                        f"题目{question_id}证据重排失败（证据排序服务）: {exc}"
-                    ) from exc
-            evidence_context_text = str(evidence_context.get("context_text") or "").strip()
-            if not evidence_context_text:
-                raise RuntimeError(
-                    f"题目{question_id}证据重排失败（证据排序服务）: empty context"
-                )
-            prompt_sections.append(evidence_context_text)
-            evidence_context_meta = evidence_context.get("metadata") or {}
-            if evidence_context_errors:
-                evidence_context_meta["retry_errors"] = evidence_context_errors
 
         if question_media_items:
             visual_context_text, visual_call_record = await extract_visual_context(
@@ -936,6 +879,7 @@ class QuestionAnalyzer:
                 question_id=question_id,
                 question_type=question_type,
                 section_header=section_header or "",
+                subject=normalized_subject,
                 timeout=min(analysis_timeout, 120.0),
             )
             prompt_sections.append(visual_context_text)
@@ -981,6 +925,10 @@ class QuestionAnalyzer:
             return 0.0
 
         def _fallback_knowledge_points() -> list[str]:
+            # 触发关键词(CGG/基因/遗传/生态/蛋白/转录)全为生物专属；非生物学科不套用，
+            # 避免非生物题干恰含生物字样时回退到生物知识点。A-3 残留路径闭环（与 :1686 占位一致）。
+            if normalized_subject != "biology":
+                return []
             text = question_text or ""
             if any(marker in text for marker in ("CGG", "三核苷酸", "动态突变", "脆性X")):
                 return ["基因突变"]
@@ -1025,7 +973,7 @@ class QuestionAnalyzer:
                 0.2,
                 result["_validation_errors"],
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v1.length_recovery.deterministic",
+                prompt_id=f"{normalized_subject}.question_analysis.v1.length_recovery.deterministic",
                 prompt_hash_value=fallback_prompt_hash,
                 response_len=0,
                 call_suffix="analysis-length-recovery-deterministic",
@@ -1043,13 +991,14 @@ class QuestionAnalyzer:
             compact_prompt = self._get_compact_analysis_retry_prompt(
                 question_type=question_type,
                 section_header=section_header,
+                subject=normalized_subject,
             )
             compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
-            compact_prompt_id = "biology.question_analysis.v2.compact_retry"
+            compact_prompt_id = f"{normalized_subject}.question_analysis.v2.compact_retry"
             compact_timeout = min(max(analysis_timeout, 180.0), 220.0)
             compact_max_tokens = min(analysis_max_tokens, 8192)
             try:
-                compact_response = await asyncio.wait_for(
+                compact_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1116,7 +1065,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1157,6 +1106,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _analyze_one_subquestion(sub_idx: int, sub_meta: dict, all_subs: list, big_total: float):
@@ -1167,8 +1117,14 @@ class QuestionAnalyzer:
             brief_list = "；".join(
                 f"第{j}问({s.get('brief','')})" for j, s in enumerate(all_subs, start=1))
             sub_pts = sub_meta.get("points") or round((sub_meta.get("score_share") or 0) * big_total) or "若干"
+            _dims = get_competency_dims(normalized_subject)
+            _dims_str = "/".join(_dims)
+            _dim_n = len(_dims)
+            _dim_even = round(1.0 / _dim_n, 2) if _dim_n else 0.0
+            _cw_tpl = "{" + ",".join(
+                f'"{_d}":{0.5 if _i < 2 else 0.0}' for _i, _d in enumerate(_dims)) + "}"
             sub_prompt = (
-                "你是生物学审题专家。下面是整道大题的完整题干与子问清单。\n"
+                f"你是{get_subject_name(normalized_subject)}学科审题专家。下面是整道大题的完整题干与子问清单。\n"
                 f"本次【只分析第{sub_idx}问】（{sub_meta.get('brief','')}，约{sub_pts}分），"
                 f"只为这一问产出采分点 scoring_units(SEU)，不要分析其它子问。\n"
                 f"子问清单：{brief_list}\n"
@@ -1176,18 +1132,21 @@ class QuestionAnalyzer:
                 f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
                 "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
                 "3. bloom_level 必须是 1-6 的整数（不是中文）。\n"
-                "4. 严格输出 JSON（不要解释、不要 markdown）：\n"
+                f"4. 每个 SEU 必须输出 competency_weights（{_dims_str} 共{_dim_n}维，"
+                f"{_dim_n}项和=1.0），按本问真实素养分布给值，不要一律均匀填 {_dim_even}。\n"
+                "5. 严格输出 JSON（不要解释、不要 markdown）：\n"
                 "{\"scoring_units\":[{\"seu_id\":\"seu_1\",\"label\":\"\",\"score_share\":0.0,"
                 "\"knowledge_links\":[{\"knowledge_point\":\"\",\"share\":1.0}],\"bloom_level\":3,"
+                f"\"competency_weights\":{_cw_tpl},"
                 "\"reasoning_brief\":\"\"}],\"diagnostic_units\":[],\"stimulus_units\":[],\"detailed_analysis\":\"\"}\n"
                 f"题型:{question_type} 板块:{section_header or ''}"
             )
-            sub_timeout = max(analysis_timeout, 480.0)
+            sub_timeout = max(analysis_timeout, 240.0)
             for sub_budget in (64000,):
                 _transient_left = 1
                 while True:
                     try:
-                        sub_resp = await asyncio.wait_for(
+                        sub_resp = await _call_with_timeout(
                             llm_call(
                                 messages=_question_messages(
                                     "\n\n".join(part for part in [
@@ -1263,8 +1222,12 @@ class QuestionAnalyzer:
             if len(sub_metas) < 2:
                 return None
             logger.warning(f"[分析] 题目{question_id} 触发 split-merge：{len(sub_metas)} 子问拆分（并行）({initial_reason})")
+            async def _sem_wrapped_sub(_i, _sm):
+                async with _split_merge_sem:
+                    return await _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+
             _sub_tasks = [
-                _analyze_one_subquestion(_i, _sm, sub_metas, big_total)
+                _sem_wrapped_sub(_i, _sm)
                 for _i, _sm in enumerate(sub_metas, start=1)
             ]
             _sub_raw = await asyncio.gather(*_sub_tasks, return_exceptions=True)
@@ -1282,9 +1245,11 @@ class QuestionAnalyzer:
                     ok_metas.append(sub_metas[_idx])
                 else:
                     logger.warning(f"[分析] 题目{question_id} 第{_idx+1}问 split 失败")
-            if len(ok_results) < len(sub_metas):
-                logger.warning(f"[分析] 题目{question_id} split-merge 子问不全 ({len(ok_results)}/{len(sub_metas)})，回退阶梯")
+            if len(ok_results) == 0:
+                logger.warning(f"[分析] 题目{question_id} split-merge 零子问成功，回退阶梯")
                 return None
+            if len(ok_results) < len(sub_metas):
+                logger.warning(f"[分析] 题目{question_id} split-merge 部分子问完成 ({len(ok_results)}/{len(sub_metas)})，使用部分结果")
             from fine_grained_merge import merge_subquestion_results
             merged = merge_subquestion_results(ok_results, ok_metas, big_total)
             from llm_schemas import (FineGrainedResult, validate_llm_output,
@@ -1300,7 +1265,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [u.model_dump() if hasattr(u, 'model_dump') else u for u in fg.scoring_units],
@@ -1314,7 +1279,7 @@ class QuestionAnalyzer:
             validated = attach_call_record(
                 validated, "FineGrainedResult", ext_conf, val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.split_merge",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.split_merge",
                 prompt_hash_value=sha256(("split_merge:" + str(question_type)).encode("utf-8")).hexdigest(),
                 response_len=0,
                 call_suffix="analysis-split-merge",
@@ -1336,6 +1301,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _ultra_compact_analysis_retry(initial_reason: str, retry_count: int = 2) -> dict:
@@ -1344,11 +1310,12 @@ class QuestionAnalyzer:
             ultra_prompt = self._get_ultra_compact_analysis_retry_prompt(
                 question_type=question_type,
                 section_header=section_header,
+                subject=normalized_subject,
             )
             ultra_prompt_hash = sha256(ultra_prompt.encode("utf-8")).hexdigest()
             ultra_timeout = min(max(analysis_timeout, 140.0), 180.0)
             try:
-                ultra_response = await asyncio.wait_for(
+                ultra_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1410,7 +1377,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1427,7 +1394,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.ultra_compact_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.ultra_compact_retry",
                 prompt_hash_value=ultra_prompt_hash,
                 response_len=ultra_response_length,
                 call_suffix="analysis-ultra-compact-retry",
@@ -1458,6 +1425,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         async def _micro_compact_analysis_retry(initial_reason: str, retry_count: int = 3) -> dict:
@@ -1471,7 +1439,7 @@ class QuestionAnalyzer:
             micro_prompt_hash = sha256(micro_prompt.encode("utf-8")).hexdigest()
             micro_timeout = min(max(analysis_timeout, 100.0), 140.0)
             try:
-                micro_response = await asyncio.wait_for(
+                micro_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(
                             "\n\n".join(
@@ -1538,7 +1506,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1555,7 +1523,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.micro_compact_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.micro_compact_retry",
                 prompt_hash_value=micro_prompt_hash,
                 response_len=micro_response_length,
                 call_suffix="analysis-micro-compact-retry",
@@ -1586,6 +1554,7 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
 
         def _should_attempt_skeletal_fine_grained_retry() -> bool:
@@ -1632,7 +1601,7 @@ class QuestionAnalyzer:
                 for point in points:
                     if is_non_textbook_skill_point(point):
                         continue
-                    canonical, _ = canonicalize_knowledge_point(point, knowledge_mapper=mapper)
+                    canonical, _ = canonicalize_knowledge_point(point, knowledge_mapper=mapper, subject=normalized_subject)
                     if canonical and canonical not in canonical_points:
                         canonical_points.append(canonical)
                 return canonical_points or points
@@ -1678,7 +1647,7 @@ class QuestionAnalyzer:
             skeletal_prompt_hash = sha256(skeletal_prompt.encode("utf-8")).hexdigest()
             skeletal_timeout = min(max(analysis_timeout, 80.0), 120.0)
             try:
-                skeletal_response = await asyncio.wait_for(
+                skeletal_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(skeletal_prompt, []),
                         max_tokens=1536,
@@ -1718,7 +1687,13 @@ class QuestionAnalyzer:
                 _short_list(
                     skeletal.get("k") or skeletal.get("kp") or skeletal.get("knowledge_points"),
                     3,
-                    _fallback_knowledge_points() or ["遗传的基本规律", "基因突变", "基因表达与性状的关系"],
+                    _fallback_knowledge_points() or (
+                        # 生物保留原遗传兜底(零回归)；非生物科 _fallback_knowledge_points 必返空，
+                        # 不再写死注入生物遗传知识点，改学科中性占位+人工复核。A-3 根因修复。
+                        ["遗传的基本规律", "基因突变", "基因表达与性状的关系"]
+                        if normalized_subject == "biology"
+                        else ["待人工复核知识点"]
+                    ),
                     item_limit=18,
                 )
             )
@@ -1735,6 +1710,12 @@ class QuestionAnalyzer:
             total_score = int(round(_infer_fallback_total_score()))
             diff_estimate = _difficulty_estimate(diff_label)
             shares = [0.34, 0.33, 0.33]
+            if normalized_subject == "biology":
+                _skeletal_cw = {"生命观念": 0.15, "科学思维": 0.55, "科学探究": 0.25, "社会责任": 0.05}
+            else:
+                _sk_dims = get_competency_dims(normalized_subject)
+                _sk_even = round(1.0 / len(_sk_dims), 2) if _sk_dims else 0.0
+                _skeletal_cw = {_d: _sk_even for _d in _sk_dims}
             scoring_units = []
             for index, share in enumerate(shares):
                 kp = knowledge_points[min(index, len(knowledge_points) - 1)]
@@ -1747,12 +1728,7 @@ class QuestionAnalyzer:
                         "allocation_confidence": 0.65,
                         "knowledge_links": [{"knowledge_point": kp, "share": 1.0}],
                         "bloom_level": bloom,
-                        "competency_weights": {
-                            "生命观念": 0.15,
-                            "科学思维": 0.55,
-                            "科学探究": 0.25,
-                            "社会责任": 0.05,
-                        },
+                        "competency_weights": dict(_skeletal_cw),
                         "difficulty_estimate": min(10.0, diff_estimate + (0.2 if index == 2 else 0.0)),
                         "reasoning_brief": labels[index],
                     }
@@ -1805,7 +1781,7 @@ class QuestionAnalyzer:
             if not is_conserved:
                 val_errors = (val_errors or []) + conservation_errors
                 ext_conf = min(ext_conf, 0.6)
-            summary = compute_summary_from_units(fg)
+            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
             validated.update(summary)
             validated["_fine_grained"] = {
                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -1826,7 +1802,7 @@ class QuestionAnalyzer:
                 validated["_extraction_confidence"],
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v2.skeletal_fine_grained_retry",
+                prompt_id=f"{normalized_subject}.question_analysis.v2.skeletal_fine_grained_retry",
                 prompt_hash_value=skeletal_prompt_hash,
                 response_len=skeletal_response_length,
                 call_suffix="analysis-skeletal-fine-grained-retry",
@@ -1848,7 +1824,7 @@ class QuestionAnalyzer:
             logger.warning(f"[分析] 题目{question_id} 触发 minimal JSON 重试: {initial_reason}")
             provider_errors_before = _last_provider_error_messages()
             minimal_prompt = (
-                "You are the DeepSeek primary reviewer for a high-school biology exam item.\n"
+                f"You are the DeepSeek primary reviewer for a high-school {get_subject_name(normalized_subject)} exam item.\n"
                 "Return ONLY one compact JSON object. Do not include markdown or extra text.\n"
                 "Required keys: knowledge_points, detailed_analysis, difficulty, common_mistakes, "
                 "answer, total_score, bloom_level.\n"
@@ -1864,7 +1840,7 @@ class QuestionAnalyzer:
             minimal_prompt_hash = sha256(minimal_prompt.encode("utf-8")).hexdigest()
             minimal_timeout = min(max(analysis_timeout, 150.0), 180.0)
             try:
-                minimal_response = await asyncio.wait_for(
+                minimal_response = await _call_with_timeout(
                     llm_call(
                         messages=_question_messages(minimal_prompt, []),
                         max_tokens=3072,
@@ -1917,7 +1893,7 @@ class QuestionAnalyzer:
                 ext_conf,
                 val_errors,
                 existing_calls=initial_calls,
-                prompt_id="biology.question_analysis.v1.length_recovery",
+                prompt_id=f"{normalized_subject}.question_analysis.v1.length_recovery",
                 prompt_hash_value=minimal_prompt_hash,
                 response_len=minimal_response_length,
                 call_suffix="analysis-length-recovery",
@@ -1938,7 +1914,21 @@ class QuestionAnalyzer:
                 question_media_items=question_media_items,
                 visual_context_text=visual_context_text,
                 timeout=analysis_timeout,
+                subject=normalized_subject,
             )
+
+        # 大题直接 split-merge（跳过 v2 整题分析，省 4-5 分钟）
+        _direct_split_score = _infer_fallback_total_score()
+        if use_v2 and _direct_split_score >= 10:
+            logger.info(f"[分析] 题目{question_id} 大题直接 split-merge（score={_direct_split_score}）")
+            try:
+                _direct_result = await _split_merge_analysis("big_question_direct")
+            except Exception as _dsm_exc:
+                logger.warning(f"[分析] 题目{question_id} 大题直接 split-merge 失败 {_dsm_exc}，回退 v2")
+                _direct_result = None
+            if _direct_result is not None:
+                return _direct_result
+            logger.info(f"[分析] 题目{question_id} split-merge 返回 None，回退 v2 整题分析")
 
         try:
             logger.debug(f"[分析] 准备调用 llm_call 分析题目{question_id}")
@@ -1947,7 +1937,7 @@ class QuestionAnalyzer:
                 total_img_size = sum(len(img) for img in question_images if img)
                 logger.debug(f"[分析] 图片总大小: {total_img_size / 1024:.2f} KB")
 
-            response_text = await asyncio.wait_for(
+            response_text = await _call_with_timeout(
                 llm_call(
                     messages=_question_messages(full_prompt, []),
                     max_tokens=analysis_max_tokens,
@@ -2036,7 +2026,7 @@ class QuestionAnalyzer:
                                 raw_sum = sum(s.get("score_share", 0) for s in raw_seus if isinstance(s, dict))
                                 if abs(raw_sum - 1.0) > 0.02:
                                     val_errors = (val_errors or []) + [f"原始 score_share 总和={raw_sum:.3f}，未归一化"]
-                            summary = compute_summary_from_units(fg)
+                            summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
                             validated.update(summary)
                             validated["_fine_grained"] = {
                                 "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -2070,6 +2060,7 @@ class QuestionAnalyzer:
                                 question_media_items=question_media_items,
                                 visual_context_text=visual_context_text,
                                 timeout=analysis_timeout,
+                                subject=normalized_subject,
                             )
                             return validated
                         else:
@@ -2118,12 +2109,13 @@ class QuestionAnalyzer:
                     compact_prompt = self._get_compact_analysis_retry_prompt(
                         question_type=question_type,
                         section_header=section_header,
+                        subject=normalized_subject,
                     )
                     compact_prompt_hash = sha256(compact_prompt.encode("utf-8")).hexdigest()
-                    compact_prompt_id = "biology.question_analysis.v2.json_repair"
+                    compact_prompt_id = f"{normalized_subject}.question_analysis.v2.json_repair"
                     json_repair_timeout = min(max(analysis_timeout, 150.0), 180.0)
                     json_repair_max_tokens = min(analysis_max_tokens, 4096)
-                    compact_response = await asyncio.wait_for(
+                    compact_response = await _call_with_timeout(
                         llm_call(
                             messages=_question_messages(
                                 "\n\n".join(
@@ -2173,7 +2165,7 @@ class QuestionAnalyzer:
                     if not is_conserved:
                         val_errors = (val_errors or []) + conservation_errors
                         ext_conf = min(ext_conf, 0.6)
-                    summary = compute_summary_from_units(fg)
+                    summary = compute_summary_from_units(fg, get_competency_dims(normalized_subject))
                     validated.update(summary)
                     validated["_fine_grained"] = {
                         "scoring_units": [s.model_dump() if hasattr(s, 'model_dump') else s for s in fg.scoring_units],
@@ -2211,6 +2203,7 @@ class QuestionAnalyzer:
                         question_media_items=question_media_items,
                         visual_context_text=visual_context_text,
                         timeout=analysis_timeout,
+                        subject=normalized_subject,
                     )
                     return validated
 
@@ -2311,6 +2304,7 @@ class QuestionAnalyzer:
         timeout: float,
         question_media_items: list | None = None,
         visual_context_text: str = "",
+        subject: str = "biology",
     ) -> dict:
         if not self._needs_evidence_units(analysis_payload, question_type):
             return analysis_payload
@@ -2323,6 +2317,7 @@ class QuestionAnalyzer:
             question_type=question_type,
             section_header=section_header,
             scoring_units=fine_grained.get("scoring_units") or [],
+            subject=subject,
         )
         prompt_hash = sha256(prompt.encode("utf-8")).hexdigest()
         response_text = ""
@@ -2426,7 +2421,7 @@ class QuestionAnalyzer:
             call_id=f"question-{question_id}-evidence-retry",
             question_id=question_id,
             purpose="missing_evidence_repair",
-            prompt_id="biology.question_analysis.v2.evidence_retry",
+            prompt_id=f"{subject}.question_analysis.v2.evidence_retry",
             prompt_hash=prompt_hash,
             provider=provider,
             model=model,
@@ -2448,12 +2443,14 @@ class QuestionAnalyzer:
         return analysis_payload
 
     @staticmethod
-    def _get_compact_analysis_retry_prompt(question_type: str, section_header: str = None) -> str:
+    def _get_compact_analysis_retry_prompt(question_type: str, section_header: str = None, subject: str = "biology") -> str:
         section = section_header or "未提供"
+        _subject_cn = get_subject_name(subject)
+        _dims = "、".join(get_competency_dims(subject))
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题元数据分析器。上一次完整 schema 输出不可解析，现在只做紧凑重试。\n"
+            f"你是高中{_subject_cn}试题元数据分析器。上一次完整 schema 输出不可解析，现在只做紧凑重试。\n"
             "只返回一个合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
@@ -2462,19 +2459,21 @@ class QuestionAnalyzer:
             "allocation_confidence, knowledge_links, bloom_level, competency_weights, "
             "difficulty_estimate, reasoning_brief。\n"
             "knowledge_links 每个单元只输出 1 个，share=1.0。\n"
-            "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
+            f"competency_weights 必须含 {_dims}，各项总和等于 1.0。\n"
             "knowledge_points 最多 4 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 80 个汉字。\n"
             "大题只输出 2 个 diagnostic_units 和 1 个 stimulus_units；"
             "只有选择题且确无材料时才允许 stimulus_units=[]。所有 label/reason 字段不超过 24 个汉字。"
         )
 
     @staticmethod
-    def _get_ultra_compact_analysis_retry_prompt(question_type: str, section_header: str = None) -> str:
+    def _get_ultra_compact_analysis_retry_prompt(question_type: str, section_header: str = None, subject: str = "biology") -> str:
         section = section_header or "未提供"
+        _subject_cn = get_subject_name(subject)
+        _dims = "、".join(get_competency_dims(subject))
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题元数据分析器。前两次输出过长，现在只做超短结构化恢复。\n"
+            f"你是高中{_subject_cn}试题元数据分析器。前两次输出过长，现在只做超短结构化恢复。\n"
             "只返回一个 minified JSON 对象，不要 markdown，不要解释，整体不超过 1500 个汉字。\n"
             "必须包含字段：scoring_units, diagnostic_units, stimulus_units, answer, total_score, "
             "detailed_analysis, difficulty, knowledge_points, common_mistakes。\n"
@@ -2486,7 +2485,7 @@ class QuestionAnalyzer:
             "misconception,trap_strength,knowledge_boundary,if_selected_means；字符串不超过 12 个汉字。\n"
             "stimulus_units 必须恰好 1 个，含 su_id,stimulus_type,complexity,is_core,description；"
             "description 不超过 14 个汉字。\n"
-            "competency_weights 必须含 生命观念、科学思维、科学探究、社会责任，四项总和等于 1.0。\n"
+            f"competency_weights 必须含 {_dims}，各项总和等于 1.0。\n"
             "knowledge_points 最多 3 个；common_mistakes 最多 2 个；answer 和 detailed_analysis 各不超过 40 个汉字；"
             "difficulty 只能是 简单、中等、困难。"
         )
@@ -2519,13 +2518,15 @@ class QuestionAnalyzer:
         question_type: str,
         section_header: str = None,
         scoring_units: list = None,
+        subject: str = "biology",
     ) -> str:
         section = section_header or "未提供"
         scoring_units_json = json.dumps(scoring_units or [], ensure_ascii=False)
+        _subject_cn = get_subject_name(subject)
         return (
             f"分节信息：{section}\n"
             f"题型：{question_type}\n"
-            "你是高中生物试题诊断元数据抽取器。已有采分单元如下：\n"
+            f"你是高中{_subject_cn}试题诊断元数据抽取器。已有采分单元如下：\n"
             f"{scoring_units_json}\n"
             "现在只补充诊断单元和情境单元。只返回合法 JSON 对象，不要 markdown，不要解释。\n"
             "必须包含两个字段：diagnostic_units, stimulus_units。\n"
@@ -2540,7 +2541,7 @@ class QuestionAnalyzer:
 
     @staticmethod
     def _get_default_split_prompt() -> str:
-        return """请分析这份生物试卷，将其拆分为单独的题目。
+        return """请分析这份试卷，将其拆分为单独的题目。
 
 返回纯JSON数组格式（不要markdown代码块）：
 [
@@ -2567,7 +2568,7 @@ class QuestionAnalyzer:
 
     @staticmethod
     def _get_default_analysis_prompt() -> str:
-        return """请深入分析这道生物题目，返回纯JSON格式（不要markdown代码块）：
+        return """请深入分析这道题目，返回纯JSON格式（不要markdown代码块）：
 
 {
     "knowledge_points": ["知识点1", "知识点2"],

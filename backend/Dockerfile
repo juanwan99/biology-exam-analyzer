@@ -1,7 +1,8 @@
 FROM python:3.11-slim-bookworm
 
 # 安装系统依赖（pdf2image需要poppler，Word转换需要LibreOffice，weasyprint需要pango/cairo）
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && apt-get update && apt-get install -y \
     poppler-utils \
     libreoffice-writer \
     libreoffice-core \
@@ -37,6 +38,11 @@ RUN mkdir -p /app/logs /app/uploads /app/prompts
 
 # 暴露端口
 EXPOSE 8000
+
+# 入口脚本：自动检测 requirements.txt 变化并安装新依赖
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 # 启动命令（单worker模式，适配1核2G）
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

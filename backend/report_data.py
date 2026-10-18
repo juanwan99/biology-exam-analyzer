@@ -186,40 +186,55 @@ def _stimulus_units_blank(units: List[Any]) -> bool:
 
 
 def _call_has_retry_or_parse_failure(call: Dict) -> bool:
+    """call 是否构成「真失败」（计入 retry_questions blocker）。
+
+    原则（2026-06-15 清缓存 E2E 实证修正）：过程中是否发生重试 / provider 兜底 / 解析重试，
+    都是【恢复手段】而非失败本身。失败 = 被显式标记 failed/degraded，或【发生过恢复痕迹但最终
+    仍没拿到可用产物】。无任何信号的普通成功 call（含不记录 parsed_schema 的占位调用）一律不计
+    失败（无罪推定）。
+
+    关键修正：不再把 fallback_count>0 / provider_errors 当失败信号——成功的 provider 兜底
+    （DeepSeek 抖→Qwen 成功）会带这两者却有有效产物；判它失败等于否定 fallback 设计，与改动B2
+    （放行成功 fallback）自相矛盾，会在真实 provider 抖动下间歇性杀掉整份报告（清缓存首跑实测复现）。
+    validation_errors / 重试标记降为"恢复痕迹"，仅当最终缺产物才算失败；真正缺陷题仍由【未放松】
+    的 validate_report_metadata（带 validation_errors 的 call 在 call_confidence_for 被跳过→
+    该维度 confidence=0→拦截）兜底。
+    """
     prompt_id = str(call.get("prompt_id") or call.get("prompt") or "").lower()
     metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
-    fallback_count = int(_first_number(call.get("fallback_count"), metadata.get("fallback_count"), default=0))
     retry_count = int(_first_number(call.get("retry_count"), metadata.get("retry_count"), default=0))
     status = str(metadata.get("status") or "").lower()
     recovery_mode = str(metadata.get("recovery_mode") or "").lower()
     recovery_status = str(metadata.get("recovery_status") or "").lower()
-    has_final_failure_signal = (
-        fallback_count > 0
-        or bool(metadata.get("provider_errors"))
-        or bool(metadata.get("validation_errors"))
-        or bool(call.get("validation_errors"))
-        or status in {"failed", "parse_failed", "provider_failed"}
+    # 显式终态失败：与是否重试/兜底无关，无条件计 failure
+    if (
+        status in {"failed", "parse_failed", "provider_failed"}
         or recovery_status in {"degraded", "failed"}
         or recovery_mode == "deterministic_length_fallback"
-    )
-    if call.get("purpose") == "missing_evidence_repair" and not has_final_failure_signal:
+    ):
+        return True
+    # missing_evidence_repair 不带 parsed_schema，以"无 validation_errors"标识补取成功；
+    # 带 validation_errors（如 diagnostic_units_empty_after_retry）= 补取失败 → 计 failure。
+    if call.get("purpose") == "missing_evidence_repair":
+        return bool(metadata.get("validation_errors")) or bool(call.get("validation_errors"))
+    # 既有豁免：成功的模型恢复（重试后 recovery_status=ok）
+    if retry_count > 0 and recovery_status == "ok":
         return False
-    successful_model_recovery = (
+    # 恢复痕迹（重试 / 各类 compact retry / 初次解析错 / 校验告警）：仅当最终缺产物才算失败。
+    # fallback_count / provider_errors 不在此列——成功兜底有产物，不应判失败。
+    had_recovery_trace = (
         retry_count > 0
-        and recovery_status == "ok"
-        and not has_final_failure_signal
-    )
-    if successful_model_recovery:
-        return False
-    return (
-        "compact_retry" in prompt_id
+        or "compact_retry" in prompt_id
         or "json_repair" in prompt_id
         or "ultra_compact_retry" in prompt_id
         or "length_recovery" in prompt_id
-        or retry_count > 0
-        or has_final_failure_signal
         or bool(metadata.get("initial_parse_error"))
+        or bool(metadata.get("validation_errors"))
+        or bool(call.get("validation_errors"))
     )
+    if had_recovery_trace:
+        return not (call.get("parsed_schema") or recovery_status == "ok")
+    return False
 
 
 def _purpose_satisfied(expected: str, purposes: set[str], q: Dict) -> bool:
@@ -618,12 +633,20 @@ def aggregate_report_data(
     total_score = sum(_get_score(q) for q in questions)
     curve = exam_statistics.get("difficulty_curve", [])
 
+    # 学科贯通报告链：优先 exam_info.subject，回退首题 subject，normalize 兜底 biology。
+    from subject_config import normalize_subject
+    _subject_raw = exam_info.get("subject")
+    if not _subject_raw and questions:
+        _subject_raw = (questions[0] or {}).get("subject") if isinstance(questions[0], dict) else None
+    report_subject = normalize_subject(_subject_raw)
+
     data = {
         "exam_info": {
             "name": exam_info.get("name", "未命名"),
             "total_questions": exam_info.get("total", len(questions)),
             "total_score": total_score,
             "mode": exam_info.get("mode", "fast"),
+            "subject": report_subject,
         },
         "metrics": {
             "avg_difficulty": exam_statistics.get("avg_difficulty", 0),

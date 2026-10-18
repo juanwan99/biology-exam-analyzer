@@ -7,20 +7,21 @@ import asyncio
 import base64
 import copy
 import inspect
-import json
 import re
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from logger import get_logger
+from analysis_options import want_competency_supplement
+from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
+from subject_config import get_competency_dims, normalize_subject
 
 logger = get_logger()
 
 
-def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper: Any) -> List[str]:
+def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper: Any,
+                                          subject: str = "biology") -> List[str]:
     standardized: List[str] = []
     seen = set()
     for point in raw_points or []:
@@ -29,7 +30,7 @@ def _standardize_report_knowledge_points(raw_points: List[Any], knowledge_mapper
         raw = point.strip()
         if is_non_textbook_skill_point(raw):
             continue
-        canonical, _ = canonicalize_knowledge_point(raw, knowledge_mapper=knowledge_mapper)
+        canonical, _ = canonicalize_knowledge_point(raw, knowledge_mapper=knowledge_mapper, subject=subject)
         canonical = canonical.strip() if isinstance(canonical, str) else ""
         if not canonical or is_non_textbook_skill_point(canonical) or canonical in seen:
             continue
@@ -77,16 +78,16 @@ class AnalysisService:
         self.max_workers = max_workers or int(os.environ.get("ANALYSIS_CONCURRENCY", "5"))
         self._last_report_insights = None
         self._last_pipeline_audit = None
-        self._last_channel_usage = None
 
     # ── 单题完整分析 ──────────────────────────────────────────
 
     async def analyze_question(self, question: Dict, image_bytes: List[bytes],
                                 mode: str = "deep",
-                                exam_review_channel: str | None = None) -> Dict:
+                                subject: str = "biology") -> Dict:
         q_id = question.get("id", 0)
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
+        subject = normalize_subject(question.get("subject") or subject)
+        question.setdefault("subject", subject)
+        competency_dims = get_competency_dims(subject)
         try:
             from utils import infer_question_type
             question_type = infer_question_type(question)
@@ -101,18 +102,13 @@ class AnalysisService:
             if not self.analyzer:
                 raise RuntimeError("AI 分析服务未配置")
 
-            from services.review_channel import (
-                channel_evidence_ranking_enabled,
-                channel_uses_agent_search,
-            )
             analysis = await self.analyzer.analyze_question(
                 question_text=question.get("content", ""),
                 question_images=q_images,
                 question_id=q_id,
                 question_type=question_type,
                 section_header=section_header,
-                evidence_ranking_enabled=channel_evidence_ranking_enabled(exam_review_channel),
-                agent_search_enabled=channel_uses_agent_search(exam_review_channel),
+                subject=subject,
             )
             question["analysis"] = analysis
 
@@ -135,6 +131,7 @@ class AnalysisService:
                 "total_score": total_score,
                 "num_options": analysis.get("num_options", 4),
                 "options": question.get("options", ""),
+                "subject": subject,
                 "question_type": question_type,
                 "correct_answer": analysis.get("answer", ""),
                 "sub_questions_count": question.get("sub_questions_count"),
@@ -162,7 +159,7 @@ class AnalysisService:
                         diagnostic_units=fine_grained.get("diagnostic_units", []),
                         stimulus_units=fine_grained.get("stimulus_units", []),
                     )
-                    summary = compute_summary_from_units(fg)
+                    summary = compute_summary_from_units(fg, competency_dims)
                     # R2-002 + R2R-001 修复：归一化权重严格合计=1.0
                     raw_weights = summary["competency_details"]
                     weight_sum = sum(raw_weights.values())
@@ -174,7 +171,8 @@ class AnalysisService:
                             max_key = max(norm_weights, key=norm_weights.get)
                             norm_weights[max_key] = round(norm_weights[max_key] + remainder, 2)
                     else:
-                        norm_weights = {k: 0.25 for k in raw_weights}
+                        _uniform = round(1.0 / len(raw_weights), 2) if raw_weights else 0.0
+                        norm_weights = {k: _uniform for k in raw_weights}
                     v2_seu_competency = {
                         "primary_competency": summary["primary_competency"],
                         "competency_level": summary["competency_level"],
@@ -186,7 +184,14 @@ class AnalysisService:
                     add_analysis_warning(f"seu_derivation_failed:{type(e).__name__}")
                     logger.warning(f"[分析] 题目{q_id} v2素养派生失败: {e}，改用独立素养分析并写入元数据告警")
 
-            if v2_seu_competency:
+            if v2_seu_competency and not want_competency_supplement():
+                difficulty_result = await self.difficulty_engine.evaluate_with_refinement(
+                    question=difficulty_q, mode=mode, analysis_result=analysis)
+                question["difficulty"] = difficulty_result
+                question["competency"] = dict(v2_seu_competency)
+                add_analysis_warning("competency_supplement_skipped")
+                need_independent_competency = False
+            elif v2_seu_competency:
                 # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
                 competency_q = {
                     "id": q_id,
@@ -198,12 +203,12 @@ class AnalysisService:
                 difficulty_result, supplement = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(
                         question=difficulty_q, mode=mode, analysis_result=analysis),
-                    self.competency_analyzer.analyze_competency(question=competency_q),
+                    self.competency_analyzer.analyze_competency(question=competency_q, subject=subject),
                 )
                 question["difficulty"] = difficulty_result
                 merged = dict(v2_seu_competency)
                 if isinstance(supplement, dict) and "error" not in supplement:
-                    for dim in ["生命观念", "科学思维", "科学探究", "社会责任"]:
+                    for dim in competency_dims:
                         sup_dim = supplement.get(dim, {})
                         if isinstance(sup_dim, dict) and isinstance(merged.get(dim), dict):
                             if sup_dim.get("具体维度"):
@@ -225,7 +230,7 @@ class AnalysisService:
                 # v1 路径：尝试合并素养或独立调用
                 merged_competency = analysis.get("competency")
                 if merged_competency and isinstance(merged_competency, dict) and merged_competency.get("primary_competency"):
-                    weights = [merged_competency.get(k, {}).get("权重", 0) for k in ["生命观念", "科学思维", "科学探究", "社会责任"]]
+                    weights = [merged_competency.get(k, {}).get("权重", 0) for k in competency_dims]
                     weight_sum = sum(w for w in weights if isinstance(w, (int, float)))
                     if weight_sum >= 0.9:
                         question["competency"] = merged_competency
@@ -245,7 +250,7 @@ class AnalysisService:
                 }
                 difficulty_result, competency_result = await asyncio.gather(
                     self.difficulty_engine.evaluate_with_refinement(question=difficulty_q, mode=mode, analysis_result=analysis),
-                    self.competency_analyzer.analyze_competency(question=competency_q),
+                    self.competency_analyzer.analyze_competency(question=competency_q, subject=subject),
                 )
                 question["difficulty"] = difficulty_result
                 question["competency"] = competency_result
@@ -254,8 +259,9 @@ class AnalysisService:
                 report_points = _standardize_report_knowledge_points(
                     analysis["knowledge_points"],
                     self.knowledge_mapper,
+                    subject=subject,
                 )
-                standardized = self.knowledge_mapper.map_knowledge_points(report_points)
+                standardized = self.knowledge_mapper.map_knowledge_points(report_points, subject=subject)
                 question["knowledge_mapping"] = standardized
 
             # 置信度计算（基础 + 质量信号）
@@ -288,9 +294,17 @@ class AnalysisService:
             question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
             if analysis_warnings:
                 question["_analysis_warnings"] = analysis_warnings
+            flags = list(analysis_warnings)
+            feat = (question.get("difficulty") or {}).get("features") or {}
+            if isinstance(feat, dict):
+                fs = feat.get("_feature_status")
+                if fs in ("partial", "failed", "core_only"):
+                    flags.append("feature_status:%s" % fs)
+                if feat.get("_feature_failed"):
+                    flags.append("default_features")
+            question["quality_flags"] = flags
             self._attach_metadata_envelope(question)
 
-            reset_llm_review_channel(review_channel_token)
             return question
 
         except Exception as e:
@@ -329,7 +343,6 @@ class AnalysisService:
                 },
                 "warnings": ["analysis_failed"],
             }
-            reset_llm_review_channel(review_channel_token)
             return question
 
     # ── 批量并发分析 ──────────────────────────────────────────
@@ -337,8 +350,7 @@ class AnalysisService:
     async def analyze_questions_batch(self, questions: List[Dict],
                                       image_bytes: List[bytes],
                                       mode: str = "deep",
-                                      subject: str = "biology",
-                                      exam_review_channel: str | None = None) -> List[Dict]:
+                                      subject: str = "biology") -> List[Dict]:
         for idx, q in enumerate(questions):
             if not q.get("id"):
                 q["id"] = idx + 1
@@ -347,11 +359,7 @@ class AnalysisService:
 
         async def _analyze_one(q):
             async with sem:
-                if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
-                    return await self.analyze_question(
-                        q, image_bytes, mode, exam_review_channel=exam_review_channel
-                    )
-                return await self.analyze_question(q, image_bytes, mode)
+                return await self.analyze_question(q, image_bytes, mode, subject=subject)
 
         originals = [copy.deepcopy(q) for q in questions]
         tasks = [_analyze_one(q) for q in questions]
@@ -363,15 +371,7 @@ class AnalysisService:
                 continue
             q_id = result.get("id", idx + 1) if isinstance(result, dict) else idx + 1
             logger.warning(f"[元数据] 题目{q_id} 关键元数据不完整，顺序重试一次")
-            if self._accepts_kwarg(self.analyze_question, "exam_review_channel"):
-                retry = await self.analyze_question(
-                    copy.deepcopy(originals[idx]),
-                    image_bytes,
-                    mode,
-                    exam_review_channel=exam_review_channel,
-                )
-            else:
-                retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode)
+            retry = await self.analyze_question(copy.deepcopy(originals[idx]), image_bytes, mode, subject=subject)
             retry_still_needed = self._metadata_retry_reason(retry)
             if not retry_still_needed:
                 self._mark_recovered_metadata_retry(retry, retry_reason, emit_warning=False)
@@ -392,7 +392,14 @@ class AnalysisService:
         from analysis_statistics import generate_exam_statistics
         return generate_exam_statistics(questions, competency_summary)
 
-    def build_competency_summary(self, questions: List[Dict]) -> Dict:
+    def build_competency_summary(self, questions: List[Dict],
+                                 subject: str = "biology") -> Dict:
+        # subject 优先取题目内注入值（穿线结果），其次取入参，最终归一化兜底 biology
+        for q in questions:
+            if q.get("subject"):
+                subject = q["subject"]
+                break
+        subject = normalize_subject(subject)
         competency_list = []
         for q in questions:
             if "error" not in q.get("competency", {}):
@@ -403,7 +410,7 @@ class AnalysisService:
                 if fg:
                     comp["_fine_grained"] = fg
                 competency_list.append(comp)
-        return self.competency_analyzer.aggregate_exam_competencies(competency_list)
+        return self.competency_analyzer.aggregate_exam_competencies(competency_list, subject)
 
     # ── 文档处理 ──────────────────────────────────────────────
 
@@ -438,16 +445,10 @@ class AnalysisService:
     # ── 题目拆分 ──────────────────────────────────────────────
 
     async def split_questions_llm(self, image_bytes: List[bytes],
-                                   extracted_text: str = None,
-                                   exam_review_channel: str | None = None) -> List[Dict]:
+                                   extracted_text: str = None) -> List[Dict]:
         if not self.analyzer:
             raise RuntimeError("AI 分析服务未配置")
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
-        try:
-            return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
-        finally:
-            reset_llm_review_channel(review_channel_token)
+        return await self.analyzer.split_questions(image_bytes, extracted_text=extracted_text)
 
     @staticmethod
     def _main_question_ids_from_text(text: str | None) -> List[int]:
@@ -509,42 +510,29 @@ class AnalysisService:
                                exam_statistics: Dict,
                                exam_info: Dict,
                                mode: str = "full",
-                               output_path: str = None,
-                               exam_review_channel: str | None = None) -> Optional[str]:
+                               output_path: str = None) -> Optional[str]:
         from report_data import aggregate_report_data
         from report_insights import generate_insights
         from report_product_publish import write_report_artifacts
         from exam_diagnostics import diagnose_exam
 
         self.validate_report_metadata(questions)
+        # 学科贯通：把首题 subject 注入 exam_info，供报告层动态素养维度与学科文案使用。
+        if isinstance(exam_info, dict) and not exam_info.get("subject") and questions:
+            _fq = questions[0] if isinstance(questions[0], dict) else {}
+            if _fq.get("subject"):
+                exam_info = {**exam_info, "subject": _fq.get("subject")}
         rdata = aggregate_report_data(
             questions, competency_summary, exam_statistics, exam_info
         )
         rdata["diagnostics"] = diagnose_exam(questions, exam_statistics,
             exam_type=exam_info.get("exam_type", "高考"))
-        from services.review_channel import channel_grounding_enabled
-        from llm_client import set_llm_review_channel, reset_llm_review_channel
-        review_channel_token = set_llm_review_channel(exam_review_channel)
-        try:
-            insights = await generate_insights(
-                rdata,
-                mode=mode,
-                grounding_enabled=channel_grounding_enabled(exam_review_channel),
-            )
-        finally:
-            reset_llm_review_channel(review_channel_token)
+        insights = await generate_insights(rdata, mode=mode)
         self._last_pipeline_audit = self.build_pipeline_audit(
             rdata.get("metadata_quality", {}),
             report_insights=insights,
-            exam_review_channel=exam_review_channel,
         )
         self._last_report_insights = insights
-        self._last_channel_usage = self.build_channel_usage(questions, insights)
-        self.assert_channel_usage(
-            exam_review_channel,
-            self._last_channel_usage,
-            require_grounding=channel_grounding_enabled(exam_review_channel),
-        )
         self.assert_pipeline_ready(self._last_pipeline_audit)
         write_report_artifacts(rdata, insights, mode=mode, pdf_path=output_path)
         return output_path
@@ -702,11 +690,7 @@ class AnalysisService:
             if warnings:
                 warning_questions.append({"id": q_id, "warnings": list(warnings)})
 
-        if blocked:
-            detail = "; ".join(f"Q{b.get('id')}: {b.get('reason')}" for b in blocked[:5])
-            raise ValueError(f"metadata envelope missing or invalid: {detail}")
-
-        return {
+        result = {
             "total_questions": len(questions),
             "blocked_questions": blocked,
             "low_confidence_questions": low_confidence,
@@ -714,10 +698,26 @@ class AnalysisService:
             "warning_questions": warning_questions,
         }
 
+        # Fail-open with degradation（修复"一题失败废掉整份报告/下载"的错误逻辑）：
+        # report_data 已能把失败/降级题渲染为"未评估/分析失败"行，单题失败不应
+        # 阻断整份报告。仅当【没有任何可用题】(全部 blocked) 时才拒绝生成——
+        # 那种情况下报告为空且具误导性；其余情况放行并告警，失败题照常标注入报告。
+        if blocked:
+            detail = "; ".join(f"Q{b.get('id')}: {b.get('reason')}" for b in blocked[:5])
+            blocked_ids = {b.get("id") for b in blocked}
+            valid_count = sum(1 for q in questions if q.get("id") not in blocked_ids)
+            if valid_count == 0:
+                raise ValueError(f"metadata envelope missing or invalid: {detail}")
+            logger.warning(
+                f"[报告门禁] {len(blocked_ids)} 题分析失败/降级，按未评估纳入报告；"
+                f"其余 {valid_count} 题正常生成 ({detail})"
+            )
+
+        return result
+
     @staticmethod
     def build_pipeline_audit(metadata_quality: Dict | None,
-                             report_insights: Dict | None = None,
-                             exam_review_channel: str | None = None) -> Dict:
+                             report_insights: Dict | None = None) -> Dict:
         metadata_quality = metadata_quality or {}
         blockers = []
         warnings = []
@@ -768,10 +768,10 @@ class AnalysisService:
         hard_warning_prefixes = (
             "analysis_failed:",
             "difficulty_blocked:",
-            "llm_fallback:",
             "invalid_llm_call:",
-            "llm_parse_failure:",
-            "llm_provider_error:",
+            # 已移除 llm_fallback: / llm_parse_failure: / llm_provider_error:（改动B2）：
+            # 成功 fallback / parse-retry 有有效产物，不再因报告侧软信号误杀报告；
+            # 真失败仍由 analysis_failed: / B1 retry 判据 / missing_purpose / validate_report_metadata 兜住。
             "media_not_passed:",
             "seu_derivation_failed:",
             "competency_supplement_failed:",
@@ -804,117 +804,24 @@ class AnalysisService:
                     continue
                 purpose = call.get("purpose") or "report_llm"
                 metadata = call.get("metadata") if isinstance(call.get("metadata"), dict) else {}
+                # 改动C 配套：板块级降级的 call 已是 fail-closed 护栏放行的安全占位，跳过审计
+                if metadata.get("degraded"):
+                    continue
+                # 改动B3：报告 LLM 单次抖动（fallback / provider_error / validation）降为普通 warning，
+                # 不再 add_block 杀报告——成功恢复有有效产物；真整体失败由 report_insights fail-closed 护栏 raise。
                 if int(call.get("fallback_count") or metadata.get("fallback_count") or 0) > 0:
-                    add_block("report_llm", "llm_fallback", f"{purpose} used fallback", call)
+                    warnings.append({"stage": "report_llm", "code": "llm_fallback", "detail": call})
                 if metadata.get("provider_errors"):
-                    add_block("report_llm", "provider_error", f"{purpose} has provider errors", call)
-                if call.get("validation_errors") and purpose != "report_grounding_check":
-                    add_block("report_llm", "parse_or_validation_error", f"{purpose} validation failed", call)
-
-            grounding_required = False
-            try:
-                from services.review_channel import channel_grounding_enabled
-                grounding_required = channel_grounding_enabled(exam_review_channel)
-            except Exception:
-                grounding_required = False
-            if grounding_required:
-                checks = report_insights.get("_grounding_checks") or []
-                status = report_insights.get("_grounding_status")
-                if status != "ok" or not checks:
-                    failed_checks = [
-                        check for check in checks
-                        if isinstance(check, dict) and check.get("status") != "ok"
-                    ]
-                    first_failed = failed_checks[0] if failed_checks else {}
-                    detail_message = f"report grounding status is {status or 'missing'}"
-                    if first_failed:
-                        detail_message += (
-                            f"; first failed section={first_failed.get('section') or 'unknown'}"
-                            f", support_score={first_failed.get('support_score')}"
-                            f", threshold={first_failed.get('threshold')}"
-                        )
-                    add_block(
-                        "report_grounding",
-                        "grounding_not_ok",
-                        detail_message,
-                        {"status": status, "checks": checks},
-                    )
+                    warnings.append({"stage": "report_llm", "code": "provider_error", "detail": call})
+                if call.get("validation_errors"):
+                    warnings.append({"stage": "report_llm", "code": "parse_or_validation_error", "detail": call})
 
         return {
             "status": "blocked" if blockers else "ok",
             "blockers": blockers,
             "warnings": warnings,
             "metadata_quality": metadata_quality,
-            "report_grounding_status": (
-                report_insights.get("_grounding_status")
-                if isinstance(report_insights, dict) else None
-            ),
         }
-
-    @staticmethod
-    def build_channel_usage(questions: List[Dict] | None,
-                            report_insights: Dict | None = None) -> Dict:
-        """Summarize which parts of the review used 证据服务 vs model calls."""
-        from services.evidence_audit import summarize_evidence_usage
-
-        return summarize_evidence_usage(questions, report_insights)
-
-    @staticmethod
-    def assert_channel_usage(exam_review_channel: str | None,
-                             channel_usage: Dict | None,
-                             require_grounding: bool = False) -> None:
-        from services.review_channel import channel_uses_agent_search, channel_uses_evidence
-
-        if not channel_uses_evidence(exam_review_channel):
-            return
-        channel_usage = channel_usage or {}
-        if (
-            channel_uses_agent_search(exam_review_channel)
-            and int(channel_usage.get("agent_search_answer_count") or 0) <= 0
-        ):
-            raise RuntimeError(
-                "agent_search channel requested but no Search App answer_query evidence "
-                "was recorded; verify the evidence service configuration and the question evidence context"
-            )
-        if int(channel_usage.get("unsupported_generation_count") or 0) > 0:
-            raise RuntimeError(
-                "证据增强审题失败：检测到不应使用的 证据服务 "
-                "generateGroundedContent 调用；当前通道应使用模型生成 + Ranking/Grounding 门禁。"
-            )
-        rank_count = int(
-            channel_usage.get("evidence_rank_count")
-            or channel_usage.get("evidence_rank_count")
-            or 0
-        )
-        grounding_count = int(
-            channel_usage.get("evidence_grounding_check_count")
-            or channel_usage.get("evidence_grounding_check_count")
-            or 0
-        )
-        if rank_count <= 0:
-            missing = channel_usage.get("missing_rank_question_ids") or []
-            if missing:
-                first = missing[0]
-                raise RuntimeError(
-                    f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                    "（证据服务 Ranking 未记录），不能进入正式报告。"
-                )
-            raise RuntimeError(
-                "证据增强审题失败：缺少 证据服务 Ranking 记录，"
-                "不能进入正式报告。"
-            )
-        missing = channel_usage.get("missing_rank_question_ids") or []
-        if missing:
-            first = missing[0]
-            raise RuntimeError(
-                f"证据增强审题失败：第 {first} 题缺少 Ranking 证据"
-                "（证据服务 Ranking 未记录），不能进入正式报告。"
-            )
-        if require_grounding and grounding_count <= 0:
-            raise RuntimeError(
-                "证据增强审题失败：报告结论缺少 Check Grounding 校验"
-                "（证据服务 Check Grounding 未记录），不能进入正式报告。"
-            )
 
     @staticmethod
     def assert_pipeline_ready(audit: Dict | None) -> None:
@@ -1215,105 +1122,13 @@ class AnalysisService:
 
     # ── 完整端点编排（从 router 提取）────────────────────────
 
-    async def run_full_analysis(self, file_path: str, filename: str,
-                                 mode: str = "deep", generate_report: bool = False,
-                                 report_mode: str = "full", reports_dir: str = None,
-                                 exam_id: str = None,
-                                 exam_review_channel: str | None = None) -> Dict:
-        """完整分析流程：文档→拆分→分析→统计→报告。对应 /api/analyze。"""
-        doc = await self.process_document(file_path, filename)
-        image_bytes = doc["image_bytes"]
-        extracted_text = doc["extracted_text"]
-        extracted_elements = doc["extracted_elements"]
-        document_failure_events = doc.get("failure_events") or []
-
-        if filename.lower().endswith(".docx") and self.word_splitter:
-            loop = asyncio.get_event_loop()
-            split_result = await loop.run_in_executor(None, self.word_splitter.split, file_path)
-            questions = split_result.get("questions", [])
-        else:
-            questions = await self.split_questions_llm(
-                image_bytes,
-                extracted_text,
-                exam_review_channel=exam_review_channel,
-            )
-
-        self.validate_split_integrity(questions, extracted_text)
-
-        if extracted_elements and self.doc_processor:
-            self.doc_processor.match_elements_to_questions(questions, extracted_elements)
-
-        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
-            questions = await self.analyze_questions_batch(
-                questions, image_bytes, mode, exam_review_channel=exam_review_channel
-            )
-        else:
-            questions = await self.analyze_questions_batch(questions, image_bytes, mode)
-
-        competency_summary = self.build_competency_summary(questions)
-        exam_statistics = self.aggregate_statistics(questions, competency_summary)
-        if document_failure_events:
-            exam_statistics["document_failure_events"] = document_failure_events
-        from report_data import compute_metadata_quality
-        metadata_quality = compute_metadata_quality(questions, exam_statistics=exam_statistics)
-        pipeline_audit = self.build_pipeline_audit(metadata_quality)
-        self._last_pipeline_audit = pipeline_audit
-        channel_usage = self.build_channel_usage(questions)
-        self.assert_channel_usage(exam_review_channel, channel_usage)
-
-        report_url = None
-        html_report_url = None
-        report_error = None
-        report_insights = None
-        if generate_report and reports_dir:
-            self.assert_pipeline_ready(pipeline_audit)
-            try:
-                from pathlib import Path
-                pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
-                await self.generate_report(
-                    questions, competency_summary, exam_statistics,
-                    {"name": filename, "total": len(questions), "mode": mode},
-                    mode=report_mode,
-                    output_path=pdf_path,
-                    exam_review_channel=exam_review_channel,
-                )
-                report_url = f"/api/reports/{exam_id}.pdf"
-                if Path(pdf_path).with_suffix(".html").exists():
-                    html_report_url = f"/api/reports/{exam_id}.html"
-                report_insights = self._last_report_insights
-                pipeline_audit = self._last_pipeline_audit or pipeline_audit
-                channel_usage = self._last_channel_usage or self.build_channel_usage(questions, report_insights)
-                self.assert_channel_usage(
-                    exam_review_channel,
-                    channel_usage,
-                    require_grounding=True,
-                )
-            except Exception as e:
-                logger.exception("[报告生成] 自动分析报告生成失败")
-                raise RuntimeError(f"report generation failed: {e}") from e
-
-        return {
-            "questions": questions,
-            "competency_summary": competency_summary,
-            "exam_statistics": exam_statistics,
-            "metadata_quality": metadata_quality,
-            "pipeline_audit": pipeline_audit,
-            "document_failure_events": document_failure_events,
-            "report_url": report_url,
-            "html_report_url": html_report_url,
-            "report_error": report_error,
-            "report_insights": report_insights,
-            "channel_usage": channel_usage,
-        }
-
     async def run_auto_analysis(self, file_path: str, filename: str,
                                  file_bytes: bytes, mode: str = "deep",
                                  subject: str = "biology",
                                  generate_report: bool = False,
                                  report_mode: str = "full",
                                  reports_dir: str = None,
-                                 exam_id: str = None,
-                                 exam_review_channel: str | None = None) -> Dict:
+                                 exam_id: str = None) -> Dict:
         """规则拆分 + 自动分析。对应 /api/analyze_auto 的核心逻辑。"""
         file_ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
         document_failure_events = []
@@ -1321,7 +1136,7 @@ class AnalysisService:
         if file_ext == "docx":
             loop = asyncio.get_event_loop()
             split_result = await loop.run_in_executor(
-                None, self.word_splitter.split, file_path
+                None, lambda: split_word_with_visual(file_path, subject=subject)
             )
             questions = split_result.get("questions", [])
             self.validate_split_integrity(questions)
@@ -1354,13 +1169,8 @@ class AnalysisService:
         else:
             raise ValueError(f"不支持的文件格式: {filename}")
 
-        if self._accepts_kwarg(self.analyze_questions_batch, "exam_review_channel"):
-            analyzed = await self.analyze_questions_batch(
-                questions, image_bytes, mode, subject, exam_review_channel=exam_review_channel
-            )
-        else:
-            analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
-        competency_summary = self.build_competency_summary(analyzed)
+        analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
+        competency_summary = self.build_competency_summary(analyzed, subject)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
         if document_failure_events:
             exam_statistics["document_failure_events"] = document_failure_events
@@ -1368,8 +1178,6 @@ class AnalysisService:
         metadata_quality = compute_metadata_quality(analyzed, exam_statistics=exam_statistics)
         pipeline_audit = self.build_pipeline_audit(metadata_quality)
         self._last_pipeline_audit = pipeline_audit
-        channel_usage = self.build_channel_usage(analyzed)
-        self.assert_channel_usage(exam_review_channel, channel_usage)
 
         report_url = None
         html_report_url = None
@@ -1381,8 +1189,6 @@ class AnalysisService:
                 from pathlib import Path
                 pdf_path = str(Path(reports_dir) / f"{exam_id}.pdf")
                 report_kwargs = {"mode": report_mode, "output_path": pdf_path}
-                if self._accepts_kwarg(self.generate_report, "exam_review_channel"):
-                    report_kwargs["exam_review_channel"] = exam_review_channel
                 await self.generate_report(
                     analyzed, competency_summary, exam_statistics,
                     {"name": filename, "total": len(analyzed), "mode": mode},
@@ -1393,12 +1199,6 @@ class AnalysisService:
                     html_report_url = f"/api/reports/{exam_id}.html"
                 report_insights = self._last_report_insights
                 pipeline_audit = self._last_pipeline_audit or pipeline_audit
-                channel_usage = self._last_channel_usage or self.build_channel_usage(analyzed, report_insights)
-                self.assert_channel_usage(
-                    exam_review_channel,
-                    channel_usage,
-                    require_grounding=True,
-                )
             except Exception as e:
                 logger.exception("[报告生成] 确认拆分报告生成失败")
                 raise RuntimeError(f"report generation failed: {e}") from e
@@ -1415,5 +1215,4 @@ class AnalysisService:
             "html_report_url": html_report_url,
             "report_error": report_error,
             "report_insights": report_insights,
-            "channel_usage": channel_usage,
         }

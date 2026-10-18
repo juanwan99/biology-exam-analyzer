@@ -2,11 +2,112 @@
 
 校验失败不阻断流程，而是标记 extraction_confidence 和 validation_errors。
 """
+import re
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from logger import get_logger
 
 logger = get_logger()
+
+
+# ── Bloom 层次容错 ───────────────────────────────────────────────
+# LLM 偶尔把 bloom 输出成名字串（如 "application"）或越界值，pydantic 的 int 校验会拒绝，
+# 导致整份 scoring_units 解析失败、整题返回 None（HANDOFF-2026-06-15 §10.1）。
+# before-validator 统一把名字串/越界值/杂类型容错成 1-6 整数，绝不让整题因 bloom 而 None。
+_BLOOM_NAME_TO_INT = {
+    "识记": 1, "记忆": 1, "remember": 1, "knowledge": 1, "recall": 1,
+    "理解": 2, "领会": 2, "understand": 2, "comprehension": 2, "comprehend": 2,
+    "应用": 3, "运用": 3, "apply": 3, "application": 3, "applying": 3,
+    "分析": 4, "analyze": 4, "analyse": 4, "analysis": 4, "analyzing": 4,
+    "评价": 5, "评估": 5, "evaluate": 5, "evaluation": 5, "evaluating": 5,
+    "创造": 6, "创建": 6, "create": 6, "creation": 6, "creating": 6,
+    "synthesis": 6, "synthesize": 6,
+}
+
+
+def _coerce_bloom(v):
+    """把 Bloom 名字串 / 越界值 / 杂类型容错成 1-6 整数。
+
+    None 与 bool 原样交回（保持各字段 Optional/default 的既有语义）；无法识别 → 回退 3 + warning。
+    """
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = int(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        if s:
+            if s.lstrip("-").isdigit():
+                n = int(s)
+            else:
+                n = _BLOOM_NAME_TO_INT.get(s.lower()) or _BLOOM_NAME_TO_INT.get(s)
+                if n is None:
+                    m = re.search(r"[1-6]", s)
+                    if m:
+                        n = int(m.group())
+    if n is None:
+        logger.warning(f"[bloom_coerce] 无法识别 bloom 值 {v!r}，回退默认 3")
+        return 3
+    return max(1, min(6, n))
+
+
+# ── 嵌套单元数值容错 ─────────────────────────────────────────────
+# SEU/KnowledgeLink/DU/SU 的 ge/le 范围字段:LLM 偶给越界值/百分数/文字档位,
+# pydantic 硬校验会拒绝 → 整份 FineGrainedResult 构造失败、整题 None/降级。
+# before-validator 只做"夹值/类型修正",不放松必填与守恒:必填字段 None 原样透传
+# 让 pydantic 正常报缺失;越界夹到边界并 warning 留审计;不做百分数等启发式猜测
+# （仅明确带 % 的字符串还原），避免制造新错误,越界由下游守恒检查兜底。
+_TRAP_WORD = {"low": 1, "weak": 1, "弱": 1, "小": 1, "轻": 1,
+              "medium": 2, "moderate": 2, "mid": 2, "中": 2,
+              "high": 3, "strong": 3, "强": 3, "大": 3, "重": 3}
+
+
+def _coerce_unit_float(v, lo, hi, default):
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = float(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        is_pct = s.endswith("%")
+        s = s.rstrip("%").strip()
+        try:
+            n = float(s)
+            if is_pct:
+                n = n / 100.0
+        except (ValueError, TypeError):
+            n = None
+    if n is None:
+        logger.warning(f"[unit_coerce] 无法识别数值 {v!r}，回退 {default}")
+        return default
+    clamped = max(lo, min(hi, n))
+    if clamped != n:
+        logger.warning(f"[unit_coerce] 数值 {n} 越界[{lo},{hi}]，夹到 {clamped}")
+    return clamped
+
+
+def _coerce_unit_int(v, lo, hi, default):
+    if v is None or isinstance(v, bool):
+        return v
+    n = None
+    if isinstance(v, (int, float)):
+        n = int(v)
+    elif isinstance(v, str):
+        s = v.strip()
+        if s.lstrip("-").isdigit():
+            n = int(s)
+        else:
+            n = _TRAP_WORD.get(s.lower())
+            if n is None:
+                m = re.search(r"[1-9][0-9]*", s)
+                if m:
+                    n = int(m.group())
+    if n is None:
+        logger.warning(f"[unit_coerce] 无法识别档位 {v!r}，回退 {default}")
+        return default
+    return max(lo, min(hi, n))
 
 
 # ── 1. 主分析（question_analyzer）────────────────────────────────
@@ -22,6 +123,20 @@ class AnalysisResult(BaseModel):
     competency: Optional[Dict[str, Any]] = None
     sub_questions: Optional[List[Dict]] = None
     option_difficulty_breakdown: Optional[Dict] = None
+
+    @field_validator("option_difficulty_breakdown", mode="before")
+    @classmethod
+    def _coerce_option_bd(cls, v):
+        # 选项难度细分为非关键可选 flag（下游 difficulty_pipeline 已 isinstance(dict) 防御）。
+        # v1 prompt 示例为 list，LLM 常返回 list；schema 要 Dict 会校验失败 →
+        # 整题 confidence 归零 → 报告门禁(component confidence<=0)拦截。
+        # 仅 dict 有效，其余（list/str/None）降级为 None。生物走 v2 不触此路径，零回归。
+        return v if isinstance(v, dict) else None
+
+    @field_validator("bloom_level", mode="before")
+    @classmethod
+    def _vld_bloom_level(cls, v):
+        return _coerce_bloom(v)
 
     class Config:
         extra = "allow"
@@ -40,6 +155,11 @@ class FeatureResult(BaseModel):
     info_density: int = Field(default=2, ge=1, le=3)
     representation_complexity: int = Field(default=1, ge=1, le=3)
 
+    @field_validator("bloom", mode="before")
+    @classmethod
+    def _vld_bloom(cls, v):
+        return _coerce_bloom(v)
+
     class Config:
         extra = "allow"
 
@@ -52,11 +172,20 @@ class CompetencyDim(BaseModel):
     权重: float = Field(default=0, ge=0, le=1)
     分析说明: str = ""
 
+    @field_validator("权重", mode="before")
+    @classmethod
+    def _vld_quanzhong(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, 0.0)
+
     class Config:
         extra = "allow"
 
 
 class CompetencyResult(BaseModel):
+    # 以下四个生物维度为历史默认字段（保留以对生物维 权重 做 CompetencyDim 强制 float 校验，
+    # 保证生物零回归）。非生物学科的真实维度经 extra='allow' 携带；这些生物默认空维(权重0)会
+    # 在 competency_analyzer._align_competency_to_subject 解析后按真实学科维度剔除/补齐，
+    # 不会污染非生物报告。A-2 根因修复落在该对齐函数（数据唯一产出点），见 competency_analyzer.py。
     生命观念: CompetencyDim = Field(default_factory=CompetencyDim)
     科学思维: CompetencyDim = Field(default_factory=CompetencyDim)
     科学探究: CompetencyDim = Field(default_factory=CompetencyDim)
@@ -147,6 +276,11 @@ class KnowledgeLink(BaseModel):
     knowledge_point: str
     share: float = Field(ge=0.0, le=1.0)  # 在 SEU 中占的比例
 
+    @field_validator("share", mode="before")
+    @classmethod
+    def _vld_share(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, None)
+
 
 COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任"]
 
@@ -154,6 +288,11 @@ COMPETENCY_DIMS = ["生命观念", "科学思维", "科学探究", "社会责任
 class CompetencyLink(BaseModel):
     primary: str = ""
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("weight", mode="before")
+    @classmethod
+    def _vld_weight(cls, v):
+        return _coerce_unit_float(v, 0.0, 1.0, 1.0)
 
 
 class ScoringEvidenceUnit(BaseModel):
@@ -170,24 +309,52 @@ class ScoringEvidenceUnit(BaseModel):
     difficulty_estimate: float = Field(default=5.0, ge=0.0, le=10.0)
     reasoning_brief: str = ""
 
-    def get_competency_weights(self) -> Dict[str, float]:
-        """获取四维素养权重（兼容新旧格式）。"""
+    @field_validator("bloom_level", mode="before")
+    @classmethod
+    def _vld_bloom_level(cls, v):
+        return _coerce_bloom(v)
+
+    @field_validator("score_share", "allocation_confidence", "difficulty_estimate", mode="before")
+    @classmethod
+    def _vld_unit_floats(cls, v, info):
+        if info.field_name == "difficulty_estimate":
+            return _coerce_unit_float(v, 0.0, 10.0, 5.0)
+        if info.field_name == "allocation_confidence":
+            return _coerce_unit_float(v, 0.0, 1.0, 0.7)
+        return _coerce_unit_float(v, 0.0, 1.0, None)  # score_share 必填:无法识别→None 让 pydantic 报缺失
+
+    def get_competency_weights(self, competency_dims: Optional[List[str]] = None) -> Dict[str, float]:
+        """获取素养权重（兼容新旧格式）。
+
+        competency_dims 缺省时退回 COMPETENCY_DIMS（生物四维），保证旧调用零变化。
+        """
+        dims = competency_dims or COMPETENCY_DIMS
+        equal = 1.0 / len(dims) if dims else 0.0
         if self.competency_weights:
-            w = {d: self.competency_weights.get(d, 0.0) for d in COMPETENCY_DIMS}
+            w = {d: self.competency_weights.get(d, 0.0) for d in dims}
             total = sum(w.values())
             if total > 0:
                 return {k: v / total for k, v in w.items()}
-            return {d: 0.25 for d in COMPETENCY_DIMS}
+            # competency_weights 非空但与本科维度求和为 0（键不匹配或值全 0）→ 退化均分。
+            # 静默退化会掩盖 LLM 写错维度键名的真实跑偏，打 WARNING 使其可观测（R9 健壮性）。
+            try:
+                from logger import get_logger
+                get_logger().warning(
+                    "[素养] competency_weights 与维度求和为 0，退化均分: "
+                    f"got={list(self.competency_weights.keys())} expected={dims}")
+            except Exception:
+                pass
+            return {d: equal for d in dims}
         if self.competency and self.competency.primary:
-            w = {d: 0.0 for d in COMPETENCY_DIMS}
+            w = {d: 0.0 for d in dims}
             if self.competency.primary in w:
                 w[self.competency.primary] = self.competency.weight
                 remaining = 1.0 - self.competency.weight
-                others = [d for d in COMPETENCY_DIMS if d != self.competency.primary]
+                others = [d for d in dims if d != self.competency.primary]
                 for d in others:
-                    w[d] = remaining / len(others)
+                    w[d] = remaining / len(others) if others else 0.0
             return w
-        return {d: 0.25 for d in COMPETENCY_DIMS}
+        return {d: equal for d in dims}
 
 
 class DiagnosticUnit(BaseModel):
@@ -200,6 +367,11 @@ class DiagnosticUnit(BaseModel):
     knowledge_boundary: str = ""
     if_selected_means: List[str] = []
 
+    @field_validator("trap_strength", mode="before")
+    @classmethod
+    def _vld_trap_strength(cls, v):
+        return _coerce_unit_int(v, 1, 3, 2)
+
 
 class StimulusUnit(BaseModel):
     """情境/过程单元 — 承载材料、图表、共享情境"""
@@ -208,6 +380,11 @@ class StimulusUnit(BaseModel):
     complexity: int = Field(default=1, ge=1, le=3)
     is_core: bool = False
     description: str = ""  # ≤30字
+
+    @field_validator("complexity", mode="before")
+    @classmethod
+    def _vld_complexity(cls, v):
+        return _coerce_unit_int(v, 1, 3, 1)
 
 
 class FineGrainedResult(BaseModel):
@@ -253,8 +430,13 @@ def validate_score_conservation(result: FineGrainedResult, total_score: float) -
     return (len(errors) == 0, errors)
 
 
-def compute_summary_from_units(fg: FineGrainedResult) -> dict:
-    """从 typed units 派生旧格式字段。纯 Python，无 LLM。"""
+def compute_summary_from_units(fg: FineGrainedResult,
+                               competency_dims: Optional[List[str]] = None) -> dict:
+    """从 typed units 派生旧格式字段。纯 Python，无 LLM。
+
+    competency_dims 缺省时退回 COMPETENCY_DIMS（生物四维），保证旧调用零变化。
+    """
+    dims = competency_dims or COMPETENCY_DIMS
     # knowledge_points: 按 score_share * kl.share 加权，取前 5
     _ABILITY_BLACKLIST = {"数据处理", "数据分析", "实验设计", "信息获取", "信息处理",
                           "逻辑推理", "模型建构", "批判性思维", "科学探究能力"}
@@ -271,13 +453,15 @@ def compute_summary_from_units(fg: FineGrainedResult) -> dict:
     # common_mistakes: 从 DU 提取
     common_mistakes = [du.misconception for du in fg.diagnostic_units if du.misconception][:3]
 
-    # primary_competency: 从 SEU 四维权重加权
-    comp_weights = {d: 0.0 for d in COMPETENCY_DIMS}
+    # primary_competency: 从 SEU 素养权重加权
+    comp_weights = {d: 0.0 for d in dims}
     for seu in fg.scoring_units:
-        w = seu.get_competency_weights()
-        for d in COMPETENCY_DIMS:
+        w = seu.get_competency_weights(dims)
+        for d in dims:
             comp_weights[d] += seu.score_share * w.get(d, 0)
-    primary_comp = max(comp_weights, key=comp_weights.get) if any(comp_weights.values()) else "科学思维"
+    # 无权重数据时的默认主素养：生物保持历史值"科学思维"，其余学科取首维
+    default_primary = "科学思维" if dims == COMPETENCY_DIMS else (dims[0] if dims else "")
+    primary_comp = max(comp_weights, key=comp_weights.get) if any(comp_weights.values()) else default_primary
 
     # bloom: 分值加权
     bloom_sum = sum(seu.bloom_level * seu.score_share for seu in fg.scoring_units)
@@ -290,11 +474,11 @@ def compute_summary_from_units(fg: FineGrainedResult) -> dict:
         label = bloom_labels.get(seu.bloom_level, "应用")
         bloom_dist[label] = bloom_dist.get(label, 0) + 1
 
-    # competency details: 四维素养权重加权聚合
-    all_comps = {d: 0.0 for d in COMPETENCY_DIMS}
+    # competency details: 素养权重加权聚合
+    all_comps = {d: 0.0 for d in dims}
     for seu in fg.scoring_units:
-        w = seu.get_competency_weights()
-        for d in COMPETENCY_DIMS:
+        w = seu.get_competency_weights(dims)
+        for d in dims:
             all_comps[d] += seu.score_share * w.get(d, 0)
 
     # allocation confidence

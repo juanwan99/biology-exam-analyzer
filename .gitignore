@@ -30,3 +30,10 @@ backend/test_agent_search_corpus.py
 backend/.feature_cache/
 .feature_cache/
 docs/
+
+# bak variants (*.bak does not match *.bak_visual_*)
+*.bak*
+*.bak_*
+backend/.pytest_cache/
+.pytest_cache/
+backend/data/

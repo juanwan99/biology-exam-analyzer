@@ -1,0 +1,272 @@
+{
+ "group": "misc",
+ "actions": [
+  {
+   "file": "backend/analysis_router.py",
+   "type": "delete_block",
+   "location": "L59-L60 模块级 _APP_BUILDER_READY_CACHE / _APP_BUILDER_READY_TTL_SECONDS",
+   "what": "App Builder preflight 的 token 就绪缓存，仅被 _ensure_review_channel_ready 使用，随 preflight 一并删除",
+   "risk": "低。全仓 grep 确认仅 L127/131/132 引用。"
+  },
+  {
+   "file": "backend/analysis_router.py",
+   "type": "delete_block",
+   "location": "L28 import time",
+   "what": "time 仅在 preflight 缓存 (L126 time.time()) 使用，preflight 删除后成为死 import；其余时间逻辑全用 datetime",
+   "risk": "低。已 grep 确认 time. 仅 L126 一处。"
+  },
+  {
+   "file": "backend/analysis_router.py",
+   "type": "edit",
+   "location": "L101-L141 _ensure_review_channel_ready()",
+   "what": "删除整个 App Builder preflight：channel_uses_app_builder 判定、services.evidence_client_loader 的 EvidenceClient/EvidenceConfig import、credentials 文件检查、_access_token() 探测、缓存写入、503 HTTPException（含中文文案'1000赠金审题渠道不可用…证据服务配置'）",
+   "replacement": "函数收缩为纯归一化：from services.review_channel import normalize_review_channel; return normalize_review_channel(exam_review_channel)。三个调用点 L194/L362/L766 不动；保留函数名以兼容 test_analysis_router_metadata.py L250/L309 的 monkeypatch。reviewer 免扣费旁路（_resolve_user_and_review L271-294、_ensure_balance L297-309、L330-360、L418、L786-789）与 review_channel 无关（按 username==reviewer 判定），一行不动。",
+   "risk": "行为差异点：当前若用户显式选 app_builder/1000赠金渠道会拿到 503 快速失败；删除后将静默走普通 LLM 链路并正常扣费。生产实际（grounding 0 成功记录）下默认请求本就走降级，所以默认行为一致。前端渠道选择 UI（AnalyzerPage.jsx，工作区已有人在改）需同步摘掉该选项。若 services 组整体删除 review_channel.py，此函数需改为直接 return exam_review_channel（或 None 归一）。"
+  },
+  {
+   "file": "backend/analysis_router.py",
+   "type": "edit",
+   "location": "L144-L167 _generate_route_report_artifacts()",
+   "what": "删 L157 'from services.review_channel import channel_grounding_enabled' 和 L165 'grounding_enabled=channel_grounding_enabled(exam_review_channel)' 实参；exam_review_channel 形参（L151）随之变死参",
+   "replacement": "generate_insights(rdata, mode=report_mode) 两参调用；同时删除 exam_review_channel 形参并更新两处调用点 L532、L928（去掉尾参 effective_review_channel）。保留：aggregate_report_data → generate_insights → write_report_artifacts 主链路原样。",
+   "risk": "依赖 report_insights 组删除 generate_insights 的 grounding_enabled 形参；若那边保留签名（默认 None），仅删本处传参也兼容（None=禁用=当前生产实际）。test_analysis_router_metadata.py L183-187/L283-287 两个 fake 的 exam_review_channel=None 默认形参在调用点去尾参后仍兼容，可顺手清理。"
+  },
+  {
+   "file": "backend/analysis_calibration.py",
+   "type": "edit",
+   "location": "L1-L7 模块 docstring",
+   "what": "docstring 第二句 'An evidence service supplies the textbook/rubric anchors in the prompt and metadata' 描述已删除的证据服务，失实",
+   "replacement": "改为只描述本模块职责：确定性归一化模型输出标签、稳定下游分数聚合。无代码改动。",
+   "risk": "零风险，注释级。本文件其余内容全是确定性校准逻辑，无谷歌依赖。"
+  },
+  {
+   "file": "backend/competency_analyzer.py",
+   "type": "edit",
+   "location": "L32 _llm_call_trace() 透传键白名单",
+   "what": "白名单元组中 'fact_count'、'grounding_score'、'operation' 三键只由 llm_client 的 evidence_service 路径产生（llm_client.py L455-465/L569-581，degoogle 后不复存在）",
+   "replacement": "元组收缩为 (\"provider_errors\", \"status\", \"model_policy\")——这三键由普通 provider 路径产生（llm_client.py L614/L620/L622/L662 已证实），透传行为与当前生产完全一致。",
+   "risk": "低。trace.get(key) is not None 守卫意味着即使不改也无行为差异（纯死代码清理）。需与 feature_extractor.py、vision_context.py 同步改保持三处 _llm_call_trace 一致；若 llm_client 组将 'operation' 留作通用键则保留它。"
+  },
+  {
+   "file": "backend/feature_extractor.py",
+   "type": "edit",
+   "location": "L19-L31 _llm_call_trace()，具体 L28",
+   "what": "同 competency_analyzer.py：白名单去掉 fact_count/grounding_score/operation",
+   "replacement": "(\"provider_errors\", \"status\", \"model_policy\")",
+   "risk": "同上，三文件联动。本文件其余 'evidence' 无命中（grep 仅 L28 一处谷歌相关）。"
+  },
+  {
+   "file": "backend/vision_context.py",
+   "type": "edit",
+   "location": "L48-L60 _llm_call_trace()，具体 L57",
+   "what": "同上白名单收缩。L4 docstring 'visual evidence summary' 是 Qwen 视觉摘要的域内表述，保留",
+   "replacement": "(\"provider_errors\", \"status\", \"model_policy\")",
+   "risk": "同上，三文件联动。"
+  },
+  {
+   "file": "backend/difficulty_pipeline.py",
+   "type": "keep",
+   "location": "全文件（38 处命中：L137-L154、L354-L425、L566-L623 visual_seu_evidence_floor、L713-L731、L801-L902 _evidence_rich_big_question_floor、L956-L1056、L1100-L1161 evidence_dependency_load）",
+   "what": "全部 'evidence' 是 SEU/DU 采分点证据的域内术语（难度评分 v3.1），与谷歌证据服务零关联；文件无 import 任何 evidence/google 模块（仅 import feature_extractor/rule_scorer/logger）",
+   "risk": "无。误删会破坏难度评分行为。"
+  },
+  {
+   "file": "backend/llm_schemas.py",
+   "type": "keep",
+   "location": "L159-L190 ScoringEvidenceUnit、L215 FineGrainedResult.scoring_units",
+   "what": "采分证据单元 Pydantic schema，是降级路径（=唯一路径）的核心数据契约，question_analyzer 的 LLM 输出直接验证于此",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/report_commercial_narrative.py",
+   "type": "keep",
+   "location": "L313-L330 metadata_status()，具体 L319",
+   "what": "evidence_gap_questions 来自 report_data.compute_metadata_quality 的域内 fine-grained 缺口检测（diagnostic/stimulus units 缺失），非谷歌",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/report_data.py",
+   "type": "keep",
+   "location": "L205 _call_has_retry_or_parse_failure() 的 missing_evidence_repair 分支；L448/L496-L505/L543 evidence_gap_questions",
+   "what": "missing_evidence_repair 是 question_analyzer.py L2353-2448 经 llm_call 做的 DU/SU 单元 LLM 修复 purpose（已读源码证实非谷歌调用）；evidence_gap_questions 由题目 fine_grained units 推导。全部保留",
+   "risk": "无。这是降级路径本身的质量门，删了会放松报告闸门。"
+  },
+  {
+   "file": "backend/report_product_charts.py",
+   "type": "edit",
+   "location": "L94 _status_label() 字典",
+   "what": "删除 '\"report_grounding_check\": \"证据核查\",' 一行——该 purpose 只由 report_insights.py L1369 的 grounding 检查产生，degoogle 后永不出现",
+   "replacement": "删行后未知 purpose 走兜底 str(value).replace('_',' ')，行为与当前生产一致（该 purpose 从未实际出现在 llm_call_counts）。L819 evidence_density 为域内指标，保留。",
+   "risk": "低。依赖 report_insights 组删除 purpose 产生点；先删标签后删产生点也无害。"
+  },
+  {
+   "file": "backend/report_product_html.py",
+   "type": "edit",
+   "location": "L124 _purpose_label() 字典",
+   "what": "删除 '\"report_grounding_check\": \"证据核查\",' 一行，同 charts 文件",
+   "replacement": "未知 purpose 兜底 str(value)。",
+   "risk": "低。"
+  },
+  {
+   "file": "backend/report_product_html.py",
+   "type": "keep",
+   "location": "其余 41 处命中：L152/L203 校准 flag 标签、L278-L307、L480-L690 _render_evidence/单元卡、L780-L822 _render_evidence_integrity、L1027-L1157、L1658-L2219 CSS、L2659-L2817 PDF、L2894-L2909 fine_grained_evidence 章节",
+   "what": "全部是 SEU 域内证据 UI（采分点证据引用、证据完整性面板、审题证据矩阵）。_render_evidence_integrity 只通用渲染 items 列表，不直接读 grounding_status/grounding_checks 键，model 侧删 grounding 项后此处自动少一张卡，无需改动",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/report_product_model.py",
+   "type": "edit",
+   "location": "L2485-L2495 _build_evidence_integrity() 开头",
+   "what": "删 L2494-L2495 两行：grounding_checks = _as_list(insights.get(\"_grounding_checks\")) 与 grounding_status = str(insights.get(\"_grounding_status\")…)——上游 report_insights degoogle 后永不产生这两个键",
+   "replacement": "直接删除；下方两处引用同步删（见后两条）。",
+   "risk": "低。生产实际中 insights 从无这两个键，此代码从未生效。"
+  },
+  {
+   "file": "backend/report_product_model.py",
+   "type": "delete_block",
+   "location": "L2550-L2567 _build_evidence_integrity() 内 'if grounding_checks:' 整块",
+   "what": "report_grounding 完整性卡片（'整卷结论证据校验'，support_score/threshold/claim_count/cited_chunk_count）——grounding 专属处理块",
+   "risk": "低。evidence_integrity.items 其余项（结构化回退/阻断/证据链异常等域内项）全保留，报告渲染输出与当前生产一致（该卡从未渲染过）。"
+  },
+  {
+   "file": "backend/report_product_model.py",
+   "type": "edit",
+   "location": "L2761-L2787 _build_evidence_integrity() 返回字典，具体 L2778-L2779",
+   "what": "删除 \"grounding_status\" 与 \"grounding_checks\" 两个返回键",
+   "replacement": "返回字典其余键原样。已 grep 确认仓内无其他消费点（report_product_html 只遍历 items/failure_explanations 通用结构）。",
+   "risk": "低。唯一消费者是 test_report_product_model.py L59 的断言（同批删除）。"
+  },
+  {
+   "file": "backend/report_product_model.py",
+   "type": "keep",
+   "location": "其余 ~70 处命中：L132/L395/L403 关键词表、L804-L922 evidence_difficulty、L1201-L1961 evidence_refs/evidence_density、L1567-L1768 competency_evidence_rows、L2144-L2436 _question_evidence_integrity_trace、L2351 fine_grained_evidence 章节、L2830-L2904",
+   "what": "Bain 风格'判断先行、证据居次'的域内证据引用体系（evidence_refs 指向 question:/metadata:/figure: 内部锚点），与谷歌无关",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_report_product_model.py",
+   "type": "delete_block",
+   "location": "L36-L59 test_product_model_exposes_report_grounding_status_in_evidence_integrity()",
+   "what": "专测 _build_evidence_integrity 的 grounding 块，被测代码删除后整测删除",
+   "risk": "低。同文件其余 'evidence' 测试（evidence_refs/evidence_integrity 域内项）保留。"
+  },
+  {
+   "file": "backend/test_analysis_router_metadata.py",
+   "type": "delete_block",
+   "location": "L137-L172 test_analyze_auto_preflights_app_builder_before_consuming_credits()",
+   "what": "专测 'preflight 503 先于扣费'，preflight 删除后无被测对象",
+   "risk": "低。'拆分成功后才扣费'的顺序保障由 analyze_auto L417-428 代码及其它测试继续覆盖。"
+  },
+  {
+   "file": "backend/test_analysis_router_metadata.py",
+   "type": "edit",
+   "location": "L122、L130 test_analysis_pipeline_produces_metadata_quality()",
+   "what": "effective_review_channel=\"app_builder\" 及断言改为 \"model\"（管线只做字符串透传，技术上不改也能过，但语义已死）",
+   "replacement": "channel 值换成 \"model\"；L250/L309 对 _ensure_review_channel_ready 的 monkeypatch 在函数保留为 normalize 包装时无需改动。",
+   "risk": "低。"
+  },
+  {
+   "file": "backend/test_feature_difficulty.py",
+   "type": "keep",
+   "location": "全文件（15 处命中均为 visual_seu_evidence_floor / evidence_rich_big_question_floor 等域内 flag）",
+   "what": "难度评分域内证据术语测试，精确正则（grounding|google|gemini|discovery|app_builder|evidence_service）零命中",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_report_data.py",
+   "type": "keep",
+   "location": "全文件（L456-L633 missing_evidence_repair / evidence_gap_questions 相关用例）",
+   "what": "测的是域内 LLM 修复 purpose 与 fine-grained 缺口门，非谷歌",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_report_commercial_html.py",
+   "type": "keep",
+   "location": "全文件（22 处均为域内 evidence_*）",
+   "what": "精确正则零命中，纯域内",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_report_commercial_model.py",
+   "type": "keep",
+   "location": "全文件（8 处均为域内 evidence_*）",
+   "what": "同上",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_report_product_html.py",
+   "type": "keep",
+   "location": "全文件（2 处域内 evidence）",
+   "what": "同上",
+   "risk": "无。"
+  },
+  {
+   "file": "backend/test_question_analyzer_metadata.py",
+   "type": "delete_block",
+   "location": "L1127-L1183 test_analyze_question_injects_ranked_evidence_context_when_enabled()",
+   "what": "专测 evidence_context_provider/evidence_ranking_enabled 注入（FakeEvidenceContextProvider 返回 provider=evidence_service 元数据），随 question_analyzer 组删除这两个参数一并删除",
+   "risk": "中（归属边界）：question_analyzer.py 属另一组，本测试删除需与该组对 analyze_question 签名的处理对齐。L1186-L1230 test_…does_not_call_evidence_ranking_by_default 锁的是'默认不调证据'——正是降级即唯一路径的行为，建议参数删除后简化保留（去掉 EVIDENCE_RANKING_ENABLED delenv 与 FailingEvidenceContextProvider 传参）而非整删。L68/L1534 missing_evidence_repair 为域内，保留。"
+  },
+  {
+   "file": "backend/test_report_insights_metadata.py",
+   "type": "edit",
+   "location": "L73 generate_insights(..., grounding_enabled=False)",
+   "what": "去掉 grounding_enabled 实参，与 report_insights 组的签名变更同步",
+   "replacement": "generate_insights(_report_data(), mode=\"brief\")",
+   "risk": "归属 report_insights 组的配套测试，需与该组同 commit 改，避免中间态 CI 红。"
+  },
+  {
+   "file": "docker-compose.yml",
+   "type": "edit",
+   "location": "backend.environment 原 L51-L62 + volumes 原 L34（工作区已改，未提交：git diff 确认）",
+   "what": "已在工作区删除：./.credentials 只读挂载、LLM_SA_CREDENTIALS、LLM_PROJECT、LLM_LOCATION、LLM_EXAM_REVIEW_FLASH_MODEL、LLM_EXAM_REVIEW_PRO_MODEL、EXAM_REVIEW_CHANNEL（默认 agent_search）、REPORT_GROUNDING_ENABLED/MIN_SUPPORT/CITATION_THRESHOLD、EVIDENCE_RANKING_ENABLED/TOP_N、HTTPS_PROXY",
+   "replacement": "保持工作区现状即可，无需再动；deepseek/qwen 全部 provider 在 llm_config.py 中 no_proxy=True，不依赖 HTTPS_PROXY。",
+   "risk": "三点：(1) HTTPS_PROXY——credits_service.py 用默认 httpx.AsyncClient(trust_env=True) 访问 api.momowan.xyz，若生产 .env 实际设了 HTTPS_PROXY，删行后积分调用从走代理变直连，部署前需在 ECS 验证 prod .env 取值与直连连通性；(2) 用户 memory 旧红线'llm_policy/FLASH-PRO_MODEL/SA_CREDENTIALS 绝不能动'与本次删除冲突，需确认本次 degoogle 裁定已覆盖旧裁定（llm_policy.py 本身归 llm 组处理）；(3) EXAM_REVIEW_CHANNEL 删除后 normalize_review_channel(None) 的环境回退恒为 None（当前默认 agent_search→grounding_enabled=True 但实际总降级），删除使配置与实际行为一致，需 review_channel 组确认。另注意工作区有并发改动（frontend/src/pages/AnalyzerPage.jsx 也已修改），提交时分清归属。"
+  },
+  {
+   "file": "backend/requirements.txt",
+   "type": "edit",
+   "location": "L32 注释行",
+   "what": "删除 '# Provider SDK dependencies — see requirements-providers.txt'——指向不存在的文件（Glob 全仓仅 backend/requirements.txt；entrypoint.sh 只安装 requirements.txt），历史上指向 google SDK 安装清单",
+   "replacement": "整行删除。本文件已无任何 google-* / grpc / vertexai 包，无需删依赖。",
+   "risk": "低。注意：远程服务器容器内可能曾手动 pip install 过 google SDK（requirements-providers.txt 路径在远程或为 untracked 实体文件），重建镜像（docker-compose up --build）后自然清除，建议部署后用 'pip list | grep -i google' 验证。"
+  },
+  {
+   "file": "backend/test_llm_client.py",
+   "type": "edit",
+   "location": "L170-L247（test_app_builder_alias…、test_grounded_generation_channel_uses_evidence_grounded_generation、test_grounded_generation_channel_rejects_image_inputs…）及 L105-L108/L198-L199 环境变量",
+   "what": "grounded_generation/evidence 渠道与 _get_evidence_gateway patch 的测试，随 llm_client 组删 evidence 路径而删；LLM_SA_CREDENTIALS/FLASH/PRO 环境 fixture 随 llm_policy 决议处理",
+   "risk": "归属 llm_client/llm_policy 组——本组仅登记不主导；若两组清单已含此文件则以其为准，避免双改冲突。"
+  },
+  {
+   "file": "backend/test_llm_policy.py",
+   "type": "keep",
+   "location": "全文件（LLM_SA_CREDENTIALS/FLASH/PRO_MODEL 环境变量 fixture，L11-L212）",
+   "what": "llm_policy.py 被用户旧裁定标记'绝不能动'（memory 红线），其测试随 llm_policy 组的最终决议走，本组不动",
+   "risk": "需用户/编排方裁定 degoogle 是否覆盖旧红线；docker-compose 已删 LLM_SA_CREDENTIALS 等 env，若 llm_policy.py 保留，这些 env 在容器内将恒为空串——llm_policy 组需确认空值路径安全（llm_policy.py L16-17 默认空串，看起来可容忍）。"
+  },
+  {
+   "file": "backend/test_review_channel.py",
+   "type": "keep",
+   "location": "全文件 L1-L30",
+   "what": "services/review_channel.py 的配套测试，归 review_channel 组；该组若把渠道收敛为纯 reviewer 业务语义（删 channel_uses_evidence/channel_grounding_enabled/channel_requires_grounded_generation 等），测试需同步重写",
+   "risk": "归属另一组，本组仅登记。"
+  },
+  {
+   "file": "backend/test_analysis_service_metadata.py",
+   "type": "keep",
+   "location": "L55、L135-L348（渠道 usage 断言）、L727-L773（missing_evidence_repair，域内保留）、L971-L1169（grounding 报告闸门测试）",
+   "what": "services/analysis_service.py 的配套测试：L135-L348 与 L971-L1169 测 app_builder/agent_search 渠道断言与 grounding 闸门，需随 services 组删；L727-L773 是域内 LLM 修复测试必须保留",
+   "risk": "归属 services 组，本组仅登记边界：域内（missing_evidence_repair）与谷歌（channel/grounding）在该文件混居，删时勿连带域内用例。"
+  },
+  {
+   "file": "backend/test_report_insights.py",
+   "type": "keep",
+   "location": "全文件（87 处命中：grounding_enabled 传参遍布 + L226-L265/L501-L523 grounding check 专测）",
+   "what": "report_insights.py 的配套测试，归 report_insights 组：grounding 专测删除、其余用例去 grounding_enabled=False 实参",
+   "risk": "归属另一组，本组仅登记。"
+  }
+ ],
+ "cross_file_notes": "本组消失/收缩的对外接口与依赖方影响：(1) analysis_router._ensure_review_channel_ready 保留函数名但收缩为 normalize_review_channel 包装——它是 services/evidence_client_loader.py（tracked，services 组）在 router 层的唯一调用方，删后 services 组可整体删 evidence_client_loader.py；若 review_channel.py 被 services 组整体删除，本函数需二次改为直接透传。(2) analysis_router 不再 import services.review_channel 的 channel_uses_app_builder / channel_grounding_enabled——review_channel 组收缩 API 时可参考：本组删完后这两个函数在 router 层零调用。(3) _generate_route_report_artifacts 去掉 exam_review_channel 形参并停止向 generate_insights 传 grounding_enabled——依赖 report_insights 组删该形参（先后顺序兼容：那边保留默认 None 也不破）。(4) report_product_model._build_evidence_integrity 停止读取 insights['_grounding_checks'] / ['_grounding_status'] 并停止输出 grounding_status/grounding_checks 键——这两个键的产生点（report_insights.py L1258-1259）和另一消费点（services/analysis_service.py L821-849 report_grounding 闸门）归各自组，三处需同批落地；本组已确认 report_product_html 不直接读这两个键。(5) 'report_grounding_check' purpose 标签从 charts/html 两个标签字典删除——产生点 report_insights.py L1369 与 llm_config.py L194 的 purpose 白名单归各自组。(6) _llm_call_trace 白名单（competency_analyzer/feature_extractor/vision_context 三处同构）去掉 fact_count/grounding_score/operation——前提是 llm_client 组删除 evidence_service provider 路径（llm_client.py L455-465）；question_analyzer.py 内若也有同构 _llm_call_trace（L50 命中提示有）需该组同步。(7) docker-compose 的 google env 与 .credentials 挂载已在工作区被（疑似并发的其他座席）删除且未提交，frontend/AnalyzerPage.jsx 同时有未提交改动——编排方注意工作区并发写入与 commit 归属；HTTPS_PROXY 删除前务必在 ECS 验证 prod .env 是否设值（credits_service 走 trust_env=True 的 httpx，删行会改变积分 API 的出网路径）。(8) 保留红线已核验：reviewer 免扣费判定完全基于 auth token 的 username=='reviewer'（_resolve_user_and_review/_ensure_balance/analyze_auto L330-360/L418/confirm_split L786），与 review_channel 字符串无任何耦合，本组所有删除动作不触碰。"
+}

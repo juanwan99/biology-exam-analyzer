@@ -3,12 +3,10 @@
 基于向量检索和AI生成的混合策略
 """
 import os
-import random
-import asyncio
 import httpx
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
-from sqlalchemy import text, select, func
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session

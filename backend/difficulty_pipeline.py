@@ -5,6 +5,7 @@ v3.1: 大题结构化拆分评估（total_score >= 8 → 结构化提取 → 聚
 设计文档: docs/plans/2026-03-28-difficulty-v3.1-design.md
 """
 import asyncio
+import os
 from feature_extractor import extract_features, extract_big_question_features, DEFAULT_FEATURES
 from rule_scorer import compute_difficulty, score_to_label, aggregate_big_question
 from logger import get_logger
@@ -54,7 +55,6 @@ class DifficultyPipeline:
 
     def __init__(self, **kwargs):
         """初始化。接受 kwargs 以兼容旧调用方 DifficultyEngine(analyzer=...) 签名。"""
-        pass
 
     async def _evaluate_single(self, question: dict, **kwargs) -> dict:
         """评估单道题难度。
@@ -270,23 +270,29 @@ class DifficultyPipeline:
         calibration_status = "not_configured"
         calibration_error = None
 
-        # 校准修正
-        try:
-            from calibration_service import get_correction
-            correction = get_correction(score)
-            calibration_status = "checked"
-            if correction != 0:
-                score = max(0, min(10, score + correction))
-                calibration_status = "applied"
-                logger.debug(f"[校准] 难度修正 {correction:+.2f} -> {score:.2f}")
-        except ModuleNotFoundError as exc:
-            calibration_error = str(exc)
-            calibration_status = "not_configured"
-        except Exception as exc:
-            calibration_error = str(exc)
-            calibration_status = "failed"
-            flags.append("calibration_failed")
-            logger.error(f"[校准] 难度校准失败: {exc}", exc_info=True)
+        # 校准修正（DIFFICULTY_CALIBRATION_ENABLED 开关，默认关闭）
+        # 关闭原因：当前无校准数据（difficulty_mapping / question_performance.score_rate 均空），
+        # get_correction 恒返回 0，启用只会徒增调用并产生误导性 checked 状态。
+        # 回填真实考试数据后设环境变量 DIFFICULTY_CALIBRATION_ENABLED=true 即可恢复，无需改代码。
+        if os.getenv("DIFFICULTY_CALIBRATION_ENABLED", "false").strip().lower() not in ("1", "true", "yes", "on"):
+            calibration_status = "disabled"
+        else:
+            try:
+                from calibration_service import get_correction
+                correction = get_correction(score)
+                calibration_status = "checked"
+                if correction != 0:
+                    score = max(0, min(10, score + correction))
+                    calibration_status = "applied"
+                    logger.debug(f"[校准] 难度修正 {correction:+.2f} -> {score:.2f}")
+            except ModuleNotFoundError as exc:
+                calibration_error = str(exc)
+                calibration_status = "not_configured"
+            except Exception as exc:
+                calibration_error = str(exc)
+                calibration_status = "failed"
+                flags.append("calibration_failed")
+                logger.error(f"[校准] 难度校准失败: {exc}", exc_info=True)
 
         label = score_to_label(score)
         logger.info(f"规则评分: raw={raw_score} calibrated={score} ({label})"
@@ -427,7 +433,17 @@ class DifficultyPipeline:
                         or high_order_share >= 0.35
                     )
                 )
-                if high_order_share < 0.35 and not strong_construct_signal:
+                # B：推理链耦合明确高难的综合判断题（高工作记忆+强耦合+多步推理）——
+                # 采分点均分天然低估"整合难度"（整体>部分之和，如多图联读综合选择题），
+                # 豁免均分天花板，仅由下方 seu_extreme_rule_moderation 提供软压制避免爆表。
+                # 阈值从严（rs≥7）：简单/常规题不满足，仅真正的综合推理题触发。
+                strong_reasoning_signal = (
+                    features.get("working_memory", 3) >= 4
+                    and features.get("chain_coupling", 1) >= 2
+                    and features.get("reasoning_steps", 4) >= 7
+                )
+                if (high_order_share < 0.35 and not strong_construct_signal
+                        and not strong_reasoning_signal):
                     objective_ceiling = (
                         average_score
                         + 0.95
@@ -437,6 +453,8 @@ class DifficultyPipeline:
                     if adjusted > objective_ceiling:
                         adjusted = objective_ceiling
                         flags.append("bounded_item_seu_ceiling")
+                elif strong_reasoning_signal and adjusted > average_score + 0.95:
+                    flags.append("seu_ceiling_waived_high_reasoning")
 
                 # Keep the older two-point moderation for choice items that
                 # still sit noticeably above their SEU estimate after capping.
