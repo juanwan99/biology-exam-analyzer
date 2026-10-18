@@ -234,6 +234,11 @@ def _should_retry_without_thinking(provider: dict, body: dict, exc: Exception) -
     )
 
 
+# 重试阶梯（首调超时 / 截断后的 compact 重试）直接关思考：首调已经把思考预算烧过一轮，
+# 重试再带思考只会再截断一次，白耗 1–2 分钟。
+NO_THINKING_PURPOSES = frozenset({"question_analysis_retry"})
+
+
 def _body_without_thinking(provider: dict, body: dict) -> dict:
     retry_body = dict(body)
     retry_body.pop("reasoning_effort", None)
@@ -382,7 +387,8 @@ async def _http_post(url: str, headers: dict, json: dict,
 
 
 async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
-                                temperature: float, timeout: float) -> str:
+                                temperature: float, timeout: float,
+                                purpose: str | None = None) -> str:
     """调用单个 provider（含内部重试）。"""
     if _messages_include_images(messages) and not provider.get("supports_images", False):
         raise RuntimeError(
@@ -392,6 +398,8 @@ async def _call_single_provider(provider: dict, messages: list, max_tokens: int,
     url = _get_url(provider)
     headers = _get_headers(provider)
     body = _build_request_body(provider, messages, max_tokens, temperature)
+    if purpose in NO_THINKING_PURPOSES and provider.get("length_retry_without_thinking"):
+        body = _body_without_thinking(provider, body)
     proxy = _get_proxy(provider)
     no_proxy = provider.get("no_proxy", False)
     retries = provider.get("retry_count", 2)
@@ -499,7 +507,7 @@ async def llm_call(
     for provider in providers:
         try:
             result = await _call_single_provider(
-                provider, messages, max_tokens, temperature, timeout
+                provider, messages, max_tokens, temperature, timeout, purpose=purpose
             )
             if len(errors) > 0:
                 logger.info(f"[LLM] Fallback 成功: {provider['name']} "

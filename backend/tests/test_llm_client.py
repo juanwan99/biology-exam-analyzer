@@ -463,6 +463,23 @@ class TestLengthRetryWithoutThinking:
                 await _call_single_provider(self._provider(False), [{"role": "user", "content": "hi"}], 4096, 0, 60)
         assert len(calls) == 1
 
+    @pytest.mark.asyncio
+    async def test_retry_purpose_starts_without_thinking(self):
+        from llm_client import _call_single_provider
+        calls = []
+
+        async def mock_post(url, headers, json, timeout, proxy=None, trust_env=True):
+            calls.append(json)
+            return _chat_length()
+
+        with patch("llm_client._http_post", side_effect=mock_post):
+            with pytest.raises(RuntimeError, match="finish_reason=length"):
+                await _call_single_provider(self._provider(), [{"role": "user", "content": "hi"}], 4096, 0, 60,
+                                            purpose="question_analysis_retry")
+        # 首发即关思考；再截断不重复发
+        assert len(calls) == 1
+        assert calls[0]["thinking"] == {"type": "disabled"} and "reasoning_effort" not in calls[0]
+
     def test_deepseek_provider_enables_length_retry(self):
         from llm_config import PROVIDERS
         deepseek = next(p for p in PROVIDERS if p["name"] == "deepseek")

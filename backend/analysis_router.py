@@ -51,6 +51,7 @@ logger = get_logger()
 _bg_tasks: set = set()
 import task_manager
 from score_rules import mark_section_mismatch
+from analysis_scheduling import gather_longest_first
 
 router = APIRouter(tags=["analysis"])
 
@@ -417,7 +418,7 @@ async def _run_analysis_pipeline(
                     q["error"] = str(e)
                     return q
 
-        questions = list(await asyncio.gather(*[analyze_one(q) for q in questions]))
+        questions = list(await gather_longest_first(questions, analyze_one))
         logger.info("所有题目分析完成")
         task_manager.update(task_id, total, "正在生成报告...")
         score_warnings = mark_section_mismatch(questions)
@@ -824,7 +825,7 @@ async def confirm_split(
                     q["error"] = str(e)
                     return q
 
-        questions_with_media = list(await asyncio.gather(*[analyze_one(q) for q in questions_with_media]))
+        questions_with_media = list(await gather_longest_first(questions_with_media, analyze_one))
 
         logger.info("[确认拆分] 所有题目分析完成")
 
