@@ -565,3 +565,56 @@ def test_calibration_filters_context_and_method_terms_from_textbook_scores():
     assert is_non_textbook_skill_point("产物分离与工业应用") is True
     assert is_non_textbook_skill_point("基于序列的连接点分析") is True
     assert links == [{"knowledge_point": "细胞间信息交流", "share": 1.0}]
+
+
+def test_keyword_mapping_literal_has_no_duplicate_keys_and_all_targets_exist():
+    import ast, inspect, knowledge_mapper
+
+    tree = ast.parse(inspect.getsource(knowledge_mapper))
+    literal = next(
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "KEYWORD_MAPPING" for t in node.targets)
+    )
+    keys = [k.value for k in literal.keys]
+    assert len(keys) == len(set(keys)), "KEYWORD_MAPPING 有重复键，后写的会悄悄覆盖前面的"
+
+    structure = KnowledgeMapper.TEXTBOOK_STRUCTURE
+    dangling = [
+        (keyword, location) for keyword, location in KnowledgeMapper.KEYWORD_MAPPING.items()
+        if location[2] not in structure.get(location[0], {}).get("chapters", {})
+        .get(location[1], {}).get("sections", {})
+    ]
+    assert dangling == []
+
+
+def test_mapper_takes_longest_keyword_and_exact_section_name():
+    mapper = KnowledgeMapper()
+    # 「特异性免疫」是节名，不能先撞上宽词「免疫」落到 4.1
+    assert mapper.map_knowledge_point("特异性免疫")["section"] == "4.2"
+    assert mapper.map_knowledge_point("过氧化氢酶的催化作用")["section"] == "5.1"
+    assert mapper.map_knowledge_point("动物细胞培养")["section_name"] == "动物细胞工程"
+    assert mapper.map_knowledge_point("胚胎工程")["section_name"] == "胚胎工程"
+    assert mapper.map_knowledge_point("基因重组")["section_name"] == "基因突变和基因重组"
+
+
+def test_textbook_terms_are_loaded_into_keyword_mapping():
+    mapper = KnowledgeMapper()
+    result = mapper.map_knowledge_point("稀释涂布平板法")
+    assert result["mapped"] is True
+    assert result["section_name"] == "微生物的培养技术及应用"
+
+
+def test_broad_keyword_label_falls_back_to_textbook_section():
+    mapper = KnowledgeMapper()
+    label, meta = canonicalize_knowledge_point("核糖体的功能", knowledge_mapper=mapper)
+    assert label == "细胞器之间的分工合作"
+    assert meta["strategy"] == "textbook_section"
+    # 关键词够具体的保持原样
+    label, _ = canonicalize_knowledge_point("稀释涂布平板法", knowledge_mapper=mapper)
+    assert label == "稀释涂布平板法"
+
+
+def test_answer_sentences_are_not_textbook_points():
+    assert is_non_textbook_skill_point("图a中随对硝基苯酚浓度升高，光合放氧量降低，说明对硝基苯酚抑制光合放氧")
+    assert not is_non_textbook_skill_point("细胞膜的流动镶嵌模型")

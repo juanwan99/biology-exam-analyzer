@@ -1130,7 +1130,9 @@ class QuestionAnalyzer:
                 f"子问清单：{brief_list}\n"
                 "硬性规则：\n"
                 f"1. 只产第{sub_idx}问的 SEU；本问 scoring_units 的 score_share 在【本问内部】合计=1.0。\n"
-                "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0。\n"
+                "2. 每个 SEU 的 knowledge_links 的 share 在该 SEU 内合计=1.0；knowledge_point 只填教材标准知识点名词"
+                "（<=12字的概念名称），禁止填答案要点或推理整句、题干情境描述、含冒号或比例数字的句子、"
+                "能力/方法词（读图分析/数据分析）。\n"
                 "3. bloom_level 必须是 1-6 的整数（不是中文）。\n"
                 f"4. 每个 SEU 必须输出 competency_weights（{_dims_str} 共{_dim_n}维，"
                 f"{_dim_n}项和=1.0），按本问真实素养分布给值，不要一律均匀填 {_dim_even}。\n"
@@ -1955,7 +1957,7 @@ class QuestionAnalyzer:
             response_length = len(response_text) if response_text else 0
             logger.info(f"[分析] 题目{question_id} API响应长度: {response_length}")
             logger.debug(f"[分析] 题目{question_id} 完成原因: {finish_reason}")
-            logger.info(f"[分析] 题目{question_id} 原始返回:\n{response_text[:500]}")  # 只显示前500字符
+            logger.debug(f"[分析] 题目{question_id} 原始返回:\n{response_text[:500]}")
 
             # 检查是否被截断
             if finish_reason == 'length':

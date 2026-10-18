@@ -430,6 +430,17 @@ def validate_score_conservation(result: FineGrainedResult, total_score: float) -
     return (len(errors) == 0, errors)
 
 
+_SENTENCE_PUNCT = ("，", ",", "；", ";", "。", "：", ":")
+
+
+def is_sentence_like_point(value: Any) -> bool:
+    """知识点名是名词短语，不带句读；超过 16 字且带逗号 / 分号 / 句号 / 冒号的是答案或推理整句。"""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return len(text) > 16 and any(p in text for p in _SENTENCE_PUNCT)
+
+
 def compute_summary_from_units(fg: FineGrainedResult,
                                competency_dims: Optional[List[str]] = None) -> dict:
     """从 typed units 派生旧格式字段。纯 Python，无 LLM。
@@ -448,7 +459,9 @@ def compute_summary_from_units(fg: FineGrainedResult,
                 continue
             kp_scores[kp] = kp_scores.get(kp, 0) + seu.score_share * kl.share
     sorted_kps = sorted(kp_scores.items(), key=lambda x: -x[1])
-    knowledge_points = [kp for kp, _ in sorted_kps[:5]]
+    # 模型偶尔把答案要点整句填进 knowledge_point：有名词型知识点时不让整句占位
+    named_kps = [kp for kp, _ in sorted_kps if not is_sentence_like_point(kp)]
+    knowledge_points = (named_kps or [kp for kp, _ in sorted_kps])[:5]
 
     # common_mistakes: 从 DU 提取
     common_mistakes = [du.misconception for du in fg.diagnostic_units if du.misconception][:3]
