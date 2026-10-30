@@ -17,7 +17,8 @@ logger = get_logger()
 # v4: 方案B 特征提取拆分（难度核心 / 质量 / 教学三组顺序调用 + 部分降级）。
 # schema 变更（新增 _llm_calls 子组记录、_feature_status 判据改为难度核心组为主），
 # bump 版本作废全部旧 v3 单任务缓存，避免读到旧 schema。
-_FEATURE_CACHE_VERSION = "v5-20260615-coupling"
+# v6: 难度核心组 / 大题结构化改为多次采样取中位（#11），作废单次采样的旧缓存。
+_FEATURE_CACHE_VERSION = "v6-20261030-median"
 _CACHE_DIR = os.environ.get(
     "FEATURE_CACHE_DIR",
     os.path.join(os.path.dirname(__file__), ".feature_cache"),

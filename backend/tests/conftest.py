@@ -74,3 +74,10 @@ def _ensure_event_loop():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _single_difficulty_sample(monkeypatch):
+    """既有单测按单次采样写调用次数；多次采样取中位在 test_median_sampling.py 里单测。"""
+    monkeypatch.setenv("DIFFICULTY_SAMPLES", "1")
+    monkeypatch.setenv("BIG_QUESTION_SAMPLES", "1")
