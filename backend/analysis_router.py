@@ -421,6 +421,10 @@ async def _run_analysis_pipeline(
         questions = list(await gather_longest_first(questions, analyze_one))
         logger.info("所有题目分析完成")
         task_manager.update(task_id, total, "正在生成报告...")
+        try:
+            await get_analysis_service().rescale_section_scores(questions, image_bytes, mode)
+        except Exception:
+            logger.exception("[分值] 分节小计缩放失败，保留 LLM 原分值")
         score_warnings = mark_section_mismatch(questions)
         for w in score_warnings:
             logger.warning(f"[分值] 分节合计不符: {w}")

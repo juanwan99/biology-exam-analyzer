@@ -15,7 +15,8 @@ from analysis_options import want_competency_supplement
 from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
-from score_rules import SOURCE_MODEL, SOURCE_SECTION_AVG, paper_score, section_average_score
+from score_rules import (SOURCE_MODEL, SOURCE_SECTION_AVG, paper_score, scale_section_scores,
+                         section_average_score)
 from subject_config import get_competency_dims, normalize_subject
 
 logger = get_logger()
@@ -133,27 +134,7 @@ class AnalysisService:
             if score_issue:
                 question["_score_issue"] = score_issue
 
-            q_image_b64 = ""
-            if q_images:
-                q_image_b64 = base64.b64encode(q_images[0]).decode("utf-8")
-
-            difficulty_q = {
-                "id": q_id,
-                "content": question.get("content", ""),
-                "knowledge_points": analysis.get("knowledge_points", []),
-                "total_score": total_score,
-                "num_options": analysis.get("num_options", 4),
-                "options": question.get("options", ""),
-                "subject": subject,
-                "question_type": question_type,
-                "correct_answer": analysis.get("answer", ""),
-                "sub_questions_count": question.get("sub_questions_count"),
-                "sub_scores": question.get("sub_scores", []),
-                "image_base64": q_image_b64,
-                "media_items": q_media_items,
-                "_media_for_ai": q_media_items,
-                "media_integrity": question.get("media_integrity"),
-            }
+            difficulty_q = self._difficulty_input(question, analysis, q_images, q_media_items, subject)
 
             # v2 细粒度路径：从 SEU 派生权重 + 独立素养调用补充具体维度/分析说明
             fine_grained = analysis.get("_fine_grained")
@@ -277,46 +258,7 @@ class AnalysisService:
                 standardized = self.knowledge_mapper.map_knowledge_points(report_points, subject=subject)
                 question["knowledge_mapping"] = standardized
 
-            # 置信度计算（基础 + 质量信号）
-            confidence = 0.0
-            if "error" not in analysis:
-                confidence += 0.2
-            if analysis.get("knowledge_points"):
-                confidence += 0.15
-            if analysis.get("answer"):
-                confidence += 0.15
-            if question.get("competency") and "error" not in question.get("competency", {}):
-                confidence += 0.1
-            if analysis.get("bloom_level"):
-                confidence += 0.1
-            # 质量信号：特征提取状态
-            diff_data = question.get("difficulty", {})
-            if isinstance(diff_data, dict):
-                feat = diff_data.get("features", {})
-                if isinstance(feat, dict):
-                    fs = feat.get("_feature_status", "ok")
-                    if fs == "ok":
-                        confidence += 0.15
-                    elif fs == "partial":
-                        confidence += 0.08
-                    # failed/unknown: +0
-                # 质量信号：难度置信度
-                d_conf = diff_data.get("confidence", 0.5)
-                if isinstance(d_conf, (int, float)):
-                    confidence += 0.15 * d_conf
-            question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
-            if analysis_warnings:
-                question["_analysis_warnings"] = analysis_warnings
-            flags = list(analysis_warnings)
-            feat = (question.get("difficulty") or {}).get("features") or {}
-            if isinstance(feat, dict):
-                fs = feat.get("_feature_status")
-                if fs in ("partial", "failed", "core_only"):
-                    flags.append("feature_status:%s" % fs)
-                if feat.get("_feature_failed"):
-                    flags.append("default_features")
-            question["quality_flags"] = flags
-            self._attach_metadata_envelope(question)
+            self._finalize_question(question, analysis, analysis_warnings)
 
             return question
 
@@ -357,6 +299,100 @@ class AnalysisService:
                 "warnings": ["analysis_failed"],
             }
             return question
+
+    @staticmethod
+    def _difficulty_input(question: Dict, analysis: Dict, q_images: List[bytes],
+                          q_media_items: List[Dict[str, str]], subject: str) -> Dict:
+        q_image_b64 = base64.b64encode(q_images[0]).decode("utf-8") if q_images else ""
+        return {
+            "id": question.get("id", 0),
+            "content": question.get("content", ""),
+            "knowledge_points": analysis.get("knowledge_points", []),
+            "total_score": question.get("total_score"),
+            "num_options": analysis.get("num_options", 4),
+            "options": question.get("options", ""),
+            "subject": subject,
+            "question_type": question.get("question_type"),
+            "correct_answer": analysis.get("answer", ""),
+            "sub_questions_count": question.get("sub_questions_count"),
+            "sub_scores": question.get("sub_scores", []),
+            "image_base64": q_image_b64,
+            "media_items": q_media_items,
+            "_media_for_ai": q_media_items,
+            "media_integrity": question.get("media_integrity"),
+        }
+
+    def _finalize_question(self, question: Dict, analysis: Dict, analysis_warnings: List[str]) -> None:
+        """置信度 / 质量标记 / 元数据信封（难度、素养出齐后调用；分值缩放重算难度后再调一次）。"""
+        # 置信度计算（基础 + 质量信号）
+        confidence = 0.0
+        if "error" not in analysis:
+            confidence += 0.2
+        if analysis.get("knowledge_points"):
+            confidence += 0.15
+        if analysis.get("answer"):
+            confidence += 0.15
+        if question.get("competency") and "error" not in question.get("competency", {}):
+            confidence += 0.1
+        if analysis.get("bloom_level"):
+            confidence += 0.1
+        # 质量信号：特征提取状态
+        diff_data = question.get("difficulty", {})
+        if isinstance(diff_data, dict):
+            feat = diff_data.get("features", {})
+            if isinstance(feat, dict):
+                fs = feat.get("_feature_status", "ok")
+                if fs == "ok":
+                    confidence += 0.15
+                elif fs == "partial":
+                    confidence += 0.08
+                # failed/unknown: +0
+            # 质量信号：难度置信度
+            d_conf = diff_data.get("confidence", 0.5)
+            if isinstance(d_conf, (int, float)):
+                confidence += 0.15 * d_conf
+        question["analysis_confidence"] = round(max(0.1, min(1.0, confidence)), 2)
+        if analysis_warnings:
+            question["_analysis_warnings"] = analysis_warnings
+        flags = list(analysis_warnings)
+        feat = (question.get("difficulty") or {}).get("features") or {}
+        if isinstance(feat, dict):
+            fs = feat.get("_feature_status")
+            if fs in ("partial", "failed", "core_only"):
+                flags.append("feature_status:%s" % fs)
+            if feat.get("_feature_failed"):
+                flags.append("default_features")
+        question["quality_flags"] = flags
+        self._attach_metadata_envelope(question)
+
+    async def rescale_section_scores(self, questions: List[Dict], image_bytes: List[bytes],
+                                     mode: str = "deep") -> List[Dict]:
+        """分节小计对不上时按小计缩放 LLM 猜的分（score_rules.scale_section_scores），
+        改了分的题按新分值重算难度（大题结构化特征走缓存，按新分值重分小问分）。"""
+        changes = scale_section_scores(questions)
+        if not changes:
+            return changes
+        changed_ids = {c["id"] for c in changes}
+        for c in changes:
+            logger.warning(f"[分值] 题目{c['id']} 按分节小计缩放 {c['old']:g} → {c['new']:g}（{c['section']}）")
+
+        async def _rescore(question: Dict) -> None:
+            analysis = question.get("analysis") or {}
+            try:
+                q_images = self._resolve_images(question, image_bytes)
+                q_media_items = question.get("_media_for_ai") or self._media_items_for_llm(question, q_images)
+                subject = normalize_subject(question.get("subject"))
+                difficulty_q = self._difficulty_input(question, analysis, q_images, q_media_items, subject)
+                question["difficulty"] = await self.difficulty_engine.evaluate_with_refinement(
+                    question=difficulty_q, mode=mode, analysis_result=analysis)
+                self._finalize_question(question, analysis, list(question.get("_analysis_warnings") or []))
+            except Exception:
+                logger.exception(f"[分值] 题目{question.get('id')} 缩放后重算难度失败，保留原难度")
+
+        await asyncio.gather(*(_rescore(q) for q in questions
+                               if q.get("id") in changed_ids and q.get("analysis")
+                               and not q.get("analysis_failed")))
+        return changes
 
     # ── 批量并发分析 ──────────────────────────────────────────
 
@@ -1183,6 +1219,7 @@ class AnalysisService:
             raise ValueError(f"不支持的文件格式: {filename}")
 
         analyzed = await self.analyze_questions_batch(questions, image_bytes, mode, subject)
+        await self.rescale_section_scores(analyzed, image_bytes, mode)
         competency_summary = self.build_competency_summary(analyzed, subject)
         exam_statistics = self.aggregate_statistics(analyzed, competency_summary)
         if document_failure_events:

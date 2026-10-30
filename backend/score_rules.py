@@ -20,6 +20,10 @@ SOURCE_PAPER = "paper"            # 题号后卷面标注
 SOURCE_SECTION = "section"        # 分节「每小题 N 分」
 SOURCE_SECTION_AVG = "section_average"  # 分节「共 K 小题，共 N 分」均分（LLM 无有效分值时兜底）
 SOURCE_MODEL = "model"            # LLM 推断
+SOURCE_SECTION_SCALED = "section_scaled"  # LLM 推断后按分节小计等比缩放
+
+# 猜的分合计与小计差太多（多半是拆题 / 分节识别错）就不缩放，只标 inferred
+_SCALE_MIN, _SCALE_MAX = 0.5, 2.0
 
 
 def _head(content: str) -> str:
@@ -59,6 +63,65 @@ def section_average_score(question: Dict[str, Any]) -> Optional[float]:
     if count and total and count > 0:
         return round(total / count, 2)
     return None
+
+
+def apportion(values: List[float], target: float) -> Optional[List[float]]:
+    """把 values 等比缩放到合计 = target，按最大余数取整（target 是整数取整分，是 .5 取半分）。"""
+    unit = 1.0 if float(target).is_integer() else 0.5 if float(target * 2).is_integer() else None
+    total = sum(values)
+    if unit is None or total <= 0:
+        return None
+    raw = [v * target / total for v in values]
+    base = [int(r // unit) for r in raw]
+    left = int(round(target / unit)) - sum(base)
+    order = sorted(range(len(raw)), key=lambda i: (-(raw[i] / unit - base[i]), i))
+    for i in order[:left]:
+        base[i] += 1
+    scaled = [b * unit for b in base]
+    if any(v <= 0 for v in scaled):
+        return None
+    return scaled
+
+
+def scale_section_scores(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """分节写了「共 N 分」而题分合计对不上时，把本节 LLM 猜的分等比缩放到合计 = N。
+
+    卷面标的分（paper / section）不动，只缩放 model / section_average 来源的题。
+    拆题数与分节题数不符、或缩放比例超出 0.5–2 倍时不缩放（交给 mark_section_mismatch 标 inferred）。
+    就地改 total_score / score_source，返回改动列表 [{id, old, new, section}]。
+    """
+    sections: Dict[str, List[Dict[str, Any]]] = {}
+    for q in questions:
+        header = q.get("_section_header")
+        if header:
+            sections.setdefault(header, []).append(q)
+    changes = []
+    for header, qs in sections.items():
+        count, total = section_count_total(header)
+        if not total or (count and count != len(qs)):
+            continue
+        guessed = [q for q in qs if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)
+                   and q.get("score_status") == "valid"]
+        if not guessed:
+            continue
+        fixed = sum(float(q.get("total_score") or 0) for q in qs if q not in guessed)
+        target = total - fixed
+        current = [float(q.get("total_score") or 0) for q in guessed]
+        if abs(sum(current) - target) < 1e-6 or sum(current) <= 0 or target <= 0:
+            continue
+        ratio = target / sum(current)
+        if not (_SCALE_MIN <= ratio <= _SCALE_MAX):
+            continue
+        scaled = apportion(current, target)
+        if not scaled:
+            continue
+        for q, old, new in zip(guessed, current, scaled):
+            if abs(old - new) < 1e-6:
+                continue
+            q["total_score"] = int(new) if float(new).is_integer() else new
+            q["score_source"] = SOURCE_SECTION_SCALED
+            changes.append({"id": q.get("id"), "old": old, "new": new, "section": header[:40]})
+    return changes
 
 
 def mark_section_mismatch(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

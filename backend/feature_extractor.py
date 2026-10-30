@@ -3,7 +3,9 @@
 设计文档: docs/plans/2026-03-28-difficulty-v3-design.md
 v3 核心变化：bloom 降为报告标签，新增 working_memory/chain_coupling/trap_density。
 """
+import asyncio
 import json
+import os
 import re
 from hashlib import sha256
 from llm_client import llm_call, send_message_gpt, get_last_llm_call_metadata as get_last_call_metadata
@@ -785,6 +787,61 @@ async def _extract_group(group_key: str, *, loader: PromptLoader,
     return outcome
 
 
+def _sample_count(env_name: str) -> int:
+    try:
+        return max(1, min(5, int(os.environ.get(env_name, "3"))))
+    except ValueError:
+        return 3
+
+
+def _median_low(values: list) -> int:
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def _merge_difficulty_samples(outcomes: list[dict]) -> dict:
+    """难度核心组多次采样 → 逐维取中位数；理由取离中位最近的那次。
+
+    单次采样整数特征 ±1 会让难度分跨档（#9 / #11），取中位压掉单次漂动。
+    全部失败时返回解析维度最多的那次（与单次采样的失败口径一致）。
+    """
+    group = _FEATURE_GROUPS["difficulty"]
+    ok = [o for o in outcomes if o["ok"]]
+    if not ok:
+        best = max(outcomes, key=lambda o: o["core_present"])
+        return {**best, "samples": len(outcomes), "samples_ok": 0}
+    numeric_keys = list(group["core_keys"]) + list(group["report_keys"])
+    merged = {}
+    for key in numeric_keys:
+        values = [o["fields"][key] for o in ok if key in o["fields"]]
+        if values:
+            merged[key] = _median_low(values)
+
+    def distance(o):
+        return sum(abs(o["fields"].get(k, merged[k]) - merged[k]) for k in merged)
+
+    representative = min(ok, key=distance)
+    fields = dict(representative["fields"])
+    fields.update(merged)
+    return {
+        **representative,
+        "fields": fields,
+        "retry_count": sum(o["retry_count"] for o in outcomes),
+        "samples": len(outcomes),
+        "samples_ok": len(ok),
+    }
+
+
+async def _sample_difficulty_group(group_key: str, **kwargs) -> dict:
+    """难度核心组并发采 DIFFICULTY_SAMPLES 次（默认 3）取中位；质量 / 教学组仍单次。"""
+    n = _sample_count("DIFFICULTY_SAMPLES")
+    outcomes = list(await asyncio.gather(*(_extract_group(group_key, **kwargs) for _ in range(n))))
+    merged = _merge_difficulty_samples(outcomes)
+    if n > 1:
+        logger.info(f"[特征提取/difficulty] 采样 {merged['samples_ok']}/{n} 成功，逐维取中位")
+    return merged
+
+
 async def _extract_features_uncached(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
@@ -817,7 +874,8 @@ async def _extract_features_uncached(question_text: str, options: str = "",
             group_keys = ("difficulty",)
         group_outcomes = {}
         for group_key in group_keys:
-            group_outcomes[group_key] = await _extract_group(
+            extract = _sample_difficulty_group if group_key == "difficulty" else _extract_group
+            group_outcomes[group_key] = await extract(
                 group_key,
                 loader=loader,
                 question_text=question_text,
@@ -984,6 +1042,8 @@ def _assemble_feature_result(group_outcomes: dict, *, question_text: str,
                 "retry_count": group_outcomes[k]["retry_count"],
                 "response_length": group_outcomes[k]["response_length"],
                 "purpose": _FEATURE_GROUPS[k]["purpose"],
+                **({"samples": group_outcomes[k]["samples"], "samples_ok": group_outcomes[k]["samples_ok"]}
+                   if "samples" in group_outcomes[k] else {}),
                 **({"error": group_outcomes[k]["error"]} if group_outcomes[k]["error"] else {}),
             }
             for k in ("difficulty", "quality", "teaching")
@@ -1766,6 +1826,74 @@ def _renormalize_cached_media(cached: dict, media_items: list | None) -> dict:
     return cached
 
 
+def _big_question_sample_score(result: dict) -> float | None:
+    """大题一次采样的难度分（与 difficulty_pipeline 大题路径同口径），用于多次采样取中。"""
+    from rule_scorer import aggregate_big_question, compute_difficulty
+    try:
+        aggregated = aggregate_big_question(
+            result["subquestions"], result["dependencies"], result["global_features"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    features = {
+        "working_memory": aggregated["working_memory"],
+        "reasoning_steps": aggregated["effective_steps"],
+        "chain_coupling": aggregated["chain_coupling"],
+        "trap_density": aggregated["trap_density"],
+        "novelty": aggregated["novelty"],
+        "knowledge_breadth": aggregated["knowledge_breadth"],
+    }
+    features.update(result.get("report") or {})
+    return compute_difficulty(features)
+
+
+async def _sample_big_question_features(*args, **kwargs) -> dict | None:
+    """大题结构化提取并发采 BIG_QUESTION_SAMPLES 次（默认 3），取难度分居中的那一份。
+
+    结构化输出（小问、依赖）没法逐维取中位，所以按整份算分后取中位那份。
+    全部失败时返回第一份失败结果（与单次采样口径一致）。
+    """
+    n = _sample_count("BIG_QUESTION_SAMPLES")
+    results = list(await asyncio.gather(
+        *(_extract_big_question_features_uncached(*args, **kwargs) for _ in range(n))))
+    scored = []
+    for r in results:
+        if isinstance(r, dict) and not r.get("_big_question_failed") and r.get("subquestions"):
+            score = _big_question_sample_score(r)
+            if score is not None:
+                scored.append((score, r))
+    if not scored:
+        return results[0]
+    scored.sort(key=lambda item: item[0])
+    score, chosen = scored[(len(scored) - 1) // 2]
+    if n > 1:
+        chosen["_big_question_samples"] = {
+            "samples": n,
+            "samples_ok": len(scored),
+            "scores": [round(s, 2) for s, _ in scored],
+            "chosen": round(score, 2),
+        }
+        logger.info(f"[大题提取] 采样 {len(scored)}/{n} 成功，难度分 "
+                    f"{[round(s, 2) for s, _ in scored]} 取中 {score:.2f}")
+    return chosen
+
+
+def _rescale_cached_points(cached: dict, total_score: float | None) -> dict:
+    """大题缓存按内容指纹命中，但本次分值可能不同（未标分卷按小计缩放后重算）：小问分按新总分等比重分。"""
+    if not isinstance(cached, dict) or not total_score or total_score <= 0:
+        return cached
+    subquestions = cached.get("subquestions") or []
+    points = [float(sq.get("points") or 0) for sq in subquestions]
+    if not points or abs(sum(points) - float(total_score)) < 1e-6:
+        return cached
+    from score_rules import apportion
+    scaled = apportion(points, float(total_score))
+    if scaled:
+        for sq, value in zip(subquestions, scaled):
+            sq["points"] = int(value) if float(value).is_integer() else value
+        logger.info(f"[大题特征缓存] 小问分按本次总分 {total_score:g} 重分: {points} → {scaled}")
+    return cached
+
+
 async def extract_features(question_text: str, options: str = "",
                            correct_answer: str = "",
                            question_type: str = "",
@@ -1803,8 +1931,8 @@ async def extract_big_question_features(question_text: str, options: str = "",
     cached = feature_cache.get(question_text, options, correct_answer, question_type, cache_subject)
     if cached is not None:
         logger.info(f"[大题特征缓存] 命中，复用结构化特征（零 LLM 调用）: {question_text[:30]}...")
-        return _renormalize_cached_media(cached, media_items)
-    result = await _extract_big_question_features_uncached(
+        return _rescale_cached_points(_renormalize_cached_media(cached, media_items), total_score)
+    result = await _sample_big_question_features(
         question_text, options, correct_answer, question_type, subject,
         total_score, return_failure, media_items)
     if (isinstance(result, dict) and not result.get("_big_question_failed")
