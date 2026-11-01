@@ -17,7 +17,7 @@ bash ops/diff-live.sh     # 仓 HEAD = 宿主目录 = 后端容器 /app = 前端
 bash ops/check-live.sh    # 容器 / 健康 / 专家登录 / 样卷全流程，全 PASS 才算可用
 ```
 
-## 一次性切换：现网目录改成 git 工作树（周三 2026-10-21 专家试用之后再做）
+## 一次性切换：现网目录改成 git 工作树（2026-11-01 已做，#13；留作新机器 / 重做时参考）
 
 不动文件、不停容器，只是给现有目录补上 `.git`：
 
@@ -35,7 +35,9 @@ git checkout -- .                 # 确认只有 D 后再补齐
 
 （2026-10-18 用现网目录副本模拟过：`git reset` 后只有 `ops/check-live.sh`、`ops/fixtures/*` 4 个 D，没有 M 或 ??。）
 
-切完在本机跑 `bash ops/diff-live.sh`，确认仍是 0 差异。
+切完在本机跑 `bash ops/diff-live.sh`，确认仍是 0 差异。2026-11-01 实做：`git reset` 后只有 ops/ 下 6 个 D，没有 M 或 ??；切前备份 `/home/ops/backup-bea-pre-gitwt-20261101.tgz`（容器里 root 写的 `__pycache__` 读不到，未进备份，不影响）。撤回：删掉现网目录下的 `.git`。
+
+`diff-live.sh` 里的「宿主 git」一项核对现网 HEAD = 仓 HEAD、工作区干净。
 
 ## 日常发版（切换之后）
 
