@@ -94,6 +94,14 @@ PY
 
 FAILS=0
 compare "宿主目录" "$WORK/repo.sha" "$WORK/host.sha" || FAILS=$((FAILS + 1))
+# 宿主目录是 git 工作树（#13 起从仓部署）：HEAD = 仓 HEAD、工作区干净
+LIVE_GIT="$(timeout 60 ssh "$SSH_HOST" "cd '$LIVE_DIR' && git rev-parse HEAD && git status --porcelain | wc -l" 2>&1)"
+if [ "$LIVE_GIT" = "$(git rev-parse HEAD)"$'\n'"0" ]; then
+  echo "PASS  宿主 git：HEAD $HEAD_SHA，工作区干净"
+else
+  echo "FAIL  宿主 git：期望 HEAD $HEAD_SHA 且 0 处改动，现网为：$(echo "$LIVE_GIT" | tr '\n' ' ')"
+  FAILS=$((FAILS + 1))
+fi
 # 容器 /app = ./backend；/app/subject_prompts = ./prompts（compose 挂载）。
 # backend/reports/（无人 import 的旧包）在容器里被 ./reports:/app/reports 运行期挂载盖住，不比。
 compare "后端容器 /app" "$WORK/repo.sha" "$WORK/app.sha" "!backend/reports/" "prompts/=subject_prompts/" "backend/=" || FAILS=$((FAILS + 1))
