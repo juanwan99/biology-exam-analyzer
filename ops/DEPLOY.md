@@ -50,7 +50,17 @@ docker compose -p biology up -d --build backend          # 改了 requirements.t
 docker compose -p biology up -d --build frontend         # 改了 frontend/
 ```
 
-发完在本机跑 `bash ops/diff-live.sh && bash ops/check-live.sh`。
+发完在本机跑 `bash ops/diff-live.sh && bash ops/check-live.sh`。这就是发版门（冒烟 + 对账，≤5 分钟；check-live 样卷实测 39–155 s）。
+
+## 卡验收与每日整跑（不进发版门）
+
+正本 §1（agent-policy#237）：卡的验收脚本照旧进仓，关单时本窗跑一次、每天整跑一次，不放进上面的发版门。
+
+```bash
+bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次性容器）+ 24 h ERROR / 千问开关 / deepseek key 状态
+```
+
+单测在河源 `biology-backend` 镜像的一次性容器里跑（`git archive` 进容器、`--network none`），本机不需要 venv。
 
 ## 全新机器部署
 
