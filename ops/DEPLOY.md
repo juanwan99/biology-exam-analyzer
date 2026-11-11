@@ -57,7 +57,7 @@ docker compose -p biology up -d --build frontend         # 改了 frontend/
 正本 §1（agent-policy#237）：卡的验收脚本照旧进仓，关单时本窗跑一次、每天整跑一次，不放进上面的发版门。
 
 ```bash
-bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次性容器）+ 24 h ERROR / 千问开关 / deepseek key 状态
+bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次性容器）+ 24 h ERROR / 现网文字链 / deepseek key 状态
 ```
 
 单测在河源 `biology-backend` 镜像的一次性容器里跑（`git archive` 进容器、`--network none`），本机不需要 venv。

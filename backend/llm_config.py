@@ -1,35 +1,13 @@
 """LLM Provider 配置 — 多 provider fallback 链。
 
 所有 LLM 调用通过 llm_client.py 统一路由，按此列表顺序尝试。
-支持多 provider fallback 链，按优先级自动切换。
+文字：deepseek → qwen_text（deepseek 失败 / 401 落到千问）；识图：qwen_vision。
 """
 import os
 
 VISION_PROVIDER_ENV = "LLM_VISION_PROVIDER"
-QWEN_TEXT_FALLBACK_ENV = "LLM_ENABLE_QWEN_TEXT_FALLBACK"
 
 QWEN_VISION_PROVIDER_NAMES = {"qwen", "qwen_vision", "dashscope"}
-TEXT_REVIEW_PURPOSES = {
-    "big_question_feature_extraction",
-    "competency_analysis",
-    "feature_extraction",
-    # 方案B 特征提取拆分子任务：deepseek 主审优先（与 feature_extraction 同口径）
-    "feature_difficulty",
-    "feature_quality",
-    "feature_teaching",
-    "missing_evidence_repair",
-    "question_analysis",
-    "question_analysis_retry",
-    "report_insights",
-    "report_teaching_suggestions",
-}
-LIGHTWEIGHT_PURPOSES = {
-    "feature_extraction",
-    "big_question_feature_extraction",
-    "competency_analysis",
-    "report_insights",
-    "report_teaching_suggestions",
-}
 
 # 方案B：特征提取拆分子任务的 max_tokens 提额白名单。
 # 给足 16384（= provider 硬上限），让每组 reasoning 收敛后仍留出 output；
@@ -148,14 +126,6 @@ def _qwen_key_configured() -> bool:
     return False
 
 
-def _env_truthy(env_name: str) -> bool:
-    return os.environ.get(env_name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _qwen_text_fallback_enabled() -> bool:
-    return _env_truthy(QWEN_TEXT_FALLBACK_ENV)
-
-
 def _skip_by_vision_preference(provider: dict, requires_images: bool) -> bool:
     if not requires_images:
         return False
@@ -166,35 +136,6 @@ def _skip_by_vision_preference(provider: dict, requires_images: bool) -> bool:
     if _qwen_key_configured():
         return provider.get("name") != "qwen_vision"
     return False
-
-
-def _apply_purpose_preference(
-    providers: list[dict],
-    purpose: str | None,
-    requires_images: bool,
-) -> list[dict]:
-    if requires_images:
-        return providers
-
-    normalized = (purpose or "").strip()
-    if not _qwen_text_fallback_enabled():
-        providers = [
-            provider for provider in providers
-            if provider.get("name") != "qwen_text"
-        ]
-    if normalized in LIGHTWEIGHT_PURPOSES:
-        priority = {"qwen_text": 0, "deepseek": 1}
-        return sorted(
-            providers,
-            key=lambda provider: priority.get(provider.get("name"), 50),
-        )
-    if normalized in TEXT_REVIEW_PURPOSES:
-        priority = {"deepseek": 0, "qwen_text": 1}
-        return sorted(
-            providers,
-            key=lambda provider: priority.get(provider.get("name"), 50),
-        )
-    return providers
 
 
 def get_providers(
@@ -225,5 +166,4 @@ def get_providers(
         if configured_key_env:
             p["key_env"] = configured_key_env
             result.append(p)
-    result = _filter_vision_providers(result, requires_images)
-    return _apply_purpose_preference(result, purpose, requires_images)
+    return _filter_vision_providers(result, requires_images)
