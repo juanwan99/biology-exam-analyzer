@@ -1,12 +1,15 @@
 """
 PDF文档题目拆分器
-基于pdfplumber提取文字，使用AI进行智能拆分
+基于pdfplumber提取文字，按题号规则拆分
 
-
-Deprecated for the Word-only UI. analyze_auto still accepts PDF via API; do not add new analyze_auto logic here.
+前端只收 Word；analyze_auto 的 API 仍收 PDF，走这里。
+- 只认「1.」「1、」「一、」作大题号；「（1）」「(1)」是小问，留在所属大题里。
+- 第一个分节标题之前的编号条目（卷首说明、注意事项）在分节后题号重新从小号起时丢弃。
+- 过半页面都出现的行（页眉页脚、课件题号导航）不进题干；重叠绘制的重复字先去重。
 """
 
 import re
+from collections import Counter
 import base64
 import io
 from typing import List, Dict, Any, Tuple, Optional
@@ -32,13 +35,15 @@ class PDFQuestion:
 class PDFQuestionSplitter:
     """PDF文档题目拆分器"""
 
-    # 题号正则模式
+    # 大题号正则模式（「(1)」「（1）」是小问，不在这里）
     QUESTION_PATTERNS = [
         (r'^(\d+)[.、．]\s*', 1.0, 'standard'),       # 1. 或 1、或 1．
-        (r'^\((\d+)\)\s*', 0.9, 'parenthesis'),       # (1)
-        (r'^（(\d+)）\s*', 0.9, 'cn_parenthesis'),    # （1）
         (r'^([一二三四五六七八九十]+)[.、．]\s*', 0.8, 'chinese'),  # 一、
     ]
+
+    # 一行出现在不少于这个比例的页面上，算页眉页脚 / 导航（页数够 RUNNING_MIN_PAGES 才判）
+    RUNNING_LINE_RATIO = 0.5
+    RUNNING_MIN_PAGES = 4
 
     # 分节标题模式
     SECTION_PATTERNS = [
@@ -107,7 +112,8 @@ class PDFQuestionSplitter:
         pages = []
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
+                # 粗体常被画两遍，抽出来字字重复（「选选项项」），先去重
+                text = page.dedupe_chars().extract_text() or ""
                 pages.append({
                     "page_num": page_num,
                     "text": text,
@@ -133,6 +139,7 @@ class PDFQuestionSplitter:
         questions = []
         current_question = None
         current_section_header = None
+        running = self._running_lines(pages_text)
 
         for page_data in pages_text:
             page_num = page_data["page_num"]
@@ -140,7 +147,7 @@ class PDFQuestionSplitter:
 
             for line in lines:
                 line = line.strip()
-                if not line:
+                if not line or line in running:
                     continue
 
                 # 检测分节标题
@@ -180,6 +187,8 @@ class PDFQuestionSplitter:
         if current_question:
             questions.append(current_question)
 
+        questions = self._drop_preamble(questions)
+
         # 为每道题添加对应的页面图片
         for q in questions:
             for page_idx in q.page_indices:
@@ -190,6 +199,27 @@ class PDFQuestionSplitter:
                         "base64": page_images[page_idx]
                     })
 
+        return questions
+
+    def _running_lines(self, pages_text: List[Dict]) -> set:
+        """过半页面都出现的行：页眉页脚、课件题号导航，不进题干。"""
+        if len(pages_text) < self.RUNNING_MIN_PAGES:
+            return set()
+        counts = Counter()
+        for page_data in pages_text:
+            counts.update({line.strip() for line in page_data["lines"] if line.strip()})
+        threshold = len(pages_text) * self.RUNNING_LINE_RATIO
+        return {line for line, n in counts.items() if n >= threshold}
+
+    def _drop_preamble(self, questions: List[PDFQuestion]) -> List[PDFQuestion]:
+        """第一个分节标题之前的编号条目，若分节后题号重新从小号起，就是卷首说明，丢弃。"""
+        first = next((i for i, q in enumerate(questions) if q.section_header), None)
+        if not first:
+            return questions
+        before = questions[:first]
+        if questions[first].id <= max(q.id for q in before):
+            logger.info(f"[PDF拆分] 丢弃分节前的{len(before)}条卷首说明")
+            return questions[first:]
         return questions
 
     def _detect_section_header(self, text: str) -> Optional[str]:
