@@ -41,6 +41,19 @@ def test_near_miss_score_share_sum_is_normalized_with_metadata():
     assert normalized["_normalization_metadata"]["score_share_sum_normalized_to"] == 1.0
 
 
+def test_score_share_sum_at_max_deviation_is_normalized_despite_float_error():
+    # 0.2+0.35+0.35 浮点和 0.8999999999999999，偏差恰为 0.10，应归一而非退回 v1（#21 山东卷第 25 题）
+    data = {
+        "total_score": 12,
+        "scoring_units": [_unit("u1", 0.2), _unit("u2", 0.35), _unit("u3", 0.35)],
+    }
+
+    normalized, notes = QuestionAnalyzer._normalize_fine_grained_result(data)
+
+    assert "score_share_sum_normalized" in notes
+    assert sum(unit["score_share"] for unit in normalized["scoring_units"]) == pytest.approx(1.0)
+
+
 def test_large_score_share_sum_mismatch_is_not_normalized():
     data = {
         "total_score": 12,
