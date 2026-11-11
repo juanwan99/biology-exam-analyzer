@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # 现网对账：容器 → 健康 → 前端 → 专家账号登录 → 上传样卷跑全流程 → 逐题核分值与结果字段。
-# 只读现网（不重启、不改配置）；跑一次分析会调 LLM，并在 score_prediction 表留一条记录（末尾打印 id）。
+# 只读现网（不重启、不改配置）；跑一次分析会调 LLM，并在 score_prediction 表留一条记录，跑完删掉并核实（--keep-record 留着）。
 #
 # 用法：
 #   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx
 #   bash ops/check-live.sh --no-analyze       # 只查容器/健康/登录，不跑分析
 #   bash ops/check-live.sh --paper 真卷.docx  # 跑别的卷：只核拆题与字段，不核分值（除非给 --expected）
+#   bash ops/check-live.sh --keep-record      # 不删本次 score_prediction 记录（调试用）
 #
 # 账号与入口不进仓：优先读环境变量 BEA_BASE / BEA_USER / BEA_PASS，
 # 否则从 BEA_CRED_FILE（默认 /home/liang/work/SHENTI.md）里的「地址：」「账号：user / pass」两行读。
@@ -16,11 +17,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PAPER="$HERE/fixtures/sample-paper.docx"
 EXPECTED="$HERE/fixtures/sample-paper.expected.json"
 ANALYZE=1
+KEEP_RECORD=0
 TIMEOUT_MIN="${BEA_TIMEOUT_MIN:-15}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-analyze) ANALYZE=0 ;;
+    --keep-record) KEEP_RECORD=1 ;;
     --paper) PAPER="$2"; EXPECTED=""; shift ;;
     --expected) EXPECTED="$2"; shift ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
@@ -164,12 +167,21 @@ for w in (result.get("metadata_quality") or {}).get("warning_questions", []):
     if extra:
         print(f"WARN  第 {w['id']} 题降级: {', '.join(extra)}")
 
-print(f"INFO  耗时 {result.get('processing_time', 0):.0f}s；本次在现网 score_prediction 表留记录 id={sp.get('prediction_id')}"
-      f"（exam_name=上传文件名）。删：docker exec biology_postgres psql -U biology -d biology_edu "
-      f"-c 'delete from score_prediction where id={sp.get('prediction_id')}'")
+print(f"INFO  耗时 {result.get('processing_time', 0):.0f}s")
 sys.exit(1 if fails else 0)
 PY
       [ $? -eq 0 ] || FAILS=$((FAILS + 1))
+      # 本次分析在现网 score_prediction 留的那条记录：删掉并核实（分析流程只写这一张表）
+      PRED_ID="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["result"].get("score_prediction") or {}).get("prediction_id") or "")' "$RESULT" 2>/dev/null)"
+      PSQL="docker exec biology_postgres psql -U biology -d biology_edu -Atc"
+      if ! [[ "$PRED_ID" =~ ^[0-9]+$ ]]; then
+        fail "测试记录 id 取不到（${PRED_ID:-空}），没删"
+      elif [ "$KEEP_RECORD" = 1 ]; then
+        echo "INFO  测试记录 id=$PRED_ID 按 --keep-record 留着"
+      else
+        left="$(timeout 30 ssh "$SSH_HOST" "$PSQL 'delete from score_prediction where id=$PRED_ID' >/dev/null && $PSQL 'select count(*) from score_prediction where id=$PRED_ID'" 2>&1)"
+        if [ "$left" = 0 ]; then pass "测试记录 id=$PRED_ID 已删"; else fail "测试记录 id=$PRED_ID 没删掉: $left"; fi
+      fi
     fi
     rm -f "$RESULT"
   fi

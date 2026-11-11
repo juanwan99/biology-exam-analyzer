@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 每日整跑（正本 §1：卡验收不进发版门，关单时跑一次、每天整跑一次）。只读现网（不重启、不改文件）。
-#   1. check-live.sh 全流程（容器 / 健康 / 前端 / 专家登录 / 样卷，会调一次 LLM）
+#   1. check-live.sh 全流程（容器 / 健康 / 前端 / 专家登录 / 样卷，会调一次 LLM，跑完删本次测试记录）
 #   2. 现网 HEAD 的全量单测：git archive 进一次性容器跑（biology-backend 镜像、--network none），不碰现网目录
 #   3. 运维项：后端 24 h ERROR 数（>0 判 FAIL）；千问兜底开关、deepseek /models 状态码只打印（key 归业主）
 #
