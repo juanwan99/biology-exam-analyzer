@@ -16,7 +16,9 @@
 
 | 优先级 | Provider | 模型 | API 格式 | 认证 | 备注 |
 |--------|----------|------|----------|------|------|
-| 2（兜底） | deepseek | `deepseek-v4-pro` | OpenAI Chat | API Key | no_proxy=True 绕过 HTTPS_PROXY |
+| 1（文字） | deepseek | `deepseek-v4-pro` | OpenAI Chat | API Key | no_proxy=True 绕过 HTTPS_PROXY |
+| 2（文字兜底） | qwen_text | `qwen-plus` | OpenAI Chat | API Key | deepseek 失败 / 401 时落到这里；max_tokens 8192 |
+| 识图 | qwen_vision | `qwen3-vl-plus` | OpenAI Chat | API Key | 只处理图片输入 |
 
 **统一入口**: `llm_client.llm_call(messages, max_tokens, temperature)`
 **配置中枢**: `llm_config.py` 定义 Provider 列表 + `get_providers()` 过滤已配置 key
