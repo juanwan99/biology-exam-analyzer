@@ -441,7 +441,8 @@ class QuestionAnalyzer:
                     break
                 shares.append(float(seu["score_share"]))
             share_sum = sum(shares)
-            deviation = abs(share_sum - 1.0)
+            # 取 6 位小数再比：0.2+0.35+0.35 浮点得 0.8999999999999999，不取整会被挡在 0.10 门外
+            deviation = round(abs(share_sum - 1.0), 6)
             if shares and share_sum > 0 and 0.02 < deviation <= SCORE_SHARE_NORMALIZATION_MAX_DEVIATION:
                 for seu, share in zip(scoring_units, shares):
                     seu["score_share"] = share / share_sum
