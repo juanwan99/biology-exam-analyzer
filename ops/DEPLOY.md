@@ -50,6 +50,11 @@ docker compose -p biology up -d --build backend          # 改了 requirements.t
 docker compose -p biology up -d --build frontend         # 改了 frontend/
 ```
 
+- `up -d backend`（含 `--build`、改了 compose env）后后端容器 IP 会变，前端 nginx 还连着旧 IP，登录、上传全 502：必须接着 `docker compose -p biology restart frontend`。
+- 重启后等半分钟（后端 `start_period` 30 s），健康过了 starting 再验收，不然「容器 biology_backend」报 FAIL；补跑 `bash ops/check-live.sh --no-analyze` 即可。
+- ECS 上 `git pull` 偶尔报 HTTP2 framing 后挂住：别等，kill 掉改用 bundle——本机 `git fetch origin && git bundle create bea.bundle origin/main` → `scp bea.bundle ecs:/home/ops/` → 现网 `git fetch /home/ops/bea.bundle refs/remotes/origin/main:refs/remotes/origin/main && git merge --ff-only origin/main`，用完删 bundle（不上传别处）。
+- 换 deepseek key：现网 `.env` 只改 key → `up -d backend` → `restart frontend` → `bash ops/daily.sh`，看「deepseek /models」是 200。
+
 发完在本机跑 `bash ops/diff-live.sh && bash ops/check-live.sh`。这就是发版门（冒烟 + 对账，≤5 分钟；check-live 样卷实测 39–155 s）。
 
 ## 卡验收与每日整跑（不进发版门）
@@ -61,6 +66,32 @@ bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次�
 ```
 
 单测在河源 `biology-backend` 镜像的一次性容器里跑（`git archive` 进容器、`--network none`），本机不需要 venv。
+
+PDF 真卷回归（#7）：卷子放 ECS 非仓目录 `/home/ops/bea-work7/mock2026.pdf`（真卷不进仓），在一次性容器里跑：
+
+```bash
+docker run --rm --entrypoint "" -e BEA_PDF_MOCK2026=/w/mock2026.pdf \
+  -v <代码目录>/backend:/app -v /home/ops/bea-work7:/w -w /app biology-backend \
+  python -m pytest -q tests/test_pdf_splitter.py
+```
+
+本机 venv `/home/liang/.cache/bea-venv` 11-01 被平台清盘挪到 ECS `/data/office-archive/bea-20261101/`，找回：`ssh ecs 'cat /data/office-archive/bea-20261101/bea-venv.tar' | tar -xf - -C /home/liang`，或按 `backend/requirements.txt` 重建。
+
+## stage（发河源前先在临时容器跑通）
+
+1. `git archive HEAD backend prompts` 解到 `/home/ops/stage-bea/app`，复制现网 `backend/data`；env 只取 compose 传给后端的那几项，写 `stage.env`。
+2. 建网络 `biology_stage_net`，起 `biology_postgres_stage`（`pg_dump` 现网库导入）和 `biology_backend_stage`（`127.0.0.1:8011`，挂 stage 目录）。
+3. 本机 `ssh -N -L 18011:127.0.0.1:8011 ecs`，跑 `BEA_BASE=http://127.0.0.1:18011 bash ops/check-live.sh --keep-record`。**必须带 `--keep-record`**，不然它按 stage 的记录号去删现网库。stage 只起后端，「前端」一项必 FAIL。
+4. 拆：`docker rm -f -v biology_backend_stage biology_postgres_stage`（pg 带 `-v` 删卷）、`docker network rm biology_stage_net`；目录里有 root 写的文件，用 `docker run --rm -v /home/ops:/h biology-backend rm -rf /h/stage-bea`。本机隧道用 `pgrep` 找 ssh 的 pid 再 kill，别用 `pkill -f <端口串>`（会连本条命令的 shell 一起杀）。
+
+容器日志时间戳比本机快 15 h。
+
+## 现网备份（ECS `/home/ops/`）
+
+- `backup-bea-score-prediction-pre17-20261111.sql`：#17 清空前的 score_prediction 全表（16 行验收测试记录）；恢复 `docker exec -i biology_postgres psql -U biology -d biology_edu < 该文件`。
+- `backup-bea-env-pre19-20261111-1514`：#19 删千问开关前的 `.env`。
+- `backup-bea-pre-gitwt-20261101.tgz`：改 git 工作树前的现网目录。
+- `backup-bea-db-pre-delete-20261018-2026.dump`、`backup-bea-pre6-20261018-2012.tgz`、`backup-bea-pre9-20261018-2313.tgz`：试用前的库和目录。
 
 ## 全新机器部署
 
