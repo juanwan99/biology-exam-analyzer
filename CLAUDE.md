@@ -13,9 +13,9 @@
 
 ## 现成函数（先用，别另写）
 
-- LLM 一律走 `llm_client.llm_call(messages, max_tokens, temperature, purpose=...)`：按 `llm_config.py` 的 PROVIDERS 走 fallback（文字 deepseek → qwen_text，带图自动走 qwen_vision）；400 不 fallback，401 / 403 会。拼图文消息用 `llm_media.messages_with_media`
+- LLM 一律走 `llm_client.llm_call(messages, max_tokens, temperature, purpose=...)`：按 `llm_config.py` 的 PROVIDERS 走 fallback（文字 deepseek → qwen_text，带图自动走 qwen_vision）；400 / 401 / 403 和其他失败都会依次落到下一个 provider，带图只在视觉链里落。拼图文消息用 `llm_media.messages_with_media`
 - LLM 出的 JSON：`llm_schemas.validate_llm_output`（失败不阻断，只打标）
-- 学科：`subject_config.normalize_subject / get_competency_dims / is_valid_subject`（未知学科降级 biology 并告警）；提示词：`prompt_loader.PromptLoader`
+- 学科：`subject_config.normalize_subject / get_competency_dims / is_valid_subject`（`normalize_subject` 静默降级 biology，不打日志；入口要自己先 `is_valid_subject` 判再告警，照 `analysis_router.analyze_auto` 写）；提示词：`prompt_loader.PromptLoader`
 - 单例：`deps.get_*()`；任务 / 会话 / token：`task_manager`、`runtime_store`（SQLite）
 - 请求级开关：`analysis_options`；整卷并发：`analysis_scheduling.gather_longest_first`（长题先跑）
 - 特征缓存：`feature_cache`，改了特征提示词或口径要改 `_FEATURE_CACHE_VERSION`
