@@ -81,8 +81,8 @@ docker run --rm --entrypoint "" -e BEA_PDF_MOCK2026=/w/mock2026.pdf \
 
 1. `git archive HEAD backend prompts` 解到 `/home/ops/stage-bea/app`，复制现网 `backend/data`；env 只取 compose 传给后端的那几项，写 `stage.env`。
 2. 建网络 `biology_stage_net`，起 `biology_postgres_stage`（`pg_dump` 现网库导入）和 `biology_backend_stage`（`127.0.0.1:8011`，挂 stage 目录）。
-3. 本机 `ssh -N -L 18011:127.0.0.1:8011 ecs`，跑 `BEA_BASE=http://127.0.0.1:18011 bash ops/check-live.sh --keep-record`。**必须带 `--keep-record`**，不然它按 stage 的记录号去删现网库。stage 只起后端，「前端」一项必 FAIL。
-4. 拆：`docker rm -f -v biology_backend_stage biology_postgres_stage`（pg 带 `-v` 删卷）、`docker network rm biology_stage_net`；目录里有 root 写的文件，用 `docker run --rm -v /home/ops:/h biology-backend rm -rf /h/stage-bea`。本机隧道用 `pgrep` 找 ssh 的 pid 再 kill，别用 `pkill -f <端口串>`（会连本条命令的 shell 一起杀）。
+3. 本机 `ssh -N -L 18011:127.0.0.1:8011 ecs`，跑 `BEA_BASE=http://127.0.0.1:18011 bash ops/check-live.sh --keep-record`。**必须带 `--keep-record`**，不然它按 stage 的记录号去删现网库。stage 只起后端，「前端」一项必 FAIL；「容器」和「后端 /health」两项写死查的是现网，stage 健不健康要另看 `ssh ecs 'curl -s 127.0.0.1:8011/health'` 和 `docker inspect -f '{{.State.Health.Status}}' biology_backend_stage`。
+4. 拆：`docker rm -f -v biology_backend_stage biology_postgres_stage`（pg 带 `-v` 删卷）、`docker network rm biology_stage_net`；目录里有 root 写的文件，用 `docker run --rm --entrypoint "" -v /home/ops:/h biology-backend rm -rf /h/stage-bea`（不清 entrypoint 会先联网 pip install，失败就删不成）。本机隧道用 `pgrep` 找 ssh 的 pid 再 kill，别用 `pkill -f <端口串>`（会连本条命令的 shell 一起杀）。
 
 容器日志时间戳比本机快 15 h。
 
