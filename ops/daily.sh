@@ -2,15 +2,18 @@
 # 每日整跑（正本 §1：卡验收不进发版门，关单时跑一次、每天整跑一次）。只读现网（不重启、不改文件）。
 #   1. check-live.sh 全流程（容器 / 健康 / 前端 / 专家登录 / 样卷，会调一次 LLM，跑完删本次测试记录）
 #   2. 现网 HEAD 的全量单测：git archive 进一次性容器跑（biology-backend 镜像、--network none），不碰现网目录
-#   3. 运维项：后端 24 h ERROR 数（>0 判 FAIL）；现网文字链、deepseek /models 状态码只打印（key 归业主）
+#   3. PDF 真卷回归（#7/#27）：同样一次性容器，卷子 mock2026 只读挂进去，21 题 + 分值一变或卷子不在都判 FAIL
+#   4. 运维项：后端 24 h ERROR 数（>0 判 FAIL）；现网文字链、deepseek /models 状态码只打印（key 归业主）
 #
 # 用法：bash ops/daily.sh
-# 环境：BEA_SSH（默认 ecs）、BEA_LIVE_DIR（默认 /home/ops/projects/biology-exam-analyzer）；check-live 的环境变量照传
+# 环境：BEA_SSH（默认 ecs）、BEA_LIVE_DIR（默认 /home/ops/projects/biology-exam-analyzer）、
+#       BEA_PDF_DIR（ECS 上放 mock2026.pdf 的非仓目录，默认 /home/ops/bea-work7）；check-live 的环境变量照传
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SSH_HOST="${BEA_SSH:-ecs}"
 LIVE_DIR="${BEA_LIVE_DIR:-/home/ops/projects/biology-exam-analyzer}"
+PDF_DIR="${BEA_PDF_DIR:-/home/ops/bea-work7}"
 FAILS=0
 START=$SECONDS
 
@@ -25,6 +28,14 @@ if [[ "$summary" == *" passed"* && "$summary" != *failed* && "$summary" != *erro
   echo "PASS  单测 $(head -1 <<<"$ut") · $summary"
 else
   echo "FAIL  单测: $ut"; FAILS=$((FAILS + 1))
+fi
+
+echo "== PDF 真卷回归 mock2026（现网 HEAD，一次性容器）"
+reg="$(timeout 300 ssh "$SSH_HOST" "cd '$LIVE_DIR' && test -r '$PDF_DIR/mock2026.pdf' && git archive HEAD backend | docker run --rm -i --network none -e PYTHONDONTWRITEBYTECODE=1 -e BEA_PDF_MOCK2026=/w/mock2026.pdf -v '$PDF_DIR/mock2026.pdf:/w/mock2026.pdf:ro' --entrypoint sh biology-backend -c 'mkdir -p /tmp/w && tar -x -C /tmp/w && cd /tmp/w/backend && python -m pytest -q -p no:cacheprovider tests/test_pdf_splitter.py::test_mock2026_pdf_regression 2>&1 | tail -15'" 2>&1)"
+if [[ "$(tail -1 <<<"$reg")" == "1 passed in "* ]]; then
+  echo "PASS  PDF 回归 21 题 + 分值"
+else
+  echo "FAIL  PDF 回归（卷子 $PDF_DIR/mock2026.pdf）: ${reg:-卷子不可读}"; FAILS=$((FAILS + 1))
 fi
 
 echo "== 运维项"
