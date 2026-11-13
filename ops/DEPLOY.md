@@ -67,7 +67,7 @@ bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次�
 
 单测在河源 `biology-backend` 镜像的一次性容器里跑（`git archive` 进容器、`--network none`），本机不需要 venv。
 
-PDF 真卷回归（#7）：卷子放 ECS 非仓目录 `/home/ops/bea-work7/mock2026.pdf`（真卷不进仓），在一次性容器里跑：
+PDF 真卷回归（#7）：卷子放 ECS 非仓目录 `/home/ops/bea-work7/mock2026.pdf`（真卷不进仓）。每天 `ops/daily.sh` 自动跑（#27）；手动在一次性容器里跑：
 
 ```bash
 docker run --rm --entrypoint "" -e BEA_PDF_MOCK2026=/w/mock2026.pdf \
