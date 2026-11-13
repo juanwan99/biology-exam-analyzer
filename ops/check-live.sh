@@ -3,7 +3,7 @@
 # 只读现网（不重启、不改配置）；跑一次分析会调 LLM，并在 score_prediction 表留一条记录，跑完删掉并核实（--keep-record 留着）。
 #
 # 用法：
-#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx
+#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx + 去分值版核推断偏差
 #   bash ops/check-live.sh --no-analyze       # 只查容器/健康/登录，不跑分析
 #   bash ops/check-live.sh --paper 真卷.docx  # 跑别的卷：只核拆题与字段，不核分值（除非给 --expected）
 #   bash ops/check-live.sh --keep-record      # 不删本次 score_prediction 记录（调试用）
@@ -89,33 +89,18 @@ else
 fi
 
 # 5. 上传样卷跑全流程（与前端默认一致：deep、不生成报告、生物）
-if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
-  submit="$("${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
-    -F "file=@$PAPER" -F mode=deep -F generate_report=false -F subject=biology \
-    "$BASE/api/analyze_auto")"
-  TASK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", ""))' "$submit" 2>/dev/null)"
-  if [ -z "$TASK" ]; then
-    fail "上传 $(basename "$PAPER"): ${submit:0:300}"
-  else
-    pass "上传 $(basename "$PAPER") → task $TASK"
-    RESULT="$(mktemp)"
-    deadline=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
-    status=""
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-      "${CURL[@]}" -m 30 "$BASE/api/analysis/status/$TASK" >"$RESULT" 2>/dev/null
-      status="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["status"], d.get("message", ""))' "$RESULT" 2>/dev/null)"
-      case "$status" in completed*|failed*) break ;; esac
-      sleep 10
-    done
-    if [[ "$status" != completed* ]]; then
-      fail "分析未完成（${TIMEOUT_MIN} 分钟内）: $status $(head -c 300 "$RESULT")"
-    else
-      python3 - "$RESULT" "$EXPECTED" <<'PY'
+#    默认两份同时跑：标了分值的样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）
+check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer
+  python3 - "$1" "$2" "$3" <<'PY'
 import json, sys
+
+INFER_TOL_Q = 2
 
 result = json.load(open(sys.argv[1]))["result"]
 expected = json.load(open(sys.argv[2])) if sys.argv[2] else None
+infer = sys.argv[3] == "infer"   # 卷面分值藏掉的样卷：分值不逐题判，按偏差门槛判
 fails = 0
+deviations = []
 
 def check(ok, msg):
     global fails
@@ -145,9 +130,11 @@ for q in qs:
         problems.append(f"error={q['error'][:80]}")
     if missing:
         problems.append("缺" + "/".join(missing))
-    if q.get("score_status") != "valid":
+    if q.get("score_status") not in (("valid", "inferred") if infer else ("valid",)):
         problems.append(f"score_status={q.get('score_status')}")
-    if expected and float(score or 0) != float(expected["scores"].get(qid, -1)):
+    if expected and infer:
+        deviations.append((qid, float(score or 0), float(expected["scores"].get(qid, 0))))
+    elif expected and float(score or 0) != float(expected["scores"].get(qid, -1)):
         problems.append(f"分值 {score}≠卷面 {expected['scores'].get(qid)}")
     check(not problems, f"第 {qid} 题 {q.get('question_type')} {score}分 · {d.get('difficulty_label')} · "
           f"bloom {a.get('bloom_level')} · 知识点 {len(a.get('knowledge_points') or [])} 个"
@@ -155,7 +142,15 @@ for q in qs:
 
 sp = result.get("score_prediction") or {}
 total = sum(float(q.get("total_score") or 0) for q in qs)
-if expected:
+if expected and infer:
+    # 门槛：分节写了小计，总分必须对上；每题偏差 ≤ INFER_TOL_Q 分
+    worst = max(deviations, key=lambda d: abs(d[1] - d[2]), default=("-", 0, 0))
+    diff_total = total - expected["total_score"]
+    check(abs(diff_total) < 1e-6 and abs(worst[1] - worst[2]) <= INFER_TOL_Q,
+          f"分值推断偏差 总分 {total:g}（卷面 {expected['total_score']}，差 {diff_total:+g}）· "
+          f"每题最大差 {worst[1] - worst[2]:+g}（第 {worst[0]} 题 {worst[1]:g}/{worst[2]:g}，门槛 ±{INFER_TOL_Q}）· "
+          + " ".join(f"{i}:{s:g}/{e:g}" for i, s, e in deviations))
+elif expected:
     check(total == expected["total_score"], f"卷面总分 {total:g}（应 {expected['total_score']}）")
 check(sp.get("predicted_average") is not None,
       f"分数预估 均分 {sp.get('predicted_average')} / {sp.get('total_score')}，区间 {sp.get('confidence_interval')}")
@@ -170,7 +165,40 @@ for w in (result.get("metadata_quality") or {}).get("warning_questions", []):
 print(f"INFO  耗时 {result.get('processing_time', 0):.0f}s")
 sys.exit(1 if fails else 0)
 PY
-      [ $? -eq 0 ] || FAILS=$((FAILS + 1))
+}
+
+if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
+  RUNS=("$PAPER|$EXPECTED|strict")
+  [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer")
+  TASKS=()
+  for run in "${RUNS[@]}"; do
+    paper="${run%%|*}"
+    submit="$("${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
+      -F "file=@$paper" -F mode=deep -F generate_report=false -F subject=biology \
+      "$BASE/api/analyze_auto")"
+    task="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", ""))' "$submit" 2>/dev/null)"
+    if [ -z "$task" ]; then fail "上传 $(basename "$paper"): ${submit:0:300}"; else pass "上传 $(basename "$paper") → task $task"; fi
+    TASKS+=("$task")
+  done
+  deadline=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
+  for i in "${!RUNS[@]}"; do
+    TASK="${TASKS[$i]}"
+    [ -n "$TASK" ] || continue
+    IFS='|' read -r paper expected mode <<<"${RUNS[$i]}"
+    echo "-- $(basename "$paper")（$mode）"
+    RESULT="$(mktemp)"
+    status=""
+    while :; do  # 每份至少查一次：前一份拖到截止时，已跑完的这份照样核对、删记录
+      "${CURL[@]}" -m 30 "$BASE/api/analysis/status/$TASK" >"$RESULT" 2>/dev/null
+      status="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["status"], d.get("message", ""))' "$RESULT" 2>/dev/null)"
+      case "$status" in completed*|failed*) break ;; esac
+      [ "$(date +%s)" -lt "$deadline" ] || break
+      sleep 10
+    done
+    if [[ "$status" != completed* ]]; then
+      fail "分析未完成（${TIMEOUT_MIN} 分钟内）: $status $(head -c 300 "$RESULT")"
+    else
+      check_result "$RESULT" "$expected" "$mode" || FAILS=$((FAILS + 1))
       # 本次分析在现网 score_prediction 留的那条记录：删掉并核实（分析流程只写这一张表）
       PRED_ID="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["result"].get("score_prediction") or {}).get("prediction_id") or "")' "$RESULT" 2>/dev/null)"
       PSQL="docker exec biology_postgres psql -U biology -d biology_edu -Atc"
@@ -184,7 +212,7 @@ PY
       fi
     fi
     rm -f "$RESULT"
-  fi
+  done
 fi
 
 echo "== $([ "$FAILS" = 0 ] && echo '全部 PASS' || echo "FAIL $FAILS 处")"

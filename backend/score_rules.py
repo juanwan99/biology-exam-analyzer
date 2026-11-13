@@ -65,6 +65,12 @@ def section_average_score(question: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def exceeds_section_total(question: Dict[str, Any], score: float) -> bool:
+    """分节「共 K 小题（K > 1），共 N 分」里单题分 ≥ N：多半是把分节小计当成了本题分。"""
+    count, total = section_count_total(question.get("_section_header") or "")
+    return bool(count and count > 1 and total and score >= total)
+
+
 def apportion(values: List[float], target: float) -> Optional[List[float]]:
     """把 values 等比缩放到合计 = target，按最大余数取整（target 是整数取整分，是 .5 取半分）。"""
     unit = 1.0 if float(target).is_integer() else 0.5 if float(target * 2).is_integer() else None

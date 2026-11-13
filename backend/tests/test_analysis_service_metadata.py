@@ -951,10 +951,11 @@ async def test_paper_marked_score_beats_llm_score():
 
 
 @pytest.mark.asyncio
-async def test_unmarked_big_question_with_zero_llm_score_uses_section_average():
+@pytest.mark.parametrize("llm_score", [0, 55])  # 没给分 / 把分节小计当本题分（#29）
+async def test_unmarked_big_question_with_invalid_llm_score_uses_section_average(llm_score):
     difficulty = _RecordingDifficulty()
     q = {"id": 22, "content": "22. 某二倍体两性花植物……", "_section_header": "三、非选择题：本题共5小题．共55分。"}
-    result = await _score_service(0, difficulty).analyze_question(q, image_bytes=[], mode="deep")
+    result = await _score_service(llm_score, difficulty).analyze_question(q, image_bytes=[], mode="deep")
     assert result["total_score"] == 11.0
     assert result["score_source"] == "section_average"
     assert result["score_status"] == "valid"

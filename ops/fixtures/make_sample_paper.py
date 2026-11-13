@@ -1,8 +1,11 @@
 """生成对账样卷 sample-paper.docx（自编题，仅供系统自检，不涉版权）。
 
 大题标题与每道题都写明分值，check-live.sh 用 sample-paper.expected.json 核对拆题数与分值。
+另出一份 sample-paper-unscored.docx：去掉题号后与小问后的「（N分）」，只留分节说明，
+check-live.sh 拿同一份 expected 核分值推断偏差（#29）。
 用法：python ops/fixtures/make_sample_paper.py   （需要 python-docx）
 """
+import re
 from pathlib import Path
 
 from docx import Document
@@ -45,13 +48,21 @@ PARAGRAPHS = [
 ]
 
 
-def main() -> None:
+_QUESTION_SCORE = re.compile(r"[（(]\s*\d+\s*分\s*[）)]")
+
+
+def _save(paragraphs: list, name: str) -> None:
     doc = Document()
-    for text in PARAGRAPHS:
+    for text in paragraphs:
         doc.add_paragraph(text)
-    out = Path(__file__).with_name("sample-paper.docx")
+    out = Path(__file__).with_name(name)
     doc.save(out)
     print(out)
+
+
+def main() -> None:
+    _save(PARAGRAPHS, "sample-paper.docx")
+    _save([_QUESTION_SCORE.sub("", t) for t in PARAGRAPHS], "sample-paper-unscored.docx")
 
 
 if __name__ == "__main__":
