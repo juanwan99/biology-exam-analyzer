@@ -31,11 +31,12 @@ else
 fi
 
 echo "== PDF 真卷回归 mock2026（现网 HEAD，一次性容器）"
-reg="$(timeout 300 ssh "$SSH_HOST" "cd '$LIVE_DIR' && test -r '$PDF_DIR/mock2026.pdf' && git archive HEAD backend | docker run --rm -i --network none -e PYTHONDONTWRITEBYTECODE=1 -e BEA_PDF_MOCK2026=/w/mock2026.pdf -v '$PDF_DIR/mock2026.pdf:/w/mock2026.pdf:ro' --entrypoint sh biology-backend -c 'mkdir -p /tmp/w && tar -x -C /tmp/w && cd /tmp/w/backend && python -m pytest -q -p no:cacheprovider tests/test_pdf_splitter.py::test_mock2026_pdf_regression 2>&1 | tail -15'" 2>&1)"
-if [[ "$(tail -1 <<<"$reg")" == "1 passed in "* ]]; then
+reg="$(timeout 300 ssh "$SSH_HOST" "cd '$LIVE_DIR' && { test -r '$PDF_DIR/mock2026.pdf' || { echo 卷子不可读; exit 1; }; } && git archive HEAD backend | docker run --rm -i --network none -e PYTHONDONTWRITEBYTECODE=1 -e BEA_PDF_MOCK2026=/w/mock2026.pdf -v '$PDF_DIR/mock2026.pdf:/w/mock2026.pdf:ro' --entrypoint sh biology-backend -c 'mkdir -p /tmp/w && tar -x -C /tmp/w && cd /tmp/w/backend && python -m pytest -q -p no:cacheprovider tests/test_pdf_splitter.py::test_mock2026_pdf_regression 2>&1 | tail -15'" 2>&1)"
+last="$(tail -1 <<<"$reg")"
+if [[ "$last" == "1 passed"[\ ,]* && "$last" != *skipped* && "$last" != *failed* && "$last" != *error* ]]; then
   echo "PASS  PDF 回归 21 题 + 分值"
 else
-  echo "FAIL  PDF 回归（卷子 $PDF_DIR/mock2026.pdf）: ${reg:-卷子不可读}"; FAILS=$((FAILS + 1))
+  echo "FAIL  PDF 回归（卷子 $PDF_DIR/mock2026.pdf）: ${reg:-超时或无输出}"; FAILS=$((FAILS + 1))
 fi
 
 echo "== 运维项"
