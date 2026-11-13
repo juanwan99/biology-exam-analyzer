@@ -33,6 +33,7 @@ import subprocess
 from typing import Dict, Any, List, Optional, Tuple
 
 from logger import get_logger
+from answer_blocks import split_answer
 from word_splitter import WordQuestionSplitter
 
 logger = get_logger()
@@ -371,12 +372,22 @@ def _merge_ocr_into_native(
 # 顶层统一入口
 # ─────────────────────────────────────────────────────────────────────
 def split_word_with_visual(file_path: str, subject: Optional[str] = None) -> Dict[str, Any]:
-    """统一 Word 拆题入口：native 拆题 +（按需）视觉 OCR 回填。
+    """统一 Word 拆题入口：native 拆题 +（按需）视觉 OCR 回填，最后剥掉【答案】【解析】块（#28）。
 
     - native 拆题异常**照常抛出**（上游错误映射保持不变）。
     - 视觉增强全程 try/except，失败一律 fail-open 回 native。
     - 替代 ``word_splitter.split(file_path)`` 的全部调用点。
+    - 剥下来的答案原文存 ``answer`` 给报告；没有答案块不写（报告回落用 AI 作答）。
     """
+    result = _split_word(file_path, subject)
+    for q in result.get("questions", []):
+        q["content"], answer = split_answer(str(q.get("content") or ""))
+        if answer:
+            q["answer"] = answer
+    return result
+
+
+def _split_word(file_path: str, subject: Optional[str]) -> Dict[str, Any]:
     native = WordQuestionSplitter().split(file_path)  # 异常透传，保留上游 400 错误映射
 
     try:
