@@ -38,6 +38,14 @@ def test_end_block_keeps_its_own_per_question_explanations():
     assert answer.endswith("（2）因为乙\nA、错误")
 
 
+def test_level_unseen_in_stem_does_not_end_block():
+    stem, answer = split_answer("\n".join([
+        "5.下列叙述正确的是", "A.甲 B.乙 C.丙 D.丁", "【详解】", "①甲错误", "②乙正确", "故选B。",
+    ]))
+    assert stem == "5.下列叙述正确的是\nA.甲 B.乙 C.丙 D.丁"
+    assert answer.endswith("②乙正确\n故选B。")
+
+
 def test_no_block_leaves_text_untouched():
     text = "3.据图分析，下列答案正确的是\nA.甲\n分析：乙"
     assert split_answer(text) == (text, "")

@@ -2,7 +2,7 @@
 
 答案版、课件版卷子每题（或每个小问）后面跟着【答案】【解析】【详解】等块，AI 看到会把难度判低。
 块从标记行开始，到题干下一个小问号为止：（n）后接（n+1）、Ⅰ.后接Ⅱ.、①后接②。
-块里自己的「（1）…（2）…」逐问详解不算，只有题干里还没出现过的下一个号才结束块。
+块里自己的「（1）…（2）…」逐问详解不算，只有题干里还没出现过的下一个号才结束块；题干没出现过的层级不结束块。
 只认行首的方括号标记，题干里的「分析」「答案」字样不动；填在空里的答案（如「叶绿体基质（1分）」）不动。
 """
 
@@ -41,7 +41,7 @@ def answer_line_flags(lines: List[str]) -> List[bool]:
             in_block = True
         elif in_block:
             marker = _sub_marker(line)
-            in_block = not (marker and marker[1] == last[marker[0]] + 1)
+            in_block = not (marker and last[marker[0]] and marker[1] == last[marker[0]] + 1)
         if not in_block:
             marker = _sub_marker(line)
             if marker:
