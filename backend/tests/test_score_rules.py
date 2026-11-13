@@ -1,6 +1,6 @@
 """卷面分值规则：题号后「（N分）」优先，其次分节「每小题 N 分」；分节合计不符标 inferred。"""
 from score_rules import (
-    SOURCE_MODEL, SOURCE_PAPER, SOURCE_SECTION, mark_section_mismatch, paper_score,
+    SOURCE_MODEL, SOURCE_PAPER, SOURCE_SECTION, exceeds_section_total, mark_section_mismatch, paper_score,
     section_average_score, section_count_total,
 )
 
@@ -28,6 +28,10 @@ def test_section_count_total_and_average():
     assert section_count_total("三、非选择题：本题共5小题．共55分。") == (5, 55.0)
     assert section_average_score({"_section_header": "三、非选择题：本题共5小题．共55分。"}) == 11.0
     assert section_average_score({"_section_header": "三、非选择题"}) is None
+    big = {"_section_header": "二、非选择题（本题共 2 小题，共 22 分）"}
+    assert exceeds_section_total(big, 22) and not exceeds_section_total(big, 12)
+    assert not exceeds_section_total({"_section_header": "三、选做题：本题共1小题，共15分。"}, 15)
+    assert not exceeds_section_total({"_section_header": "三、非选择题"}, 22)
 
 
 def test_mark_section_mismatch_only_touches_model_scores():
