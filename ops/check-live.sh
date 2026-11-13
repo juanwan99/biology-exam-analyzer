@@ -188,10 +188,11 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
     echo "-- $(basename "$paper")（$mode）"
     RESULT="$(mktemp)"
     status=""
-    while [ "$(date +%s)" -lt "$deadline" ]; do
+    while :; do  # 每份至少查一次：前一份拖到截止时，已跑完的这份照样核对、删记录
       "${CURL[@]}" -m 30 "$BASE/api/analysis/status/$TASK" >"$RESULT" 2>/dev/null
       status="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["status"], d.get("message", ""))' "$RESULT" 2>/dev/null)"
       case "$status" in completed*|failed*) break ;; esac
+      [ "$(date +%s)" -lt "$deadline" ] || break
       sleep 10
     done
     if [[ "$status" != completed* ]]; then
