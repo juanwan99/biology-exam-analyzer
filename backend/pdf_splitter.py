@@ -6,6 +6,7 @@ PDF文档题目拆分器
 - 只认「1.」「1、」「一、」作大题号；「（1）」「(1)」是小问，留在所属大题里。
 - 第一个分节标题之前的编号条目（卷首说明、注意事项）在分节后题号重新从小号起时丢弃。
 - 过半页面都出现的行（页眉页脚、课件题号导航）不进题干；重叠绘制的重复字先去重。
+- 【答案】【解析】块不进题干，另存 answer 给报告；页面图上同位置涂白，AI 看图也看不到（#28）。
 """
 
 import re
@@ -13,9 +14,11 @@ from collections import Counter
 import base64
 import io
 from typing import List, Dict, Any, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pdfplumber
 from pdf2image import convert_from_path
+from PIL import ImageDraw
+from answer_blocks import answer_line_flags
 from logger import get_logger
 
 logger = get_logger()
@@ -30,6 +33,9 @@ class PDFQuestion:
     images: List[Dict[str, Any]]  # 图片列表
     warnings: List[str]
     section_header: Optional[str] = None
+    line_refs: List[Tuple[int, int]] = field(default_factory=list)  # content 每行的 (页, 行号)
+    answer: str = ""  # 剥下来的【答案】【解析】原文
+    answer_refs: List[Tuple[int, int]] = field(default_factory=list)  # 答案行的 (页, 行号)，页面图上涂白
 
 
 class PDFQuestionSplitter:
@@ -78,13 +84,14 @@ class PDFQuestionSplitter:
             pages_text = self._extract_text(pdf_path)
             logger.info(f"[PDF拆分] 提取到{len(pages_text)}页文字")
 
-            # 2. 转换PDF为图片
-            page_images = self._convert_to_images(pdf_path, dpi)
-            logger.info(f"[PDF拆分] 转换为{len(page_images)}张图片")
-
-            # 3. 基于规则识别题目边界
-            questions = self._split_questions(pages_text, page_images)
+            # 2. 基于规则识别题目边界，剥掉【答案】【解析】块
+            questions = self._split_questions(pages_text)
             logger.info(f"[PDF拆分] 识别到{len(questions)}道题目")
+
+            # 3. 转换PDF为图片（答案块涂白），挂到各题
+            page_images = self._convert_to_images(pdf_path, dpi, self._answer_boxes(questions, pages_text))
+            logger.info(f"[PDF拆分] 转换为{len(page_images)}张图片")
+            self._attach_page_images(questions, page_images)
 
             # 4. 计算置信度
             confidence = self._calculate_confidence(questions, pages_text)
@@ -113,20 +120,28 @@ class PDFQuestionSplitter:
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
                 # 粗体常被画两遍，抽出来字字重复（「选选项项」），先去重
-                text = page.dedupe_chars().extract_text() or ""
+                text_lines = page.dedupe_chars().extract_text_lines()
                 pages.append({
                     "page_num": page_num,
-                    "text": text,
-                    "lines": text.split('\n') if text else []
+                    "lines": [line["text"] for line in text_lines],
+                    "boxes": [(line["x0"], line["top"], line["x1"], line["bottom"]) for line in text_lines],
                 })
         return pages
 
-    def _convert_to_images(self, pdf_path: str, dpi: int) -> List[str]:
-        """将PDF转换为base64图片列表"""
+    def _convert_to_images(self, pdf_path: str, dpi: int,
+                           masks: Optional[Dict[int, List[Tuple[float, float, float, float]]]] = None) -> List[str]:
+        """将PDF转换为base64图片列表；masks 里的框（PDF 坐标）涂白"""
         images = convert_from_path(pdf_path, dpi=dpi, fmt='jpeg')
         base64_images = []
+        scale = dpi / 72
 
-        for img in images:
+        for page_num, img in enumerate(images):
+            boxes = (masks or {}).get(page_num, [])
+            if boxes:
+                draw = ImageDraw.Draw(img)
+                for x0, top, x1, bottom in boxes:
+                    draw.rectangle([(x0 - 2) * scale, (top - 2) * scale, (x1 + 2) * scale, (bottom + 2) * scale],
+                                   fill="white")
             buffer = io.BytesIO()
             img.save(buffer, format='JPEG', quality=85)
             base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
@@ -134,7 +149,7 @@ class PDFQuestionSplitter:
 
         return base64_images
 
-    def _split_questions(self, pages_text: List[Dict], page_images: List[str]) -> List[PDFQuestion]:
+    def _split_questions(self, pages_text: List[Dict]) -> List[PDFQuestion]:
         """基于规则识别题目"""
         questions = []
         current_question = None
@@ -145,7 +160,7 @@ class PDFQuestionSplitter:
             page_num = page_data["page_num"]
             lines = page_data["lines"]
 
-            for line in lines:
+            for line_idx, line in enumerate(lines):
                 line = line.strip()
                 if not line or line in running:
                     continue
@@ -172,13 +187,15 @@ class PDFQuestionSplitter:
                         page_indices=[page_num],
                         images=[],
                         warnings=[],
-                        section_header=current_section_header
+                        section_header=current_section_header,
+                        line_refs=[(page_num, line_idx)],
                     )
                     logger.debug(f"[PDF拆分] 识别到题目{question_id}，页{page_num+1}")
                 else:
                     # 追加到当前题目
                     if current_question:
                         current_question.content += "\n" + line
+                        current_question.line_refs.append((page_num, line_idx))
                         if page_num not in current_question.page_indices:
                             current_question.page_indices.append(page_num)
                             current_question.warnings.append("跨页题目")
@@ -188,8 +205,28 @@ class PDFQuestionSplitter:
             questions.append(current_question)
 
         questions = self._drop_preamble(questions)
+        for q in questions:
+            self._strip_answer(q)
+        return questions
 
-        # 为每道题添加对应的页面图片
+    def _strip_answer(self, question: PDFQuestion) -> None:
+        """【答案】【解析】块移出题干存 answer，答案行位置记 answer_refs。"""
+        lines = question.content.split("\n")
+        flags = answer_line_flags(lines)
+        question.content = "\n".join(line for line, f in zip(lines, flags) if not f)
+        question.answer = "\n".join(line for line, f in zip(lines, flags) if f)
+        question.answer_refs = [ref for ref, f in zip(question.line_refs, flags) if f]
+
+    def _answer_boxes(self, questions: List[PDFQuestion], pages_text: List[Dict]) -> Dict[int, List[Tuple]]:
+        """各页要涂白的答案行框。"""
+        masks: Dict[int, List[Tuple]] = {}
+        for q in questions:
+            for page_num, line_idx in q.answer_refs:
+                masks.setdefault(page_num, []).append(pages_text[page_num]["boxes"][line_idx])
+        return masks
+
+    def _attach_page_images(self, questions: List[PDFQuestion], page_images: List[str]) -> None:
+        """为每道题添加对应的页面图片"""
         for q in questions:
             for page_idx in q.page_indices:
                 if page_idx < len(page_images):
@@ -198,8 +235,6 @@ class PDFQuestionSplitter:
                         "page_num": page_idx,
                         "base64": page_images[page_idx]
                     })
-
-        return questions
 
     def _running_lines(self, pages_text: List[Dict]) -> set:
         """过半页面都出现的行：页眉页脚、课件题号导航，不进题干。"""
@@ -307,7 +342,7 @@ class PDFQuestionSplitter:
                 "base64": img["base64"]
             })
 
-        return {
+        result = {
             "id": question.id,
             "content": question.content,
             "confidence": 0.8,
@@ -320,6 +355,9 @@ class PDFQuestionSplitter:
             "_media_for_ai": media_for_ai,
             "_section_header": question.section_header
         }
+        if question.answer:  # 空串不写：报告见不到卷面答案时回落用 AI 作答
+            result["answer"] = question.answer
+        return result
 
     def _has_options(self, content: str) -> bool:
         """检测是否为选择题"""
