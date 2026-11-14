@@ -4,6 +4,8 @@
 另出一份 sample-paper-unscored.docx：去掉题号后与小问后的「（N分）」，只留分节说明，
 check-live.sh 拿同一份 expected 核分值推断偏差（#29）。
 再出一份 sample-paper-nosection.docx：分节小计也删掉，卷面不剩任何分值，check-live 只打印纯推断偏差（#33）。
+另出化学样卷 sample-paper-chemistry.docx（同样标满分值），check-live 带 subject=chemistry 上传，
+用 sample-paper-chemistry.expected.json 核拆题、分值与素养维度归属（#34）。
 用法：python ops/fixtures/make_sample_paper.py   （需要 python-docx）
 """
 import re
@@ -48,6 +50,43 @@ PARAGRAPHS = [
     "（3）请设计一次杂交实验，判断 F1 中某只长翅红眼雌果蝇是否为纯合子，写出实验思路和预期结果。（4分）",
 ]
 
+CHEMISTRY_PARAGRAPHS = [
+    "高中化学对账样卷（自编，仅供系统自检）",
+    "一、选择题（本题共 4 小题，每小题 3 分，共 12 分。每小题只有一个选项符合题目要求）",
+    "1. 下列物质中，属于电解质的是（  ）",
+    "A. 铜",
+    "B. 蔗糖",
+    "C. 氯化钠",
+    "D. 二氧化碳",
+    "2. 设 NA 为阿伏加德罗常数的值。下列说法正确的是（  ）",
+    "A. 标准状况下，22.4 L H₂O 含有的分子数为 NA",
+    "B. 1 mol Na 与足量 O₂ 反应，转移的电子数为 NA",
+    "C. 1 L 0.1 mol/L NaCl 溶液中含有的 Cl⁻ 数为 NA",
+    "D. 常温常压下，16 g O₂ 含有的氧原子数为 2NA",
+    "3. 下列离子方程式书写正确的是（  ）",
+    "A. 铁与稀盐酸反应：2Fe + 6H⁺ = 2Fe³⁺ + 3H₂↑",
+    "B. 碳酸钙与稀盐酸反应：CO₃²⁻ + 2H⁺ = CO₂↑ + H₂O",
+    "C. 氢氧化钠溶液与稀硫酸反应：H⁺ + OH⁻ = H₂O",
+    "D. 铜与硝酸银溶液反应：Cu + Ag⁺ = Cu²⁺ + Ag",
+    "4. 一定温度下，在恒容密闭容器中发生反应 N₂(g) + 3H₂(g) ⇌ 2NH₃(g)，下列能说明反应已达到平衡状态的是（  ）",
+    "A. 容器内气体的密度不再变化",
+    "B. N₂、H₂、NH₃ 的浓度之比为 1∶3∶2",
+    "C. 单位时间内消耗 1 mol N₂ 的同时生成 2 mol NH₃",
+    "D. 容器内气体的总压强不再变化",
+    "二、非选择题（本题共 2 小题，共 18 分）",
+    "5.（8分）短周期主族元素 X、Y、Z、W 的原子序数依次增大。X 的一种核素没有中子；Y 原子最外层电子数是内层电子数的 2 倍；"
+    "Z 是地壳中含量最高的元素；W 的单质在常温下是黄绿色气体。请回答：",
+    "（1）Y 在元素周期表中的位置是________。（2分）",
+    "（2）Y、Z 的简单氢化物中，热稳定性较强的是________（填化学式）。（2分）",
+    "（3）写出 W 的单质与 NaOH 溶液反应的离子方程式：________。（4分）",
+    "6.（10分）某小组测定补铁剂中 FeSO₄ 的含量：取 10.00 g 样品溶于稀硫酸，配成 250 mL 溶液；取 25.00 mL，"
+    "用 0.0200 mol/L KMnO₄ 标准溶液滴定，消耗 20.00 mL。已知：5Fe²⁺ + MnO₄⁻ + 8H⁺ = 5Fe³⁺ + Mn²⁺ + 4H₂O。请回答：",
+    "（1）配制 250 mL 溶液，除烧杯、玻璃棒外还需要的玻璃仪器是________。（2分）",
+    "（2）滴定终点的现象是________。（2分）",
+    "（3）样品中 FeSO₄ 的质量分数为________（写出计算过程）。（4分）",
+    "（4）若滴定前滴定管尖嘴有气泡、滴定后气泡消失，则测定结果________（填“偏高”“偏低”或“无影响”）。（2分）",
+]
+
 
 _QUESTION_SCORE = re.compile(r"[（(]\s*\d+\s*分\s*[）)]")
 _SECTION_SCORE = re.compile(r"本题共\s*\d+\s*小题，(?:每小题\s*\d+\s*分，)?共\s*\d+\s*分。?")
@@ -67,6 +106,7 @@ def main() -> None:
     unscored = [_QUESTION_SCORE.sub("", t) for t in PARAGRAPHS]
     _save(unscored, "sample-paper-unscored.docx")
     _save([_SECTION_SCORE.sub("", t).replace("（）", "") for t in unscored], "sample-paper-nosection.docx")
+    _save(CHEMISTRY_PARAGRAPHS, "sample-paper-chemistry.docx")
 
 
 if __name__ == "__main__":

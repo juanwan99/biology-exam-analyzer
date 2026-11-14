@@ -3,9 +3,10 @@
 # 只读现网（不重启、不改配置）；跑一次分析会调 LLM，并在 score_prediction 表留一条记录，跑完删掉并核实（--keep-record 留着）。
 #
 # 用法：
-#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx + 去分值版核推断偏差 + 无小计版只打印偏差
+#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx + 去分值版核推断偏差 + 无小计版只打印偏差 + 化学样卷
 #   bash ops/check-live.sh --no-analyze       # 只查容器/健康/登录，不跑分析
 #   bash ops/check-live.sh --paper 真卷.docx  # 跑别的卷：只核拆题与字段，不核分值（除非给 --expected）
+#   bash ops/check-live.sh --paper 化学卷.docx --subject chemistry  # 别的卷按该学科上传（默认 biology）
 #   bash ops/check-live.sh --keep-record      # 不删本次 score_prediction 记录（调试用）
 #
 # 账号与入口不进仓：优先读环境变量 BEA_BASE / BEA_USER / BEA_PASS，
@@ -18,6 +19,7 @@ PAPER="$HERE/fixtures/sample-paper.docx"
 EXPECTED="$HERE/fixtures/sample-paper.expected.json"
 ANALYZE=1
 KEEP_RECORD=0
+SUBJECT=biology
 TIMEOUT_MIN="${BEA_TIMEOUT_MIN:-15}"
 
 while [ $# -gt 0 ]; do
@@ -26,6 +28,7 @@ while [ $# -gt 0 ]; do
     --keep-record) KEEP_RECORD=1 ;;
     --paper) PAPER="$2"; EXPECTED=""; shift ;;
     --expected) EXPECTED="$2"; shift ;;
+    --subject) SUBJECT="$2"; shift ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
   shift
@@ -88,18 +91,23 @@ else
   fail "专家账号登录: ${login:0:200}"
 fi
 
-# 5. 上传样卷跑全流程（与前端默认一致：deep、不生成报告、生物）
-#    默认三份同时跑：标了分值的样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）；
-#    分节小计也删掉（卷面不剩分值）的只打印纯推断偏差、不判分值（#33）
-check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer|estimate
-  python3 - "$1" "$2" "$3" <<'PY'
+# 5. 上传样卷跑全流程（与前端默认一致：deep、不生成报告）
+#    默认四份同时跑：标了分值的生物样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）；
+#    分节小计也删掉（卷面不剩分值）的只打印纯推断偏差、不判分值（#33）；化学样卷按 chemistry 上传逐题核（#34）
+check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer|estimate  $4 上传学科
+  python3 - "$1" "$2" "$3" "$4" "$HERE/../backend" <<'PY'
 import json, sys
+
+sys.path.insert(0, sys.argv[5])
+from subject_config import get_competency_dims  # 素养维度只认后端这一处真源
 
 INFER_TOL_Q = 2
 
 result = json.load(open(sys.argv[1]))["result"]
 expected = json.load(open(sys.argv[2])) if sys.argv[2] else None
 mode = sys.argv[3]
+subject = sys.argv[4]
+dims = get_competency_dims(subject)
 infer = mode in ("infer", "estimate")   # 卷面分值藏掉的样卷：分值不逐题判；infer 按偏差门槛判，estimate 只打印
 fails = 0
 deviations = []
@@ -124,7 +132,7 @@ for q in qs:
     missing = [name for name, ok in [
         ("知识点", a.get("knowledge_points")),
         ("认知层级", a.get("bloom_level")),
-        ("难度", d.get("difficulty_label")),
+        ("难度", d.get("difficulty_label") not in (None, "", "未评估")),   # 难度被拦（如媒体完整性失败）时标「未评估」
         ("素养", comp.get("primary_competency")),
     ] if not ok]
     problems = []
@@ -132,6 +140,10 @@ for q in qs:
         problems.append(f"error={q['error'][:80]}")
     if missing:
         problems.append("缺" + "/".join(missing))
+    if q.get("subject") != subject:
+        problems.append(f"学科 {q.get('subject')}≠上传 {subject}")
+    if comp.get("primary_competency") and comp["primary_competency"] not in dims:
+        problems.append(f"素养 {comp['primary_competency']} 不属{subject}")
     if q.get("score_status") not in (("valid", "inferred") if infer else ("valid",)):
         if mode == "estimate":   # 卷面不剩分值，没有兜底：分值失手也只提示，不判失败
             print(f"WARN  第 {qid} 题 score_status={q.get('score_status')}")
@@ -142,7 +154,7 @@ for q in qs:
     elif expected and float(score or 0) != float(expected["scores"].get(qid, -1)):
         problems.append(f"分值 {score}≠卷面 {expected['scores'].get(qid)}")
     check(not problems, f"第 {qid} 题 {q.get('question_type')} {score}分 · {d.get('difficulty_label')} · "
-          f"bloom {a.get('bloom_level')} · 知识点 {len(a.get('knowledge_points') or [])} 个"
+          f"bloom {a.get('bloom_level')} · 知识点 {len(a.get('knowledge_points') or [])} 个 · {comp.get('primary_competency')}"
           + (" · " + "；".join(problems) if problems else ""))
 
 sp = result.get("score_prediction") or {}
@@ -176,14 +188,16 @@ PY
 }
 
 if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
-  RUNS=("$PAPER|$EXPECTED|strict")
-  [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer"
-                                                         "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate")
+  RUNS=("$PAPER|$EXPECTED|strict|$SUBJECT")
+  [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer|biology"
+                                                         "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate|biology"
+                                                         "$HERE/fixtures/sample-paper-chemistry.docx|$HERE/fixtures/sample-paper-chemistry.expected.json|strict|chemistry")
   TASKS=()
   for run in "${RUNS[@]}"; do
     paper="${run%%|*}"
+    subject="${run##*|}"
     submit="$("${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
-      -F "file=@$paper" -F mode=deep -F generate_report=false -F subject=biology \
+      -F "file=@$paper" -F mode=deep -F generate_report=false -F "subject=$subject" \
       "$BASE/api/analyze_auto")"
     task="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", ""))' "$submit" 2>/dev/null)"
     if [ -z "$task" ]; then fail "上传 $(basename "$paper"): ${submit:0:300}"; else pass "上传 $(basename "$paper") → task $task"; fi
@@ -193,8 +207,8 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
   for i in "${!RUNS[@]}"; do
     TASK="${TASKS[$i]}"
     [ -n "$TASK" ] || continue
-    IFS='|' read -r paper expected mode <<<"${RUNS[$i]}"
-    echo "-- $(basename "$paper")（$mode）"
+    IFS='|' read -r paper expected mode subject <<<"${RUNS[$i]}"
+    echo "-- $(basename "$paper")（$mode · $subject）"
     RESULT="$(mktemp)"
     status=""
     while :; do  # 每份至少查一次：前一份拖到截止时，已跑完的这份照样核对、删记录
@@ -207,7 +221,7 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
     if [[ "$status" != completed* ]]; then
       fail "分析未完成（${TIMEOUT_MIN} 分钟内）: $status $(head -c 300 "$RESULT")"
     else
-      check_result "$RESULT" "$expected" "$mode" || FAILS=$((FAILS + 1))
+      check_result "$RESULT" "$expected" "$mode" "$subject" || FAILS=$((FAILS + 1))
       # 本次分析在现网 score_prediction 留的那条记录：删掉并核实（分析流程只写这一张表）
       PRED_ID="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["result"].get("score_prediction") or {}).get("prediction_id") or "")' "$RESULT" 2>/dev/null)"
       PSQL="docker exec biology_postgres psql -U biology -d biology_edu -Atc"
