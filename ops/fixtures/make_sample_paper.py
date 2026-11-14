@@ -3,6 +3,7 @@
 大题标题与每道题都写明分值，check-live.sh 用 sample-paper.expected.json 核对拆题数与分值。
 另出一份 sample-paper-unscored.docx：去掉题号后与小问后的「（N分）」，只留分节说明，
 check-live.sh 拿同一份 expected 核分值推断偏差（#29）。
+再出一份 sample-paper-nosection.docx：分节小计也删掉，卷面不剩任何分值，check-live 只打印纯推断偏差（#33）。
 用法：python ops/fixtures/make_sample_paper.py   （需要 python-docx）
 """
 import re
@@ -49,6 +50,7 @@ PARAGRAPHS = [
 
 
 _QUESTION_SCORE = re.compile(r"[（(]\s*\d+\s*分\s*[）)]")
+_SECTION_SCORE = re.compile(r"本题共\s*\d+\s*小题，(?:每小题\s*\d+\s*分，)?共\s*\d+\s*分。?")
 
 
 def _save(paragraphs: list, name: str) -> None:
@@ -62,7 +64,9 @@ def _save(paragraphs: list, name: str) -> None:
 
 def main() -> None:
     _save(PARAGRAPHS, "sample-paper.docx")
-    _save([_QUESTION_SCORE.sub("", t) for t in PARAGRAPHS], "sample-paper-unscored.docx")
+    unscored = [_QUESTION_SCORE.sub("", t) for t in PARAGRAPHS]
+    _save(unscored, "sample-paper-unscored.docx")
+    _save([_SECTION_SCORE.sub("", t).replace("（）", "") for t in unscored], "sample-paper-nosection.docx")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 # 只读现网（不重启、不改配置）；跑一次分析会调 LLM，并在 score_prediction 表留一条记录，跑完删掉并核实（--keep-record 留着）。
 #
 # 用法：
-#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx + 去分值版核推断偏差
+#   bash ops/check-live.sh                    # 默认样卷 ops/fixtures/sample-paper.docx + 去分值版核推断偏差 + 无小计版只打印偏差
 #   bash ops/check-live.sh --no-analyze       # 只查容器/健康/登录，不跑分析
 #   bash ops/check-live.sh --paper 真卷.docx  # 跑别的卷：只核拆题与字段，不核分值（除非给 --expected）
 #   bash ops/check-live.sh --keep-record      # 不删本次 score_prediction 记录（调试用）
@@ -89,8 +89,9 @@ else
 fi
 
 # 5. 上传样卷跑全流程（与前端默认一致：deep、不生成报告、生物）
-#    默认两份同时跑：标了分值的样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）
-check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer
+#    默认三份同时跑：标了分值的样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）；
+#    分节小计也删掉（卷面不剩分值）的只打印纯推断偏差、不判分值（#33）
+check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer|estimate
   python3 - "$1" "$2" "$3" <<'PY'
 import json, sys
 
@@ -98,7 +99,8 @@ INFER_TOL_Q = 2
 
 result = json.load(open(sys.argv[1]))["result"]
 expected = json.load(open(sys.argv[2])) if sys.argv[2] else None
-infer = sys.argv[3] == "infer"   # 卷面分值藏掉的样卷：分值不逐题判，按偏差门槛判
+mode = sys.argv[3]
+infer = mode in ("infer", "estimate")   # 卷面分值藏掉的样卷：分值不逐题判；infer 按偏差门槛判，estimate 只打印
 fails = 0
 deviations = []
 
@@ -142,7 +144,10 @@ for q in qs:
 
 sp = result.get("score_prediction") or {}
 total = sum(float(q.get("total_score") or 0) for q in qs)
-if expected and infer:
+if expected and mode == "estimate":
+    print(f"INFO  纯推断偏差（只打印）总分 {total:g}（卷面 {expected['total_score']}，差 {total - expected['total_score']:+g}）· "
+          + " ".join(f"{i}:{s:g}/{e:g}" for i, s, e in deviations))
+elif expected and infer:
     # 门槛：分节写了小计，总分必须对上；每题偏差 ≤ INFER_TOL_Q 分
     worst = max(deviations, key=lambda d: abs(d[1] - d[2]), default=("-", 0, 0))
     diff_total = total - expected["total_score"]
@@ -169,7 +174,8 @@ PY
 
 if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
   RUNS=("$PAPER|$EXPECTED|strict")
-  [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer")
+  [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer"
+                                                         "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate")
   TASKS=()
   for run in "${RUNS[@]}"; do
     paper="${run%%|*}"
