@@ -96,7 +96,8 @@ class WordQuestionSplitter:
         (r'^\((\d+)\)\s*', 0.9, 'parenthesis'),    # (1)
         (r'^([一二三四五六七八九十]+)[.、]\s*', 0.8, 'chinese'),  # 一、
     ]
-    TABLE_CUE_PATTERN = re.compile(r"(如下表|下表|结果如下表|表中|表格|表\s*\d+|table)", re.IGNORECASE)
+    # 「元素周期表中」指通用参考表、不是题目附表，不算要带表格
+    TABLE_CUE_PATTERN = re.compile(r"(如下表|下表|结果如下表|(?<!周期)表中|表格|表\s*\d+|table)", re.IGNORECASE)
     IMAGE_CUE_PATTERN = re.compile(r"(如下图|下图|如图|图中|图\s*\d+|曲线|电泳|figure|fig)", re.IGNORECASE)
 
     # OOXML 命名空间（Clark 记法，与 lxml element.tag 对齐）

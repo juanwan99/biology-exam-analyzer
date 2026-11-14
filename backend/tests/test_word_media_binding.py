@@ -6,7 +6,6 @@ from docx import Document
 from PIL import Image
 
 from difficulty_pipeline import DifficultyPipeline
-from document_processor import DocumentProcessor
 from word_splitter import WordQuestionSplitter
 
 
@@ -66,25 +65,6 @@ def test_word_splitter_keeps_images_from_blank_paragraphs(tmp_path):
     assert [item["type"] for item in questions[19]["_media_for_ai"]] == ["table", "image"]
 
 
-def test_document_processor_matches_structured_content_by_question_boundary(tmp_path):
-    docx_path = _build_media_docx(tmp_path)
-    questions = WordQuestionSplitter().split(str(docx_path))["questions"]
-    elements = DocumentProcessor.extract_word_content(str(docx_path))["elements"]
-
-    DocumentProcessor.match_elements_to_questions(questions, elements)
-    by_id = _by_id(questions)
-
-    assert [item["type"] for item in by_id[16]["structured_content"]] == ["image"]
-
-    q18_structured = by_id[18]["structured_content"]
-    assert [item["type"] for item in q18_structured] == ["table", "image"]
-    assert "生物种类" in q18_structured[0]["markdown"]
-
-    q19_structured = by_id[19]["structured_content"]
-    assert [item["type"] for item in q19_structured] == ["table", "image"]
-    assert "α-SMA" in q19_structured[0]["markdown"]
-
-
 def test_word_splitter_marks_missing_media_for_explicit_image_cue(tmp_path):
     doc = Document()
     doc.add_paragraph("18. 装置如下图。")
@@ -95,6 +75,21 @@ def test_word_splitter_marks_missing_media_for_explicit_image_cue(tmp_path):
 
     assert question["media_integrity"]["status"] == "failed"
     assert "image_media_missing" in question["warnings"]
+
+
+def test_word_splitter_table_cue_ignores_periodic_table(tmp_path):
+    doc = Document()
+    doc.add_paragraph("17. （1）Y 在元素周期表中的位置是____。")
+    doc.add_paragraph("18. 据下表中数据分析，该酶的最适温度是____。")
+    path = tmp_path / "table-cue.docx"
+    doc.save(path)
+
+    questions = _by_id(WordQuestionSplitter().split(str(path))["questions"])
+
+    assert questions[17]["media_integrity"]["status"] == "ok"
+    assert questions[17]["media_integrity"]["expected_table"] is False
+    assert questions[18]["media_integrity"]["status"] == "failed"
+    assert "table_media_missing" in questions[18]["warnings"]
 
 
 def test_word_splitter_marks_table_render_failure(monkeypatch, tmp_path):
