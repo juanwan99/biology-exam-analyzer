@@ -561,10 +561,11 @@ class WordQuestionSplitter:
                     logger.info(f"[分节检测] 识别到分节标题: {section_header}")
                     continue
 
-                # 检测是否为题号；题号只往上涨（新分节可重新编号），否则是题内的小问、表格小数
+                # 检测是否为题号；「1.2026年」「0.85」这种分隔符后紧跟数字的，
+                # 只认下一题号或本节第一题，否则是题内表格的小数
                 question_id, pattern_type = self._detect_question_number(text)
                 if (question_id is not None and current_question and not in_section_intro
-                        and question_id <= current_question.id):
+                        and re.match(r'^\d+[.、．]\d', text) and question_id != current_question.id + 1):
                     question_id = None
 
                 if question_id is None and in_section_intro and text:

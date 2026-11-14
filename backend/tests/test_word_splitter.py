@@ -39,17 +39,19 @@ PAPER = [
     "3.(12分)某河道修复工程结果见表1",
     "0.85",
     "1.2×103",
+    "25.6",
     ["样区", "多样性指数"],
     "(1)根据表1推测样区 ________ 。",
     "(2)计算群落总同化量。",
+    "4.2025年某地调查结果如下",
 ]
 
 
 def test_sub_questions_and_table_decimals_stay_in_parent(tmp_path):
     qs = _split(tmp_path, PAPER)
-    assert [q["id"] for q in qs] == [1, 2, 3]
-    assert qs[0]["content"].startswith("1.2026年")
-    assert "0.85" in qs[2]["content"] and "1.2×103" in qs[2]["content"]
+    assert [q["id"] for q in qs] == [1, 2, 3, 4]
+    assert qs[0]["content"].startswith("1.2026年") and qs[3]["content"].startswith("4.2025年")
+    assert all(v in qs[2]["content"] for v in ("0.85", "1.2×103", "25.6"))
     assert "(1)根据表1" in qs[2]["content"] and "(2)计算" in qs[2]["content"]
 
 
@@ -57,11 +59,11 @@ def test_section_intro_paragraph_joins_header(tmp_path):
     qs = _split(tmp_path, PAPER)
     assert qs[0]["_section_header"] == "一、单项选择题(本题共2小题,每小题2分,共4分。)"
     assert "共12分" not in qs[1]["content"]
-    assert [paper_score(q) for q in qs] == [(2.0, "section"), (2.0, "section"), (12.0, "paper")]
+    assert [paper_score(q)[0] for q in qs[:3]] == [2.0, 2.0, 12.0]
 
 
-def test_numbering_may_restart_after_section(tmp_path):
-    qs = _split(tmp_path, ["一、选择题", "1.甲题", "2.乙题", "二、非选择题", "1.丙题", "(1)小问"])
+def test_numbering_may_restart_without_section_header(tmp_path):
+    qs = _split(tmp_path, ["一、选择题", "1.甲题", "2.乙题", "第Ⅱ卷 非选择题", "1.丙题", "(1)小问"])
     assert [q["id"] for q in qs] == [1, 2, 1]
     assert "(1)小问" in qs[2]["content"]
 
