@@ -90,10 +90,9 @@ def _pdf_to_png(pdf_path: str, dpi: int = 150) -> Optional[bytes]:
 class WordQuestionSplitter:
     """Word文档题目拆分器"""
 
-    # 题号正则模式（优先级从高到低）
+    # 大题号正则模式（「(1)」「（1）」是小问，不在这里）
     QUESTION_PATTERNS = [
-        (r'^(\d+)[.、]\s*', 1.0, 'standard'),       # 1. 或 1、
-        (r'^\((\d+)\)\s*', 0.9, 'parenthesis'),    # (1)
+        (r'^(\d+)[.、．]\s*', 1.0, 'standard'),       # 1. 或 1、或 1．
         (r'^([一二三四五六七八九十]+)[.、]\s*', 0.8, 'chinese'),  # 一、
     ]
     # 「元素周期表中」指通用参考表、不是题目附表，不算要带表格
@@ -548,6 +547,7 @@ class WordQuestionSplitter:
         questions = []
         current_question = None
         current_section_header = None  # 当前分节标题
+        in_section_intro = False  # 分节标题之后、本节第一题之前
 
         for element in elements:
             if element["type"] == "paragraph":
@@ -557,13 +557,23 @@ class WordQuestionSplitter:
                 section_header = self._detect_section_header(text)
                 if section_header:
                     current_section_header = section_header
+                    in_section_intro = True
                     logger.info(f"[分节检测] 识别到分节标题: {section_header}")
                     continue
 
-                # 检测是否为题号
+                # 检测是否为题号；题号只往上涨（新分节可重新编号），否则是题内的小问、表格小数
                 question_id, pattern_type = self._detect_question_number(text)
+                if (question_id is not None and current_question and not in_section_intro
+                        and question_id <= current_question.id):
+                    question_id = None
+
+                if question_id is None and in_section_intro and text:
+                    # 分节说明另起一段，如「(本题共12小题,每小题2分,共24分。)」
+                    current_section_header += text
+                    text = ""
 
                 if question_id is not None:
+                    in_section_intro = False
                     # 新题目开始
                     if current_question:
                         questions.append(current_question)
