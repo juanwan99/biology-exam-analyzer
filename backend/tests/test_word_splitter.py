@@ -63,9 +63,11 @@ def test_section_intro_paragraph_joins_header(tmp_path):
 
 
 def test_numbering_may_restart_without_section_header(tmp_path):
-    qs = _split(tmp_path, ["一、选择题", "1.甲题", "2.乙题", "第Ⅱ卷 非选择题", "1.丙题", "(1)小问"])
+    qs = _split(tmp_path, ["一、选择题", "1.甲题", "2.乙题", "第Ⅱ卷 非选择题", "乙题续文", "1.丙题", "(1)小问"])
     assert [q["id"] for q in qs] == [1, 2, 1]
     assert "(1)小问" in qs[2]["content"]
+    # 分节标题后不像分节说明的文字照旧归上一题，不并进标题（ap-review #41）
+    assert "乙题续文" in qs[1]["content"] and "乙题续文" not in qs[2]["_section_header"]
 
 
 BIO06 = os.environ.get("BEA_WORD_BIO06")

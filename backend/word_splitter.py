@@ -568,8 +568,9 @@ class WordQuestionSplitter:
                         and re.match(r'^\d+[.、．]\d', text) and question_id != current_question.id + 1):
                     question_id = None
 
-                if question_id is None and in_section_intro and text:
-                    # 分节说明另起一段，如「(本题共12小题,每小题2分,共24分。)」
+                if (question_id is None and in_section_intro
+                        and re.search(r'共\s*\d+\s*小?题|每小题|共\s*\d+\s*分', text)):
+                    # 分节说明另起一段，如「(本题共12小题,每小题2分,共24分。)」；别的文字照旧归上一题
                     current_section_header += text
                     text = ""
 
