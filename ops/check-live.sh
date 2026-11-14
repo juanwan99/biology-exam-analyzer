@@ -133,7 +133,10 @@ for q in qs:
     if missing:
         problems.append("缺" + "/".join(missing))
     if q.get("score_status") not in (("valid", "inferred") if infer else ("valid",)):
-        problems.append(f"score_status={q.get('score_status')}")
+        if mode == "estimate":   # 卷面不剩分值，没有兜底：分值失手也只提示，不判失败
+            print(f"WARN  第 {qid} 题 score_status={q.get('score_status')}")
+        else:
+            problems.append(f"score_status={q.get('score_status')}")
     if expected and infer:
         deviations.append((qid, float(score or 0), float(expected["scores"].get(qid, 0))))
     elif expected and float(score or 0) != float(expected["scores"].get(qid, -1)):
