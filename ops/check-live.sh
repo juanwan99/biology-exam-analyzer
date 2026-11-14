@@ -132,7 +132,7 @@ for q in qs:
     missing = [name for name, ok in [
         ("知识点", a.get("knowledge_points")),
         ("认知层级", a.get("bloom_level")),
-        ("难度", d.get("difficulty_label")),
+        ("难度", d.get("difficulty_label") not in (None, "", "未评估")),   # 难度被拦（如媒体完整性失败）时标「未评估」
         ("素养", comp.get("primary_competency")),
     ] if not ok]
     problems = []
