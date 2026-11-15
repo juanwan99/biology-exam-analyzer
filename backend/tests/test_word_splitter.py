@@ -1,4 +1,4 @@
-"""Word 拆题题号 / 分节规则（#40）。
+"""Word 拆题题号 / 分节规则（#40、#43）。
 
 真卷回归（#35）：卷子不进仓（仓公开），设 BEA_WORD_BIO06 指向 06_生物_试题.docx 才跑：
   BEA_WORD_BIO06=/w/word06.docx python -m pytest -q tests/test_word_splitter.py
@@ -69,6 +69,20 @@ def test_numbering_may_restart_without_section_header(tmp_path):
     # 分节标题后不像分节说明的文字照旧归上一题，不并进标题（ap-review #41）
     assert "乙题续文" in qs[1]["content"] and "乙题续文" not in qs[2]["_section_header"]
 
+
+
+def test_answer_version_paper(tmp_path):
+    # 解析版：全角「1．」注意事项、「单选题」分节、【分析】里的「1、2、」列表都不拆成题（#43）
+    qs = _split(tmp_path, [
+        "注意事项：", "1．答题前，先将自己的姓名、准考证号填写在答题卡上。", "2．考试结束后，请将试卷和答题卡一并上交。",
+        "一、单选题（每小题6分，共12分）",
+        "1. 下列叙述正确的是（    ）", "A. 甲", "【答案】C", "【解析】", "【分析】1、植物激素是植物体内产生的",
+        "2、植物激素包括生长素等", "【详解】A、赤霉素促进种子萌发",
+        "2. 下列叙述错误的是（    ）", "【答案】D",
+    ])
+    assert [q["id"] for q in qs] == [1, 2]
+    assert [paper_score(q)[0] for q in qs] == [6.0, 6.0]
+    assert "2、植物激素包括生长素等" in qs[0]["answer"] and "答题卡" not in qs[0]["content"]
 
 BIO06 = os.environ.get("BEA_WORD_BIO06")
 

@@ -77,6 +77,27 @@ def test_scores_from_section_and_head():
     assert [paper_score(q) for q in qs] == [(2.0, "section"), (2.0, "section"), (12.0, "paper")]
 
 
+
+def test_answer_version_paper():
+    # 解析版：全角「1．」注意事项、「单选题」分节、【分析】里的「1、2、」列表、行首小数都不拆成题（#43）
+    qs = _split(_pages(
+        ["1．答题前，先将自己的姓名、准考证号填写在答题卡上。", "2．考试结束后，请将试卷和答题卡一并上交。",
+         "一、单选题（每小题6分，共12分）", "1. 生态足迹由0.3212hm2下降至", "0.2958hm2，下列叙述正确的是（ ）"],
+        ["【答案】D", "【分析】1、脂肪：由三分子脂肪酸构成", "2、磷脂：构成膜的重要成分", "3、固醇：维持新陈代谢"],
+        ["2. 下列叙述错误的是（ ）", "【答案】C"],
+    ))
+    assert [q["id"] for q in qs] == [1, 2]
+    assert [paper_score(q)[0] for q in qs] == [6.0, 6.0]
+    assert "2、磷脂：构成膜的重要成分" in qs[0]["answer"] and "0.2958hm2" in qs[0]["content"]
+
+
+def test_section_intro_line_joins_header():
+    qs = _split(_pages(["第一部分", "本部分共2题，每题2分，共4分。在每题列出的四个选项中，选出最符合题目要求的一项。",
+                        "1.甲题", "2.乙题"]))
+    assert [q["id"] for q in qs] == [1, 2]
+    assert [paper_score(q)[0] for q in qs] == [2.0, 2.0]
+    assert "本部分" not in qs[0]["content"]
+
 MOCK2026 = os.environ.get("BEA_PDF_MOCK2026")
 
 

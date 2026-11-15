@@ -19,6 +19,7 @@ from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 from PIL import Image, ImageDraw, ImageFont
 from logger import get_logger
+from question_numbering import Numbering, is_section_intro, section_header
 
 logger = get_logger()
 
@@ -90,11 +91,6 @@ def _pdf_to_png(pdf_path: str, dpi: int = 150) -> Optional[bytes]:
 class WordQuestionSplitter:
     """Word文档题目拆分器"""
 
-    # 大题号正则模式（「(1)」「（1）」是小问，不在这里）
-    QUESTION_PATTERNS = [
-        (r'^(\d+)[.、．]\s*', 1.0, 'standard'),       # 1. 或 1、或 1．
-        (r'^([一二三四五六七八九十]+)[.、]\s*', 0.8, 'chinese'),  # 一、
-    ]
     # 「元素周期表中」指通用参考表、不是题目附表，不算要带表格
     TABLE_CUE_PATTERN = re.compile(r"(如下表|下表|结果如下表|(?<!周期)表中|表格|表\s*\d+|table)", re.IGNORECASE)
     IMAGE_CUE_PATTERN = re.compile(r"(如下图|下图|如图|图中|图\s*\d+|曲线|电泳|figure|fig)", re.IGNORECASE)
@@ -547,35 +543,29 @@ class WordQuestionSplitter:
         questions = []
         current_question = None
         current_section_header = None  # 当前分节标题
-        in_section_intro = False  # 分节标题之后、本节第一题之前
+        numbering = Numbering()
 
         for element in elements:
             if element["type"] == "paragraph":
                 text = element["text"]
 
                 # 检测是否为分节标题
-                section_header = self._detect_section_header(text)
-                if section_header:
-                    current_section_header = section_header
-                    in_section_intro = True
-                    logger.info(f"[分节检测] 识别到分节标题: {section_header}")
+                header = section_header(text)
+                if header:
+                    current_section_header = header
+                    numbering.section()
+                    logger.info(f"[分节检测] 识别到分节标题: {header}")
                     continue
 
-                # 检测是否为题号；「1.2026年」「0.85」这种分隔符后紧跟数字的，
-                # 只认下一题号或本节第一题，否则是题内表格的小数
-                question_id, pattern_type = self._detect_question_number(text)
-                if (question_id is not None and current_question and not in_section_intro
-                        and re.match(r'^\d+[.、．]\d', text) and question_id != current_question.id + 1):
-                    question_id = None
+                in_section_intro = numbering.in_intro
+                question_id = numbering.accept(text)
 
-                if (question_id is None and in_section_intro
-                        and re.search(r'共\s*\d+\s*小?题|每小题|共\s*\d+\s*分', text)):
-                    # 分节说明另起一段，如「(本题共12小题,每小题2分,共24分。)」；别的文字照旧归上一题
+                if question_id is None and in_section_intro and is_section_intro(text):
+                    # 分节说明并进分节标题；别的文字照旧归上一题
                     current_section_header += text
                     text = ""
 
                 if question_id is not None:
-                    in_section_intro = False
                     # 新题目开始
                     if current_question:
                         questions.append(current_question)
@@ -593,7 +583,7 @@ class WordQuestionSplitter:
                         section_header=current_section_header,  # 附加分节标题
                         ole_previews=list(element.get("ole_previews", [])),
                     )
-                    logger.debug(f"[题号检测] 识别到题目{question_id}，模式={pattern_type}")
+                    logger.debug(f"[题号检测] 识别到题目{question_id}")
                 else:
                     # 题目内容追加
                     if current_question:
@@ -632,80 +622,6 @@ class WordQuestionSplitter:
             questions.append(current_question)
 
         return questions
-
-    def _detect_section_header(self, text: str) -> Optional[str]:
-        """
-        检测文本是否为分节标题
-
-        返回: 分节标题文本 或 None
-
-        示例匹配：
-        - "一、单选题（1-15题，每题2分，共30分）"
-        - "二、多选题：本题共5小题，每小题3分，共15分"
-        - "三、非选择题（本题包括必考题和选考题两部分）"
-        """
-        section_patterns = [
-            r'^[一二三四五六七八九十]+[.、]\s*.*(选择题|非选择题|实验题|综合题|填空题|简答题)',
-            r'^[一二三四五六七八九十]+[.、]\s*本题共\d+小题',
-        ]
-
-        for pattern in section_patterns:
-            if re.search(pattern, text[:100]):  # 检查前100字符
-                logger.debug(f"[分节检测] 匹配到分节标题: {text[:50]}")
-                return text.strip()
-
-        return None
-
-    def _detect_question_number(self, text: str) -> Tuple[Optional[int], Optional[str]]:
-        """
-        检测文本是否为题号
-
-        返回: (题号, 模式类型) 或 (None, None)
-        """
-        # 过滤考试注意事项（保留，不是分节标题）
-        noise_patterns = [
-            r'^[0-9]+[.、]\s*(答题前|请按|选择题用|考试结束|注意事项|填涂|核对)',
-            r'^[0-9]+[.、].*(答题卡|试卷|草稿纸|准考证|条形码|铅笔|签字笔)',
-        ]
-
-        for noise_pattern in noise_patterns:
-            if re.search(noise_pattern, text[:50]):
-                logger.debug(f"[题号检测] 过滤噪音: {text[:30]}")
-                return None, None
-
-        for pattern, confidence, pattern_type in self.QUESTION_PATTERNS:
-            match = re.match(pattern, text)
-            if match:
-                num_str = match.group(1)
-
-                # 转为阿拉伯数字
-                if pattern_type == 'chinese':
-                    question_id = self._chinese_to_num(num_str)
-                else:
-                    question_id = int(num_str)
-
-                return question_id, pattern_type
-
-        return None, None
-
-    def _chinese_to_num(self, chinese: str) -> int:
-        """中文数字转阿拉伯数字"""
-        chinese_num_map = {
-            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10
-        }
-
-        if chinese in chinese_num_map:
-            return chinese_num_map[chinese]
-
-        # 处理"十一"、"十二"等
-        if chinese.startswith('十'):
-            if len(chinese) == 1:
-                return 10
-            else:
-                return 10 + chinese_num_map.get(chinese[1], 0)
-
-        return 0
 
     def _question_to_dict(self, question: Question) -> Dict[str, Any]:
         """
