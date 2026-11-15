@@ -763,8 +763,9 @@ async def confirm_split(
 
             # 回填分节标题和分值（auto_split 前端返回时被过滤）
             if original_q:
-                if "_section_header" in original_q and "_section_header" not in merged_q:
-                    merged_q["_section_header"] = original_q["_section_header"]
+                for key in ("_section_header", "_group_material"):
+                    if key in original_q and key not in merged_q:
+                        merged_q[key] = original_q[key]
                 if "total_score" in original_q and not merged_q.get("total_score"):
                     merged_q["total_score"] = original_q["total_score"]
 

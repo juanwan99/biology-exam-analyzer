@@ -3,7 +3,7 @@
 #   1. check-live.sh 全流程（容器 / 健康 / 前端 / 专家登录 / 样卷，会调一次 LLM，跑完删本次测试记录）
 #   2. 现网 HEAD 的全量单测：git archive 进一次性容器跑（biology-backend 镜像、--network none），不碰现网目录
 #   3. 真卷回归：同样一次性容器，卷子目录只读挂进去，题数 + 分值一变或卷子不在都判 FAIL
-#      清单在 test_pdf_splitter / test_word_splitter 的 REAL_PAPERS（#7/#27/#35/#40/#42）
+#      清单在 test_pdf_splitter / test_word_splitter 的 REAL_PAPERS / REAL_GROUPS（#7/#27/#35/#40/#42/#45）
 #   4. 运维项：后端 24 h ERROR 数（>0 判 FAIL）；现网文字链、deepseek /models 状态码只打印（key 归业主）
 #
 # 用法：bash ops/daily.sh

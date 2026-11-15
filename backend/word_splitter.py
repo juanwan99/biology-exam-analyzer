@@ -19,6 +19,8 @@ from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 from PIL import Image, ImageDraw, ImageFont
 from logger import get_logger
+from answer_blocks import ANSWER_MARK
+from question_groups import group_spans, is_group_intro
 from question_numbering import Numbering, is_section_intro, section_header
 
 logger = get_logger()
@@ -35,6 +37,16 @@ class Question:
     warnings: List[str]
     section_header: Optional[str] = None  # 分节标题
     # OLE / VML 对象的矢量预览图（WMF/EMF 原始字节）：题干说「如图」却没取到图时才渲染兜底
+    ole_previews: List[Tuple[bytes, str]] = field(default_factory=list)
+    group: Optional["_Group"] = None  # 题组共用材料（#45），文字不进 content，图表组内每题都带
+
+
+@dataclass
+class _Group:
+    """「阅读下列材料，完成下面小题」到组内第一题之间的段落、图表。"""
+    text: str
+    media: List[Dict[str, Any]] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
     ole_previews: List[Tuple[bytes, str]] = field(default_factory=list)
 
 
@@ -544,6 +556,7 @@ class WordQuestionSplitter:
         current_question = None
         current_section_header = None  # 当前分节标题
         numbering = Numbering()
+        group = None  # 题组引导语之后、组内第一题之前的材料
 
         for element in elements:
             if element["type"] == "paragraph":
@@ -555,6 +568,11 @@ class WordQuestionSplitter:
                     current_section_header = header
                     numbering.section()
                     logger.info(f"[分节检测] 识别到分节标题: {header}")
+                    continue
+
+                if is_group_intro(text):
+                    group = _Group(text=text)
+                    self._absorb(group, element)
                     continue
 
                 in_section_intro = numbering.in_intro
@@ -583,7 +601,17 @@ class WordQuestionSplitter:
                         section_header=current_section_header,  # 附加分节标题
                         ole_previews=list(element.get("ole_previews", [])),
                     )
+                    if group:
+                        current_question.group = group
+                        current_question.media[:0] = group.media
+                        current_question.warnings[:0] = group.warnings
+                        current_question.ole_previews[:0] = group.ole_previews
+                        group = None
                     logger.debug(f"[题号检测] 识别到题目{question_id}")
+                elif group:
+                    if text:
+                        group.text += "\n" + text
+                    self._absorb(group, element)
                 else:
                     # 题目内容追加
                     if current_question:
@@ -598,6 +626,12 @@ class WordQuestionSplitter:
                             {"type": "image", "base64": img_base64}
                             for img_base64 in element["images"]
                         )
+
+            elif element["type"] == "table" and group:
+                group.warnings.extend(w for w in element.get("warnings", []) if w not in group.warnings)
+                group.media.append({"type": "table", "base64": element["image_base64"]})
+                if element.get("text"):
+                    group.text += "\n" + element["text"]
 
             elif element["type"] == "table":
                 # 表格归属到当前题目
@@ -617,11 +651,35 @@ class WordQuestionSplitter:
                     if table_text:
                         current_question.content += "\n" + table_text
 
+        if group and current_question:  # 引导语之后到卷末都没有题：材料照旧归最后一题
+            logger.warning(f"[Word拆分] 题组引导语后没有题，并回第{current_question.id}题: {group.text[:30]}")
+            current_question.content += "\n" + group.text
+            current_question.media.extend(group.media)
+            current_question.ole_previews.extend(group.ole_previews)
+
         # 添加最后一道题
         if current_question:
             questions.append(current_question)
 
+        spans = group_spans(
+            [q.group is not None for q in questions],
+            [any(ANSWER_MARK.match(line) for line in q.content.split("\n")) for q in questions],
+            [q.section_header for q in questions],
+        )
+        for start, members in spans.items():
+            group = questions[start].group
+            for q in (questions[i] for i in members[1:]):
+                q.group = group
+                q.media[:0] = group.media
+                q.ole_previews[:0] = group.ole_previews
         return questions
+
+    @staticmethod
+    def _absorb(group: "_Group", element: Dict) -> None:
+        """段落里的图、告警、OLE 预览归题组。"""
+        group.media.extend({"type": "image", "base64": img} for img in element["images"])
+        group.warnings.extend(w for w in element.get("warnings", []) if w not in group.warnings)
+        group.ole_previews.extend(element.get("ole_previews", []))
 
     def _question_to_dict(self, question: Question) -> Dict[str, Any]:
         """
@@ -640,8 +698,10 @@ class WordQuestionSplitter:
                     "base64": item["base64"]
                 })
 
-        expected_table = bool(self.TABLE_CUE_PATTERN.search(question.content or ""))
-        expected_image = bool(self.IMAGE_CUE_PATTERN.search(question.content or ""))
+        # 「如图」「下表」可能写在题组材料里
+        cue_text = f"{question.group.text}\n{question.content}" if question.group else (question.content or "")
+        expected_table = bool(self.TABLE_CUE_PATTERN.search(cue_text))
+        expected_image = bool(self.IMAGE_CUE_PATTERN.search(cue_text))
         if expected_image and not any(item["type"] == "image" for item in media_for_ai):
             # 题干「如图」却没有位图：图可能画在 MathType / OLE 对象里，渲染其中最大的预览图兜底
             fallback = self._render_largest_ole_preview(question.ole_previews)
@@ -681,5 +741,6 @@ class WordQuestionSplitter:
                 "actual_images": image_count,
                 "warnings": integrity_warnings,
             },
-            "_section_header": question.section_header  # 分节标题（如"一、单选题（1-15题，每题2分，共30分）"）
+            "_section_header": question.section_header,  # 分节标题（如"一、单选题（1-15题，每题2分，共30分）"）
+            "_group_material": question.group.text if question.group else "",  # 题组共用材料，分析时接在题干后（#45）
         }

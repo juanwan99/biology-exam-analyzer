@@ -1,4 +1,4 @@
-"""PDF 规则拆题：大题号 / 小问 / 卷首说明 / 页眉导航（#7）、剥【解析】（#28）。
+"""PDF 规则拆题：大题号 / 小问 / 卷首说明 / 页眉导航（#7）、剥【解析】（#28）、题组材料（#45）。
 
 真卷回归：卷子不进仓（仓公开），设 BEA_REAL_DIR 指向放卷子的目录才跑（ECS /home/ops/bea-work7，见 REAL_PAPERS）：
   BEA_REAL_DIR=/w python -m pytest -q tests/test_pdf_splitter.py
@@ -99,13 +99,38 @@ def test_section_intro_line_joins_header():
     assert [paper_score(q)[0] for q in qs] == [2.0, 2.0]
     assert "本部分" not in qs[0]["content"]
 
+
+def test_group_material_shared_within_group():
+    # 题组引导语 + 材料不归上一题，组内各题共用、都挂材料所在页，连到组末带答案的那题为止（#45）
+    qs = _split(_pages(
+        ["一、选择题（每小题2分，共8分）", "1. 甲题（ ）", "【答案】A", "阅读下列材料，完成下面小题。", "柿子醋的酿造工艺"],
+        ["流程如图所示。", "2. 乙题（ ）", "3. 丙题（ ）", "【答案】2. A 3. D"], ["4. 丁题（ ）"], ["【答案】B"],
+    ))
+    assert [q["id"] for q in qs] == [1, 2, 3, 4]
+    assert "柿子" not in qs[0]["content"] + qs[0]["answer"]
+    material = "阅读下列材料，完成下面小题。\n柿子醋的酿造工艺\n流程如图所示。"
+    assert [q["_group_material"] for q in qs] == ["", material, material, ""]
+    assert [q["page_indices"] for q in qs] == [[0], [0, 1], [0, 1], [2, 3]]
+    assert "answer" not in qs[1] and qs[2]["answer"].startswith("【答案】2. A")
+    # 原卷没有答案块，只给组内第一题；「完成第2～3题」也是题组，大题里的「回答下列问题」不是；
+    # 引导语后到卷末都没有题，材料照旧归最后一题
+    plain = _split(_pages(["1. 甲题", "阅读以下的材料，完成第2～3题。", "材料正文", "2. 乙题", "3. 丙题",
+                           "4. 丁题", "根据材料回答下列问题：", "（1）小问", "阅读材料，完成下面小题。", "卷末材料"]))
+    assert [bool(q["_group_material"]) for q in plain] == [False, True, False, False]
+    assert "材料正文" not in plain[0]["content"]
+    assert "（1）小问" in plain[3]["content"] and "卷末材料" in plain[3]["content"]
+
+
 REAL_DIR = os.environ.get("BEA_REAL_DIR")
 # 卷子 → 每题卷面分值（题号从 1 连续；None = 卷面没标该题分值），期望值对卷面分节说明 / 题头人工核
 REAL_PAPERS = {
     "mock2026.pdf": [2.0] * 12 + [4.0] * 4 + [12.0] * 5,  # 12×2 + 4×4 + 5 大题（#7）
     "gk-jiangsu.pdf": [2.0] * 15 + [3.0] * 4 + [None] * 5,  # 单选 + 多选 + 5 大题未标分（#42）
-    "gk-hubei.pdf": [2.0] * 18 + [None] * 4,  # 18 单选 + 4 大题未标分（#42；浙江卷待 #45 题组材料修好再进）
+    "gk-hubei.pdf": [2.0] * 18 + [None] * 4,  # 18 单选 + 4 大题未标分（#42）
+    "gk-zhejiang.pdf": [2.0] * 20 + [None] * 5,  # 20 选择含两个题组，大题未标分（#45）
 }
+# 卷子 → 题组（组内题号）；组内只有组末一题带答案（#45）
+REAL_GROUPS = {"gk-zhejiang.pdf": [[10, 11], [19, 20]]}
 
 
 @pytest.mark.skipif(not REAL_DIR, reason="真卷不进仓；设 BEA_REAL_DIR 才跑")
@@ -120,8 +145,13 @@ def test_real_pdf_regression(name, scores):
     assert [paper_score(q)[0] for q in qs] == scores
     assert splitter._calculate_confidence(questions, pages) >= 0.7  # 低于 0.7 才告警
     assert all("选选项项" not in q["content"] for q in qs)
-    # #28：解析版每题的【答案】【解析】都剥进 answer，题干不剩；页面图上答案行涂白
-    assert all(not re.search("【(答案|解析)】", q["content"]) and q["answer"].startswith("【") for q in qs)
+    groups = REAL_GROUPS.get(name, [])
+    assert [q["id"] for q in qs if q["_group_material"]] == [i for g in groups for i in g]
+    assert all("阅读下列材料" not in q["content"] + q.get("answer", "") for q in qs)
+    # #28：解析版每题的【答案】【解析】都剥进 answer（题组只有组末一题带），题干不剩；页面图上答案行涂白
+    unanswered = {i for g in groups for i in g[:-1]}
+    assert all(not re.search("【(答案|解析)】", q["content"]) for q in qs)
+    assert all(q.get("answer", "").startswith("【") != (q["id"] in unanswered) for q in qs)
     masks = splitter._answer_boxes(questions, pages)
     page_num = min(masks)
     dpi = 50
