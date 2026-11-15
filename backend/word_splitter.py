@@ -742,5 +742,5 @@ class WordQuestionSplitter:
                 "warnings": integrity_warnings,
             },
             "_section_header": question.section_header,  # 分节标题（如"一、单选题（1-15题，每题2分，共30分）"）
-            "_group_material": question.group.text if question.group else "",  # 题组共用材料，分析时接在题干前（#45）
+            "_group_material": question.group.text if question.group else "",  # 题组共用材料，分析时接在题干后（#45）
         }

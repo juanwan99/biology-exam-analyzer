@@ -1,6 +1,7 @@
 """Word / PDF 拆题共用的题组判定（#45）：「阅读下列材料，完成下面小题。」+ 材料，是后面几道题共用的题干。
 
-引导语结束上一题（不再并进上一题的题干或【答案】块），引导语和材料存进组内题的 `_group_material`，分析时接在题干前。
+引导语结束上一题（不再并进上一题的题干或【答案】块），引导语和材料存进组内题的 `_group_material`，分析时接在题干后
+（题干在前：下游重试按长度截断，材料长了也不挤掉本题题干，ap-review #47）。
 组到哪道题为止：解析版卷子题组的答案合在组末一题后（「【答案】10. A    11. D」），所以组内连到第一道带答案的题；
 卷子没有答案块就只给组内第一题，不猜组长。
 """
@@ -36,7 +37,7 @@ def group_spans(starts: List[bool], answered: List[bool], sections: List[Optiona
 
 
 def with_group_material(question: Dict) -> str:
-    """送 AI 的题干：题组材料 + 本题题干。"""
+    """送 AI 的题干：本题题干 + 题组材料。"""
     content = question.get("content", "")
     material = question.get("_group_material")
-    return f"{material}\n{content}" if material else content
+    return f"{content}\n【题组材料】{material}" if material else content

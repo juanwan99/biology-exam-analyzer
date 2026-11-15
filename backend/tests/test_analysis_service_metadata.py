@@ -194,8 +194,8 @@ async def test_analyze_question_passes_media_and_group_material_downstream():
 
     assert difficulty.question["media_items"][0]["base64"] == "iVBORw0KGgoAAA"
     assert competency.question["media_items"][0]["base64"] == "iVBORw0KGgoAAA"
-    # 题组材料接在题干前送 AI（#45）
-    expected = "阅读下列材料，完成下面小题。\n材料正文\nquestion with chart"
+    # 题组材料接在题干后送 AI，重试截断时不挤掉本题题干（#45）
+    expected = "question with chart\n【题组材料】阅读下列材料，完成下面小题。\n材料正文"
     assert analyzer.text == difficulty.question["content"] == competency.question["content"] == expected
 
 
