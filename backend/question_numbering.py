@@ -1,7 +1,8 @@
 """Word / PDF 拆题共用的大题号判定（#43）：卷首注意事项、分节标题、这一行的题号接不接受。
 
 解析版卷子每题后面跟着【答案】【分析】【详解】，里面常有「1、脂肪…」「2、磷脂…」这种列表，
-编号还可能恰好等于下一题号；所以本题进了答案块之后，只接受「当前题号 +1」且分隔符和本题同类的题号。
+编号还可能恰好等于下一题号；所以本题进了答案块之后，只接受比当前题号大、且分隔符和本题同类的题号
+（理综抽出的生物卷 32 题后直接是 37 题，不能只认 +1）。
 「1.2026年」「0.85」这种分隔符后紧跟数字的，同样只认下一题号（#40）。分节标题之后本节第一题不限。
 """
 
@@ -26,6 +27,7 @@ _SECTION = [
     re.compile(r"^[一二三四五六七八九十]+[.、．]\s*.*(选择题|单选题|多选题|非选择题|实验题|综合题|填空题|简答题|选考题)"),
     re.compile(r"^[一二三四五六七八九十]+[.、．]\s*本题共\d+小题"),
     re.compile(r"^第[一二三四五六七八九十]+部分"),
+    re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*.*(必考题|选考题|选择题|非选择题)"),
 ]
 
 # 分节说明另起一段 / 一行，如「(本题共12小题,每小题2分,共24分。)」「本部分共15题，每题2分」
@@ -86,7 +88,7 @@ class Numbering:
                 self.in_answer = True
             return None
         if self.current is not None and not self.in_intro:
-            if self.in_answer and (qid != self.current + 1 or sep != self.sep):
+            if self.in_answer and (qid <= self.current or sep != self.sep):
                 return None
             if _DIGIT_AFTER_SEP.match(text) and qid != self.current + 1:
                 return None

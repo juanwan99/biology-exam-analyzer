@@ -27,6 +27,7 @@ def test_section_headers():
     assert section_header("二．多选题：本题共5小题")
     assert section_header("第一部分")
     assert section_header("三、非选择题：本题共5小题，共55分。")
+    assert section_header("（二）选考题：共15分。请考生从2道题中任选一题作答")
     assert section_header("一、下列叙述正确的是") is None
 
 
@@ -49,3 +50,10 @@ def test_numbering_restarts_after_section_even_from_answer_block():
 
 def test_digit_after_separator_only_next_number():
     assert _accepted(["3. 下列叙述", "0.2958hm2 下降至", "1.2×103", "4.2025年调查"]) == [3, 4]
+
+
+def test_numbers_may_jump_after_answer_block():
+    # 理综抽出的生物卷：32 题后是选考 37、38，中间分节标题认不认得出都不吞题
+    lines = ["32. 回答下列问题", "【答案】（1）略", "（二）选考题：共15分", "37. 选修一", "【答案】（1）略", "38. 选修三"]
+    assert _accepted(lines, sections={"（二）选考题：共15分"}) == [32, 37, 38]
+    assert _accepted([line for line in lines if not line.startswith("（二）")]) == [32, 37, 38]
