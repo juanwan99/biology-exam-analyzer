@@ -67,7 +67,7 @@ bash ops/daily.sh   # check-live 全流程 + 现网 HEAD 全量单测（一次�
 
 单测在河源 `biology-backend` 镜像的一次性容器里跑（`git archive` 进容器、`--network none`），本机不需要 venv。
 
-真卷回归：卷子放 ECS 非仓目录 `/home/ops/bea-work7/`（真卷不进仓），清单和期望值在两个测试的 `REAL_PAPERS` 表：PDF `mock2026.pdf`（#7）、`gk-jiangsu.pdf` / `gk-hubei.pdf`（#42，同名 docx 在容器里 soffice 转出）；Word `word06.docx`（#35，原件 `/home/ops/var/dst/06_生物_试题.docx`）、`gk-shandong.docx` / `gk-jia.docx`（#42）。gk-* 原件在 `/home/ops/projects/edu-knowledge-base/work/gaokao_docx/`。加卷：拷进来，期望值对卷面人工核后加进 `REAL_PAPERS`。每天 `ops/daily.sh` 自动跑（#27）；手动在一次性容器里跑：
+真卷回归：卷子放 ECS 非仓目录 `/home/ops/bea-work7/`（真卷不进仓），清单和期望值在两个测试的 `REAL_PAPERS` 表：PDF `mock2026.pdf`（#7）、`gk-jiangsu.pdf` / `gk-hubei.pdf`（#42，同名 docx 在容器里 soffice 转出）、`gk-zhejiang.pdf`（#45）；Word `word06.docx`（#35，原件 `/home/ops/var/dst/06_生物_试题.docx`）、`gk-shandong.docx` / `gk-jia.docx`（#42）、`gk-zhejiang.docx`（#45，题组期望在 `REAL_GROUPS`）。gk-* 原件在 `/home/ops/projects/edu-knowledge-base/work/gaokao_docx/`。加卷：拷进来，期望值对卷面人工核后加进 `REAL_PAPERS`。每天 `ops/daily.sh` 自动跑（#27）；手动在一次性容器里跑：
 
 ```bash
 docker run --rm --entrypoint "" -e BEA_REAL_DIR=/w \

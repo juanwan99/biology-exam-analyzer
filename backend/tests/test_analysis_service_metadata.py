@@ -142,7 +142,15 @@ async def test_analyze_question_does_not_forward_evidence_channel_kwargs():
 
 
 @pytest.mark.asyncio
-async def test_analyze_question_passes_media_to_difficulty_and_competency():
+async def test_analyze_question_passes_media_and_group_material_downstream():
+    class CapturingAnalyzer(FakeAnalyzer):
+        def __init__(self):
+            self.text = None
+
+        async def analyze_question(self, **kwargs):
+            self.text = kwargs["question_text"]
+            return await super().analyze_question(**kwargs)
+
     class CapturingDifficultyEngine(FakeDifficultyEngine):
         def __init__(self):
             self.question = None
@@ -159,10 +167,11 @@ async def test_analyze_question_passes_media_to_difficulty_and_competency():
             self.question = kwargs["question"]
             return await super().analyze_competency(**kwargs)
 
+    analyzer = CapturingAnalyzer()
     difficulty = CapturingDifficultyEngine()
     competency = CapturingCompetencyAnalyzer()
     service = AnalysisService(
-        analyzer=FakeAnalyzer(),
+        analyzer=analyzer,
         difficulty_engine=difficulty,
         competency_analyzer=competency,
         knowledge_mapper=None,
@@ -177,6 +186,7 @@ async def test_analyze_question_passes_media_to_difficulty_and_competency():
             "content": "question with chart",
             "total_score": 2,
             "_media_for_ai": [{"type": "image", "base64": "iVBORw0KGgoAAA"}],
+            "_group_material": "阅读下列材料，完成下面小题。\n材料正文",
         },
         image_bytes=[],
         mode="deep",
@@ -184,6 +194,9 @@ async def test_analyze_question_passes_media_to_difficulty_and_competency():
 
     assert difficulty.question["media_items"][0]["base64"] == "iVBORw0KGgoAAA"
     assert competency.question["media_items"][0]["base64"] == "iVBORw0KGgoAAA"
+    # 题组材料接在题干前送 AI（#45）
+    expected = "阅读下列材料，完成下面小题。\n材料正文\nquestion with chart"
+    assert analyzer.text == difficulty.question["content"] == competency.question["content"] == expected
 
 
 @pytest.mark.asyncio

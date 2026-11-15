@@ -18,6 +18,7 @@ from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
 from score_rules import (SOURCE_MODEL, SOURCE_SECTION_AVG, exceeds_section_total, paper_score,
                          scale_section_scores, section_average_score)
 from subject_config import get_competency_dims, normalize_subject
+from question_groups import with_group_material
 
 logger = get_logger()
 
@@ -105,7 +106,7 @@ class AnalysisService:
                 raise RuntimeError("AI 分析服务未配置")
 
             analysis = await self.analyzer.analyze_question(
-                question_text=question.get("content", ""),
+                question_text=with_group_material(question),
                 question_images=q_images,
                 question_id=q_id,
                 question_type=question_type,
@@ -192,7 +193,7 @@ class AnalysisService:
                 # v2 路径 — SEU 权重 + 独立素养分析补充具体维度/分析说明（F-003）
                 competency_q = {
                     "id": q_id,
-                    "content": question.get("content", ""),
+                    "content": with_group_material(question),
                     "knowledge_points": analysis.get("knowledge_points", []),
                     "media_items": q_media_items,
                     "_media_for_ai": q_media_items,
@@ -240,7 +241,7 @@ class AnalysisService:
             if need_independent_competency:
                 competency_q = {
                     "id": q_id,
-                    "content": question.get("content", ""),
+                    "content": with_group_material(question),
                     "knowledge_points": analysis.get("knowledge_points", []),
                     "media_items": q_media_items,
                     "_media_for_ai": q_media_items,
@@ -309,7 +310,7 @@ class AnalysisService:
         q_image_b64 = base64.b64encode(q_images[0]).decode("utf-8") if q_images else ""
         return {
             "id": question.get("id", 0),
-            "content": question.get("content", ""),
+            "content": with_group_material(question),
             "knowledge_points": analysis.get("knowledge_points", []),
             "total_score": question.get("total_score"),
             "num_options": analysis.get("num_options", 4),

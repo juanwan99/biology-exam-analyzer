@@ -7,6 +7,7 @@ PDF文档题目拆分器
 - 第一个分节标题之前的编号条目（卷首说明、注意事项）在分节后题号重新从小号起时丢弃。
 - 过半页面都出现的行（页眉页脚、课件题号导航）不进题干；重叠绘制的重复字先去重。
 - 【答案】【解析】块不进题干，另存 answer 给报告；页面图上同位置涂白，AI 看图也看不到（#28）。
+- 「阅读下列材料，完成下面小题」+ 材料不归上一题，存进组内各题的 group_material，材料所在页也挂给组内各题（#45）。
 """
 
 import re
@@ -20,6 +21,7 @@ from pdf2image import convert_from_path
 from PIL import ImageDraw
 from answer_blocks import answer_line_flags
 from logger import get_logger
+from question_groups import group_spans, is_group_intro
 from question_numbering import Numbering, is_section_intro, section_header
 
 logger = get_logger()
@@ -37,6 +39,8 @@ class PDFQuestion:
     line_refs: List[Tuple[int, int]] = field(default_factory=list)  # content 每行的 (页, 行号)
     answer: str = ""  # 剥下来的【答案】【解析】原文
     answer_refs: List[Tuple[int, int]] = field(default_factory=list)  # 答案行的 (页, 行号)，页面图上涂白
+    group_material: str = ""  # 题组共用材料（#45），不进 content
+    group_pages: List[int] = field(default_factory=list)  # 材料所在页
 
 
 class PDFQuestionSplitter:
@@ -144,6 +148,7 @@ class PDFQuestionSplitter:
         current_section_header = None
         numbering = Numbering()
         running = self._running_lines(pages_text)
+        group = None  # 题组引导语之后、组内第一题之前的材料
 
         for page_data in pages_text:
             page_num = page_data["page_num"]
@@ -160,6 +165,10 @@ class PDFQuestionSplitter:
                     current_section_header = header
                     numbering.section()
                     logger.debug(f"[PDF拆分] 识别到分节标题: {header[:50]}")
+                    continue
+
+                if is_group_intro(line):
+                    group = ([line], [page_num], [(page_num, line_idx)])  # 材料行、所在页、行位置
                     continue
 
                 # 检测题号
@@ -184,7 +193,16 @@ class PDFQuestionSplitter:
                         section_header=current_section_header,
                         line_refs=[(page_num, line_idx)],
                     )
+                    if group:
+                        current_question.group_material = "\n".join(group[0])
+                        current_question.group_pages = group[1]
+                        group = None
                     logger.debug(f"[PDF拆分] 识别到题目{question_id}，页{page_num+1}")
+                elif group:
+                    group[0].append(line)
+                    group[2].append((page_num, line_idx))
+                    if page_num not in group[1]:
+                        group[1].append(page_num)
                 else:
                     # 追加到当前题目
                     if current_question:
@@ -194,6 +212,12 @@ class PDFQuestionSplitter:
                             current_question.page_indices.append(page_num)
                             current_question.warnings.append("跨页题目")
 
+        if group and current_question:  # 引导语之后到卷末都没有题：材料照旧归最后一题
+            logger.warning(f"[PDF拆分] 题组引导语后没有题，并回第{current_question.id}题: {group[0][0][:30]}")
+            current_question.content += "\n" + "\n".join(group[0])
+            current_question.line_refs.extend(group[2])
+            current_question.page_indices += [p for p in group[1] if p not in current_question.page_indices]
+
         # 添加最后一道题
         if current_question:
             questions.append(current_question)
@@ -201,6 +225,13 @@ class PDFQuestionSplitter:
         questions = self._drop_preamble(questions)
         for q in questions:
             self._strip_answer(q)
+        spans = group_spans([bool(q.group_material) for q in questions], [bool(q.answer) for q in questions],
+                            [q.section_header for q in questions])
+        for start, members in spans.items():
+            head = questions[start]
+            for q in (questions[i] for i in members):
+                q.group_material = head.group_material
+                q.page_indices[:0] = [p for p in head.group_pages if p not in q.page_indices]
         return questions
 
     def _strip_answer(self, question: PDFQuestion) -> None:
@@ -296,7 +327,8 @@ class PDFQuestionSplitter:
 
             # 内部使用
             "_media_for_ai": media_for_ai,
-            "_section_header": question.section_header
+            "_section_header": question.section_header,
+            "_group_material": question.group_material,
         }
         if question.answer:  # 空串不写：报告见不到卷面答案时回落用 AI 作答
             result["answer"] = question.answer
