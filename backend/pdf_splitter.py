@@ -20,6 +20,7 @@ from pdf2image import convert_from_path
 from PIL import ImageDraw
 from answer_blocks import answer_line_flags
 from logger import get_logger
+from question_numbering import Numbering, is_section_intro, section_header
 
 logger = get_logger()
 
@@ -41,22 +42,9 @@ class PDFQuestion:
 class PDFQuestionSplitter:
     """PDF文档题目拆分器"""
 
-    # 大题号正则模式（「(1)」「（1）」是小问，不在这里）
-    QUESTION_PATTERNS = [
-        (r'^(\d+)[.、．]\s*', 1.0, 'standard'),       # 1. 或 1、或 1．
-        (r'^([一二三四五六七八九十]+)[.、．]\s*', 0.8, 'chinese'),  # 一、
-    ]
-
     # 一行出现在不少于这个比例的页面上，算页眉页脚 / 导航（页数够 RUNNING_MIN_PAGES 才判）
     RUNNING_LINE_RATIO = 0.5
     RUNNING_MIN_PAGES = 4
-
-    # 分节标题模式
-    SECTION_PATTERNS = [
-        r'^[一二三四五六七八九十]+[.、．]\s*.*(选择题|非选择题|实验题|综合题|填空题|简答题)',
-        r'^[一二三四五六七八九十]+[.、．]\s*本题共\d+小题',
-        r'^第[一二三四五六七八九十]+部分',
-    ]
 
     def __init__(self):
         logger.info("[PDF拆分器] 初始化完成")
@@ -154,6 +142,7 @@ class PDFQuestionSplitter:
         questions = []
         current_question = None
         current_section_header = None
+        numbering = Numbering()
         running = self._running_lines(pages_text)
 
         for page_data in pages_text:
@@ -166,14 +155,19 @@ class PDFQuestionSplitter:
                     continue
 
                 # 检测分节标题
-                section_header = self._detect_section_header(line)
-                if section_header:
-                    current_section_header = section_header
-                    logger.debug(f"[PDF拆分] 识别到分节标题: {section_header[:50]}")
+                header = section_header(line)
+                if header:
+                    current_section_header = header
+                    numbering.section()
+                    logger.debug(f"[PDF拆分] 识别到分节标题: {header[:50]}")
                     continue
 
                 # 检测题号
-                question_id, pattern_type = self._detect_question_number(line)
+                in_section_intro = numbering.in_intro
+                question_id = numbering.accept(line)
+                if question_id is None and in_section_intro and is_section_intro(line):
+                    current_section_header += line  # 分节说明并进分节标题，不归上一题
+                    continue
 
                 if question_id is not None:
                     # 保存上一道题
@@ -256,57 +250,6 @@ class PDFQuestionSplitter:
             logger.info(f"[PDF拆分] 丢弃分节前的{len(before)}条卷首说明")
             return questions[first:]
         return questions
-
-    def _detect_section_header(self, text: str) -> Optional[str]:
-        """检测分节标题"""
-        for pattern in self.SECTION_PATTERNS:
-            if re.search(pattern, text[:100]):
-                return text.strip()
-        return None
-
-    def _detect_question_number(self, text: str) -> Tuple[Optional[int], Optional[str]]:
-        """检测题号"""
-        # 过滤噪音
-        noise_patterns = [
-            r'^[0-9]+[.、]\s*(答题前|请按|选择题用|考试结束|注意事项)',
-            r'^[0-9]+[.、].*(答题卡|试卷|草稿纸|准考证|条形码)',
-        ]
-
-        for noise_pattern in noise_patterns:
-            if re.search(noise_pattern, text[:50]):
-                return None, None
-
-        for pattern, confidence, pattern_type in self.QUESTION_PATTERNS:
-            match = re.match(pattern, text)
-            if match:
-                num_str = match.group(1)
-
-                if pattern_type == 'chinese':
-                    question_id = self._chinese_to_num(num_str)
-                else:
-                    question_id = int(num_str)
-
-                return question_id, pattern_type
-
-        return None, None
-
-    def _chinese_to_num(self, chinese: str) -> int:
-        """中文数字转阿拉伯数字"""
-        chinese_num_map = {
-            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10
-        }
-
-        if chinese in chinese_num_map:
-            return chinese_num_map[chinese]
-
-        if chinese.startswith('十'):
-            if len(chinese) == 1:
-                return 10
-            else:
-                return 10 + chinese_num_map.get(chinese[1], 0)
-
-        return 0
 
     def _calculate_confidence(self, questions: List[PDFQuestion], pages_text: List[Dict]) -> float:
         """计算拆分置信度"""
