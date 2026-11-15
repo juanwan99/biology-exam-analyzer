@@ -1,11 +1,12 @@
 """PDF 规则拆题：大题号 / 小问 / 卷首说明 / 页眉导航（#7）、剥【解析】（#28）。
 
-真卷回归：卷子不进仓（仓公开），设 BEA_PDF_MOCK2026 指向 mock2026 PDF 才跑：
-  BEA_PDF_MOCK2026=/w/mock2026.pdf python -m pytest -q tests/test_pdf_splitter.py
+真卷回归：卷子不进仓（仓公开），设 BEA_REAL_DIR 指向放卷子的目录才跑（ECS /home/ops/bea-work7，见 REAL_PAPERS）：
+  BEA_REAL_DIR=/w python -m pytest -q tests/test_pdf_splitter.py
 """
 import base64
 import io
 import os
+import re
 
 import pytest
 from PIL import Image
@@ -98,26 +99,34 @@ def test_section_intro_line_joins_header():
     assert [paper_score(q)[0] for q in qs] == [2.0, 2.0]
     assert "本部分" not in qs[0]["content"]
 
-MOCK2026 = os.environ.get("BEA_PDF_MOCK2026")
+REAL_DIR = os.environ.get("BEA_REAL_DIR")
+# 卷子 → 每题卷面分值（题号从 1 连续；None = 卷面没标该题分值），期望值对卷面分节说明 / 题头人工核
+REAL_PAPERS = {
+    "mock2026.pdf": [2.0] * 12 + [4.0] * 4 + [12.0] * 5,  # 12×2 + 4×4 + 5 大题（#7）
+    "gk-jiangsu.pdf": [2.0] * 15 + [3.0] * 4 + [None] * 5,  # 单选 + 多选 + 5 大题未标分（#42）
+    "gk-hubei.pdf": [2.0] * 18 + [None] * 4,  # 18 单选 + 4 大题未标分（#42；浙江卷待 #45 题组材料修好再进）
+}
 
 
-@pytest.mark.skipif(not MOCK2026, reason="真卷不进仓；设 BEA_PDF_MOCK2026 才跑")
-def test_mock2026_pdf_regression():
+@pytest.mark.skipif(not REAL_DIR, reason="真卷不进仓；设 BEA_REAL_DIR 才跑")
+@pytest.mark.parametrize("name, scores", REAL_PAPERS.items())
+def test_real_pdf_regression(name, scores):
+    path = os.path.join(REAL_DIR, name)
     splitter = PDFQuestionSplitter()
-    pages = splitter._extract_text(MOCK2026)
+    pages = splitter._extract_text(path)
     questions = splitter._split_questions(pages)
     qs = [splitter._question_to_dict(q) for q in questions]
-    assert [q["id"] for q in qs] == list(range(1, 22))
-    assert [paper_score(q)[0] for q in qs] == [2.0] * 12 + [4.0] * 4 + [12.0] * 5
+    assert [q["id"] for q in qs] == list(range(1, len(scores) + 1))
+    assert [paper_score(q)[0] for q in qs] == scores
     assert splitter._calculate_confidence(questions, pages) >= 0.7  # 低于 0.7 才告警
     assert all("选选项项" not in q["content"] for q in qs)
-    # #28：每题的【解析】都剥进 answer，题干不剩；页面图上答案行涂白
-    assert all("【解析】" not in q["content"] and q["answer"].startswith("【解析】") for q in qs)
+    # #28：解析版每题的【答案】【解析】都剥进 answer，题干不剩；页面图上答案行涂白
+    assert all(not re.search("【(答案|解析)】", q["content"]) and q["answer"].startswith("【") for q in qs)
     masks = splitter._answer_boxes(questions, pages)
     page_num = min(masks)
     dpi = 50
     img = Image.open(io.BytesIO(base64.b64decode(
-        splitter._convert_to_images(MOCK2026, dpi, masks)[page_num])))
+        splitter._convert_to_images(path, dpi, masks)[page_num])))
     x0, top, x1, bottom = (v * dpi / 72 for v in masks[page_num][0])
     region = img.convert("L").crop((int(x0), int(top), int(x1), int(bottom)))
     assert region.getextrema()[0] > 240

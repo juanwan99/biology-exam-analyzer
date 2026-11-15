@@ -1,7 +1,7 @@
 """Word 拆题题号 / 分节规则（#40、#43）。
 
-真卷回归（#35）：卷子不进仓（仓公开），设 BEA_WORD_BIO06 指向 06_生物_试题.docx 才跑：
-  BEA_WORD_BIO06=/w/word06.docx python -m pytest -q tests/test_word_splitter.py
+真卷回归（#35、#42）：卷子不进仓（仓公开），设 BEA_REAL_DIR 指向放卷子的目录才跑（ECS /home/ops/bea-work7，见 REAL_PAPERS）：
+  BEA_REAL_DIR=/w python -m pytest -q tests/test_word_splitter.py
 """
 import os
 
@@ -84,11 +84,20 @@ def test_answer_version_paper(tmp_path):
     assert [paper_score(q)[0] for q in qs] == [6.0, 6.0]
     assert "2、植物激素包括生长素等" in qs[0]["answer"] and "答题卡" not in qs[0]["content"]
 
-BIO06 = os.environ.get("BEA_WORD_BIO06")
+REAL_DIR = os.environ.get("BEA_REAL_DIR")
+# 卷子 → (每题卷面分值, 是不是解析版)；题号从 1 连续，None = 卷面没标该题分值，期望值对卷面人工核
+REAL_PAPERS = {
+    "word06.docx": ([2.0] * 12 + [4.0] * 4 + [12.0, 12.0, 12.0, 10.0, 14.0], False),  # 12×2 + 4×4 + 5 大题（#35）
+    "gk-shandong.docx": ([2.0] * 15 + [3.0] * 5 + [9.0, 16.0, 9.0, 9.0, 12.0], True),  # 题头标分，三节（#42）
+    "gk-jia.docx": ([6.0] * 6 + [None] * 6, True),  # 理综抽出的生物，大题未标分（#42）
+}
 
 
-@pytest.mark.skipif(not BIO06, reason="真卷不进仓；设 BEA_WORD_BIO06 才跑")
-def test_bio06_word_regression():
-    qs = split_word_with_visual(BIO06, "biology")["questions"]
-    assert [q["id"] for q in qs] == list(range(1, 22))
-    assert [paper_score(q)[0] for q in qs] == [2.0] * 12 + [4.0] * 4 + [12.0, 12.0, 12.0, 10.0, 14.0]
+@pytest.mark.skipif(not REAL_DIR, reason="真卷不进仓；设 BEA_REAL_DIR 才跑")
+@pytest.mark.parametrize("name, scores, with_answers", [(n, *v) for n, v in REAL_PAPERS.items()])
+def test_real_word_regression(name, scores, with_answers):
+    qs = split_word_with_visual(os.path.join(REAL_DIR, name), "biology")["questions"]
+    assert [q["id"] for q in qs] == list(range(1, len(scores) + 1))
+    assert [paper_score(q)[0] for q in qs] == scores
+    assert all("【答案】" not in q["content"] and "【解析】" not in q["content"] for q in qs)
+    assert all(bool(q.get("answer")) == with_answers for q in qs)
