@@ -192,13 +192,23 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
   [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer|biology"
                                                          "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate|biology"
                                                          "$HERE/fixtures/sample-paper-chemistry.docx|$HERE/fixtures/sample-paper-chemistry.expected.json|strict|chemistry")
-  TASKS=()
+  # 几份同时上传（不是一份接一份）：同时上传的两份 Word 曾撞 LibreOffice profile → 500（#48）
+  SUBMITS=()
   for run in "${RUNS[@]}"; do
     paper="${run%%|*}"
     subject="${run##*|}"
-    submit="$("${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
+    out="$(mktemp)"
+    SUBMITS+=("$out")
+    "${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
       -F "file=@$paper" -F mode=deep -F generate_report=false -F "subject=$subject" \
-      "$BASE/api/analyze_auto")"
+      "$BASE/api/analyze_auto" >"$out" 2>&1 &
+  done
+  wait
+  TASKS=()
+  for i in "${!RUNS[@]}"; do
+    paper="${RUNS[$i]%%|*}"
+    submit="$(cat "${SUBMITS[$i]}")"
+    rm -f "${SUBMITS[$i]}"
     task="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task_id", ""))' "$submit" 2>/dev/null)"
     if [ -z "$task" ]; then fail "上传 $(basename "$paper"): ${submit:0:300}"; else pass "上传 $(basename "$paper") → task $task"; fi
     TASKS+=("$task")
