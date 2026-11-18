@@ -29,10 +29,10 @@ import hashlib
 import asyncio
 import zipfile
 import tempfile
-import subprocess
 from typing import Dict, Any, List, Optional, Tuple
 
 from logger import get_logger
+from libreoffice import convert_to_pdf
 from answer_blocks import split_answer
 from question_numbering import is_notice
 from word_splitter import WordQuestionSplitter
@@ -163,22 +163,6 @@ def should_use_visual(
 # ─────────────────────────────────────────────────────────────────────
 # docx → pdf → 页面 OCR
 # ─────────────────────────────────────────────────────────────────────
-def docx_to_pdf(docx_path: str, out_dir: str) -> str:
-    """用 LibreOffice 把 docx 转为 pdf，返回 pdf 路径。失败抛异常。"""
-    result = subprocess.run(
-        ["libreoffice", "--headless", "--convert-to", "pdf",
-         "--outdir", out_dir, docx_path],
-        capture_output=True, text=True, timeout=_LIBREOFFICE_TIMEOUT,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"LibreOffice 转 PDF 失败: {result.stderr[:200]}")
-    stem = os.path.splitext(os.path.basename(docx_path))[0]
-    pdf_path = os.path.join(out_dir, f"{stem}.pdf")
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"转换后 PDF 未找到: {pdf_path}")
-    return pdf_path
-
-
 async def _ocr_pdf_pages(pdf_path: str) -> List[Optional[str]]:
     """逐页 OCR，返回每页 markdown（失败页为 None）。并发限流。"""
     import fitz  # 局部导入，避免模块加载期硬依赖
@@ -233,7 +217,7 @@ def _ocr_with_cache(docx_path: str) -> List[Optional[str]]:
 
     tmp_dir = tempfile.mkdtemp(prefix="vsplit_")
     try:
-        pdf_path = docx_to_pdf(docx_path, tmp_dir)
+        pdf_path = convert_to_pdf(docx_path, tmp_dir, _LIBREOFFICE_TIMEOUT)
         pages = asyncio.run(_ocr_pdf_pages(pdf_path))
     finally:
         try:

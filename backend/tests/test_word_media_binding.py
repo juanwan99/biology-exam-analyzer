@@ -154,7 +154,7 @@ def _fake_soffice(monkeypatch, calls, ok=True):
             Path(outdir, "preview.pdf").write_bytes(b"%PDF-1.4 fake")
         return subprocess.CompletedProcess(cmd, 0 if ok else 1, "", "" if ok else "boom")
 
-    monkeypatch.setattr("word_splitter.subprocess.run", fake_run)
+    monkeypatch.setattr("libreoffice.subprocess.run", fake_run)
     monkeypatch.setattr("word_splitter._pdf_to_png", lambda path: _png_bytes())
 
 
