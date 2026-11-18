@@ -9,7 +9,6 @@ import io
 from typing import List, Dict, Any, Tuple, Optional
 import os
 import struct
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from docx import Document
@@ -19,6 +18,7 @@ from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 from PIL import Image, ImageDraw, ImageFont
 from logger import get_logger
+from libreoffice import convert_to_pdf
 from answer_blocks import ANSWER_MARK
 from question_groups import group_spans, is_group_intro
 from question_numbering import Numbering, is_section_intro, section_header
@@ -395,15 +395,7 @@ class WordQuestionSplitter:
                 src = os.path.join(tmp, "preview.rtf")
                 with open(src, "w", encoding="ascii") as f:
                     f.write(_metafile_rtf(blob, ext))
-                result = subprocess.run(
-                    ["soffice", f"-env:UserInstallation=file://{tmp}/lo_profile", "--headless",
-                     "--convert-to", "pdf", "--outdir", tmp, src],
-                    capture_output=True, text=True, timeout=self.VECTOR_RENDER_TIMEOUT,
-                )
-                pdf_path = os.path.join(tmp, "preview.pdf")
-                if result.returncode != 0 or not os.path.exists(pdf_path):
-                    logger.warning(f"[图片提取] OLE 预览图渲染失败: {result.stderr[:200]}")
-                    return None
+                pdf_path = convert_to_pdf(src, tmp, self.VECTOR_RENDER_TIMEOUT)
                 png = _pdf_to_png(pdf_path)
             if not png:
                 logger.warning("[图片提取] OLE 预览图渲染为空白")

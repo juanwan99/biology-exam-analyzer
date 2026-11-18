@@ -30,6 +30,7 @@ import tempfile
 import base64
 from typing import List, Dict, Any
 from logger import get_logger
+from libreoffice import convert_to_pdf
 
 logger = get_logger()
 
@@ -512,30 +513,7 @@ class DocumentProcessor:
 
         try:
             # 1. 使用LibreOffice将Word转换为PDF
-            logger.debug(f"调用LibreOffice转换Word → PDF")
-            result = subprocess.run(
-                [
-                    'libreoffice',
-                    '--headless',
-                    '--convert-to', 'pdf',
-                    '--outdir', temp_dir,
-                    file_path
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode != 0:
-                logger.error(f"LibreOffice转换失败: {result.stderr}")
-                raise RuntimeError(f"Word转PDF失败: {result.stderr}")
-
-            # 2. 找到生成的PDF文件
-            original_filename = os.path.splitext(os.path.basename(file_path))[0]
-            temp_pdf_path = os.path.join(temp_dir, f"{original_filename}.pdf")
-
-            if not os.path.exists(temp_pdf_path):
-                raise FileNotFoundError(f"转换后的PDF未找到: {temp_pdf_path}")
+            temp_pdf_path = convert_to_pdf(file_path, temp_dir, 60)
 
             logger.info(f"Word → PDF转换完成: {temp_pdf_path}")
 
