@@ -89,9 +89,9 @@ class DifficultyMapper:
                 logger.debug(f"使用章节映射: {textbook_chapter}, 难度={difficulty}")
                 return self._predict_from_mapping(mapping, difficulty)
 
-        # 3. 使用全局映射（库里初始化的占位行 sample_count=0，不算）
+        # 3. 使用全局映射（库里初始化的占位行 sample_count=0，不算；只卡样本数，不卡置信度）
         mapping = await self._get_mapping('global', None, grade, difficulty)
-        if mapping and self._is_reliable(mapping):
+        if mapping and mapping.sample_count >= MIN_SAMPLES['global']:
             logger.debug(f"使用全局映射: 年级={grade}, 难度={difficulty}")
             return self._predict_from_mapping(mapping, difficulty)
 

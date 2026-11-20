@@ -47,6 +47,8 @@ def load_pairs(pred_runs, actual):
             raise SystemExit(f"第 {k + 1} 次分析题号 {sorted(got)} 和真实成绩 {sorted(rates)} 对不上，先修拆题")
         for num, p in got.items():
             rate, full = rates[num]
+            if float(p["question_score"]) != full:
+                raise SystemExit(f"第 {k + 1} 次分析第 {num} 题分值 {p['question_score']} 和真实满分 {full} 对不上，题目错位")
             rows.append((num, full, rate, float(p["difficulty"]), float(p["predicted_rate"]), k))
     return rows
 

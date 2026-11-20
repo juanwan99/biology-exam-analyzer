@@ -44,6 +44,7 @@ async def test_placeholder_global_mapping_falls_to_curve():
 
 @pytest.mark.asyncio
 async def test_reliable_global_mapping_still_wins():
-    m = _mapper(_global_row(sample_count=40, confidence=0.8))
+    # 置信度不到 0.6 也用：全局映射只看样本数是不是占位
+    m = _mapper(_global_row(sample_count=25, confidence=0.5))
     rate, _, _ = await m.predict_rate(difficulty=6.0, grade="高三")
     assert rate == pytest.approx(1.025 - 0.075 * 6.0)
