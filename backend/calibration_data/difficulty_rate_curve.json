@@ -1,0 +1,27 @@
+{
+ "method": "sklearn IsotonicRegression(increasing=False)",
+ "x": [
+  5.6,
+  7.3,
+  7.4,
+  7.9,
+  8.0,
+  8.7
+ ],
+ "y": [
+  0.7417,
+  0.7417,
+  0.4384,
+  0.4384,
+  0.3642,
+  0.3642
+ ],
+ "residual_std": 0.1463,
+ "n_questions": 21,
+ "n_runs": 3,
+ "n_exams": 1,
+ "source": "高三联考 1 份（21 题，197 人）按题得分率",
+ "fitted": "2026-11-20",
+ "loo_mae": 0.1209,
+ "before_mae": 0.1486
+}

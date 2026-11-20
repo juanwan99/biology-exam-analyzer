@@ -4,12 +4,15 @@
 实现分层回退策略:
 1. 知识点专属映射（精度最高）
 2. 教材章节映射
-3. 全局映射（兜底）
+3. 全局映射（样本够才用）
+4. 真实考试校准的整体映射（calibration_data/difficulty_rate_curve.json）
 
-支持冷启动默认值和基于历史数据的动态更新
+映射可由历史数据动态更新
 """
 from typing import List, Dict, Tuple, Optional
 from decimal import Decimal
+import json
+import os
 import numpy as np
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,23 +23,11 @@ from logger import get_logger
 logger = get_logger()
 
 
-# 冷启动默认得分率（基于教育统计经验值）
-COLD_START_RATES = {
-    (0, 2): 0.95,    # 很简单 → 95% 得分率
-    (2, 4): 0.85,    # 简单 → 85%
-    (4, 6): 0.70,    # 中等 → 70%
-    (6, 8): 0.55,    # 较难 → 55%
-    (8, 10): 0.35,   # 很难 → 35%
-}
-
-# 冷启动默认标准差
-COLD_START_STDDEV = {
-    (0, 2): 0.05,
-    (2, 4): 0.08,
-    (4, 6): 0.10,
-    (6, 8): 0.12,
-    (8, 10): 0.15,
-}
+# 难度 → 得分率整体映射：真实考试按题得分率 Isotonic 拟合（#7，scripts/calibrate_difficulty.py 生成）。
+# 库里没有够样本的映射时用它。
+CURVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_data", "difficulty_rate_curve.json")
+with open(CURVE_PATH, encoding="utf-8") as _f:
+    CURVE = json.load(_f)
 
 # 最小样本数要求
 MIN_SAMPLES = {
@@ -68,7 +59,8 @@ class DifficultyMapper:
         分层回退策略：
         1. 先查知识点专属映射
         2. 再查章节映射
-        3. 最后用全局映射
+        3. 再查全局映射
+        4. 都没有可靠映射时用校准曲线
 
         Args:
             difficulty: 绝对难度 (0-10)
@@ -97,15 +89,14 @@ class DifficultyMapper:
                 logger.debug(f"使用章节映射: {textbook_chapter}, 难度={difficulty}")
                 return self._predict_from_mapping(mapping, difficulty)
 
-        # 3. 使用全局映射
+        # 3. 使用全局映射（库里初始化的占位行 sample_count=0，不算；只卡样本数，不卡置信度）
         mapping = await self._get_mapping('global', None, grade, difficulty)
-        if mapping:
+        if mapping and mapping.sample_count >= MIN_SAMPLES['global']:
             logger.debug(f"使用全局映射: 年级={grade}, 难度={difficulty}")
             return self._predict_from_mapping(mapping, difficulty)
 
-        # 4. 冷启动默认值
-        logger.debug(f"使用冷启动默认值: 难度={difficulty}")
-        return self._cold_start_prediction(difficulty)
+        # 4. 真实考试校准的整体映射
+        return self._curve_prediction(difficulty)
 
     async def _get_mapping(
         self,
@@ -166,20 +157,11 @@ class DifficultyMapper:
 
         return rate, ci_lower, ci_upper
 
-    def _cold_start_prediction(self, difficulty: float) -> Tuple[float, float, float]:
-        """冷启动预测（无历史数据时使用）"""
-        for (d_min, d_max), rate in COLD_START_RATES.items():
-            if d_min <= difficulty < d_max:
-                stddev = COLD_START_STDDEV[(d_min, d_max)]
-                # 冷启动时置信区间更宽
-                ci_lower = max(0.0, rate - 2.0 * stddev)
-                ci_upper = min(1.0, rate + 2.0 * stddev)
-                return rate, ci_lower, ci_upper
-
-        # 超出范围，使用最难档位
-        rate = COLD_START_RATES[(8, 10)]
-        stddev = COLD_START_STDDEV[(8, 10)]
-        return rate, max(0.0, rate - 2.0 * stddev), min(1.0, rate + 2.0 * stddev)
+    def _curve_prediction(self, difficulty: float) -> Tuple[float, float, float]:
+        """按校准曲线插值；区间取留一交叉验证残差的 ±1.96σ。"""
+        rate = float(np.interp(difficulty, CURVE["x"], CURVE["y"]))
+        half = 1.96 * CURVE["residual_std"]
+        return rate, max(0.0, rate - half), min(1.0, rate + half)
 
     def _normalize_grade(self, grade: str) -> str:
         """标准化年级名称"""
