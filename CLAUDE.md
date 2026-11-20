@@ -8,7 +8,7 @@
 - 拆题：docx → `visual_word_splitter.split_word_with_visual`；pdf → `pdf_splitter.py`（`get_pdf_splitter().split`）
 - 每题：`services/analysis_service.py` 的 `AnalysisService.analyze_question` → `question_analyzer.py`（知识点 / 认知层级）→ `difficulty_pipeline.py`（`feature_extractor.py` + `rule_scorer.py`）→ `competency_analyzer.py`
 - 分值：`score_rules.py`，卷面写了分值以卷面为准，不交给 LLM 猜
-- 整卷：`analysis_statistics.py`（统计）、`prediction_service.py`（分数预估，写 `score_prediction` 表）、`exam_diagnostics.py`
+- 整卷：`analysis_statistics.py`（统计）、`prediction_service.py`（分数预估，写 `score_prediction` 表；难度 → 得分率走 `difficulty_mapper.py`，库里没有够样本的映射就用 `backend/calibration_data/difficulty_rate_curve.json`，有新的真实成绩用 `backend/scripts/calibrate_difficulty.py` 重拟，成绩只给按题汇总得分率）、`exam_diagnostics.py`
 - 报告：`report_product_*.py`、`report_insights.py`
 
 ## 现成函数（先用，别另写）
