@@ -47,14 +47,14 @@ function TextbookTab({ token, getHeaders }) {
     }
   }
 
-  const loadTextbookChunks = useCallback(async (page = 1) => {
+  const loadTextbookChunks = useCallback(async (page = 1, filters = chunkFilters) => {
     setTextbookLoading(true)
     try {
       const params = {
         page,
         page_size: 30,
         ...Object.fromEntries(
-          Object.entries(chunkFilters).filter(([_, v]) => v !== '')
+          Object.entries(filters).filter(([_, v]) => v !== '')
         )
       }
       const res = await axios.get('/api/textbook/contents/list', { params })
@@ -180,8 +180,9 @@ function TextbookTab({ token, getHeaders }) {
               <button
                 key={book.book_id}
                 onClick={() => {
-                  setChunkFilters(f => ({ ...f, book_id: book.book_id }))
-                  loadTextbookChunks(1)
+                  const next = { ...chunkFilters, book_id: book.book_id }
+                  setChunkFilters(next)
+                  loadTextbookChunks(1, next)
                 }}
                 className={`p-4 rounded-lg border-2 transition-all ${colors.bg} ${colors.border} ${
                   isSelected ? `ring-2 ${colors.selected} shadow-lg scale-105` : 'hover:shadow-md'
