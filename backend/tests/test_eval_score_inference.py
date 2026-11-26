@@ -27,7 +27,7 @@ def test_cli_measures_both_formats_and_summarizes_attempts(monkeypatch, tmp_path
     pdf = tmp_path / "example.pdf"
     output = tmp_path / "scores.json"
     word_questions = [
-        {"id": 1, "content": "1. 题干", "_section_header": "一、选择题：每小题2分"},
+        {"id": 1, "content": "1. 题干", "_section_header": "一、单选题：每小题2分"},
         {"id": 2, "content": "2.（10分）回答问题", "_section_header": "二、非选择题：共10分"},
         {"id": 3, "content": "3. 无卷面标分", "_section_header": None},
     ]
@@ -91,8 +91,8 @@ def test_cli_measures_both_formats_and_summarizes_attempts(monkeypatch, tmp_path
     printed = capsys.readouterr().out.splitlines()
     assert printed.count("example.docx 残留分值字样 0 处") == 1
     assert printed.count("example.pdf 残留分值字样 0 处") == 1
-    assert "example.docx 第 1 次 第 1 题 choice 真值 2.0 推断 1.0 差 -1.0 model" in printed
-    assert "example.docx 第 2 次 第 1 题 choice 真值 2.0 推断 4.0 差 +2.0 model" in printed
+    assert "example.docx 第 1 次 第 1 题 single_choice 真值 2.0 推断 1.0 差 -1.0 model" in printed
+    assert "example.docx 第 2 次 第 1 题 single_choice 真值 2.0 推断 4.0 差 +2.0 model" in printed
     assert [line for line in printed if "整卷总分" in line] == [
         "example.docx 第 1 次 整卷总分 真值 12.0 推断 9.0",
         "example.docx 第 2 次 整卷总分 真值 12.0 推断 10.0",
@@ -109,7 +109,7 @@ def test_cli_measures_both_formats_and_summarizes_attempts(monkeypatch, tmp_path
     rows = json.loads(output.read_text(encoding="utf-8"))
     assert len(rows) == 10
     assert rows[0] == {
-        "paper": "example.docx", "run": 1, "question_id": 1, "question_type": "choice",
+        "paper": "example.docx", "run": 1, "question_id": 1, "question_type": "single_choice",
         "paper_score": 2.0, "total_score": 1.0, "difference": -1.0,
         "score_source": "model", "score_status": "valid",
     }

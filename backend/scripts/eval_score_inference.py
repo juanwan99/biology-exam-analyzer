@@ -19,7 +19,7 @@ from visual_word_splitter import split_word_with_visual
 
 
 _SCORE_TEXT = re.compile(r"\d+(?:\.\d+)?\s*分")
-_CHOICE_TYPES = {"single_choice", "multiple_choice", "choice"}
+_CHOICE_TYPES = {"single_choice", "multiple_choice"}
 
 
 def strip_scores(question: dict) -> int:
@@ -75,9 +75,6 @@ async def evaluate_paper(path: Path, runs: int) -> list[list[dict]]:
         rows = []
         for result, expected in zip(analyzed, expected_scores):
             question_type = result["question_type"]
-            header = result.get("_section_header") or ""
-            if question_type == "unknown" and "选择题" in header and "非选择题" not in header:
-                question_type = "choice"  # 分节只写「选择题」时也归入选择题统计。
             score = result["total_score"]
             rows.append({
                 "paper": path.name,
