@@ -13,6 +13,7 @@ def test_strip_scores_removes_head_section_and_subquestion_marks():
     question = {
         "content": "17．（本题满分10分）题干\n（1）第一问（2分）\n（2）第二问 (2.5 分)；另计 1.5 分",
         "_section_header": "三、非选择题：共5小题，每题 10 分，共50分；加试另计 3分",
+        "_group_material": "阅读材料（8分），回答下列问题",
     }
     assert paper_score(question) == (10.0, "paper")
 
@@ -20,6 +21,7 @@ def test_strip_scores_removes_head_section_and_subquestion_marks():
     assert paper_score(question) == (None, None)
     assert question["content"] == "17．题干\n（1）第一问\n（2）第二问 ；另计 1.5 分"
     assert question["_section_header"] == "三、非选择题：共5小题，，；加试另计 3分"
+    assert question["_group_material"] == "阅读材料，回答下列问题"
 
 
 def test_cli_measures_both_formats_and_summarizes_attempts(monkeypatch, tmp_path, capsys):

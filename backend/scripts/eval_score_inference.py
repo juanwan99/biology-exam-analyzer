@@ -23,9 +23,10 @@ _CHOICE_TYPES = {"single_choice", "multiple_choice"}
 
 
 def strip_scores(question: dict) -> int:
-    """就地去分，返回题干和分节标题里剩下的分值字样数。"""
+    """就地去分，返回题干、分节标题和题组材料里剩下的分值字样数。"""
     remaining = 0
-    for field in ("content", "_section_header"):
+    # 三个字段都会进送模文本（题组材料经 with_group_material 拼进题干）。
+    for field in ("content", "_section_header", "_group_material"):
         value = question.get(field)
         if value is None:
             continue
