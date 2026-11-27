@@ -164,8 +164,8 @@ function ScorePrediction({ prediction }) {
           <ListTable columns={columns} rows={per_question_predictions} rowKey="question_number" emptyText="暂无各题预估"
             renderRow={q => (
               <tr className="hover:bg-[#e8f8ee]">
-                <td className="px-3 py-2 font-medium">{q.question_number}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 text-right font-medium">{q.question_number}</td>
+                <td className="px-3 py-2 text-right">
                   <span className={`px-2 py-0.5 rounded text-xs ${
                     q.difficulty <= 3.5 ? 'bg-[#e8f8ee] text-[#2d5a3d]' :
                     q.difficulty <= 6.5 ? 'bg-[#fdf6e3] text-[#92400e]' :
@@ -174,8 +174,8 @@ function ScorePrediction({ prediction }) {
                     {q.difficulty?.toFixed(1)}
                   </span>
                 </td>
-                <td className="px-3 py-2">{((q.predicted_rate || 0) * 100).toFixed(1)}%</td>
-                <td className="px-3 py-2">{q.predicted_score?.toFixed(2)} / {q.question_score}</td>
+                <td className="px-3 py-2 text-right">{((q.predicted_rate || 0) * 100).toFixed(1)}%</td>
+                <td className="px-3 py-2 text-right">{q.predicted_score?.toFixed(2)} / {q.question_score}</td>
                 <td className="px-3 py-2 text-[#5a6b5e]">
                   {q.confidence_interval?.[0]?.toFixed(2)} - {q.confidence_interval?.[1]?.toFixed(2)}
                 </td>
