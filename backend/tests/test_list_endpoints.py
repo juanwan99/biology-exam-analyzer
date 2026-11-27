@@ -9,7 +9,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.elements import TextClause
 
 import auth_router
 import exercise_router
@@ -135,10 +134,7 @@ async def card_lists():
     chunk = (12, None, "bx1", 1, "教材正文", None, None, datetime(2026, 11, 27), None)
 
     async def db():
-        async def execute(stmt, params=None):
-            # The original chunk query sends its binds separately from the SQL.
-            if isinstance(stmt, TextClause) and params:
-                stmt = stmt.bindparams(**{key: params[key] for key in stmt.compile().params})
+        async def execute(stmt):
             compiled = stmt.compile(dialect=postgresql.dialect())
             queries.append((" ".join(str(compiled).split()), list(compiled.params.values())))
             empty = "%无匹配%" in compiled.params.values()
@@ -180,20 +176,23 @@ async def test_card_ordering_applies_to_each_page(card_lists, path, sort, expres
         assert rows[1] == bindings + [20, offset]
 
 
-@pytest.mark.parametrize("path,table", [(EXERCISES, "exercise_bank"), (CHUNKS, "textbook_chunks")])
-async def test_card_default_unknown_sort_and_roles(card_lists, path, table):
+@pytest.mark.parametrize("path,expected_order", [
+    (EXERCISES, ["exercise_bank.id DESC"]),
+    # Chunks retain ID DESC by default and append the stable key ID ASC.
+    (CHUNKS, ["textbook_chunks.id DESC", "textbook_chunks.id ASC"]),
+])
+async def test_card_default_unknown_sort_and_roles(card_lists, path, expected_order):
     http, queries = card_lists
     default, unknown = await asyncio.gather(http.get(path), http.get(
         path, params={"sort": "unknown:asc"}, headers=headers("editor"),
     ))
     assert default.status_code == unknown.status_code == 200
     assert default.json() == unknown.json()
-    orders = [sql.split("ORDER BY ")[1].split(" LIMIT ")[0] for sql, _ in queries if "ORDER BY " in sql]
-    assert orders[0] == orders[1]
-    # The primary ID is unique. Appending the same ID as a tie-breaker leaves main's order intact.
-    assert orders[0].replace("tc.id", f"{table}.id").split(", ") in (
-        [f"{table}.id DESC"], [f"{table}.id DESC", f"{table}.id ASC"],
-    )
+    orders = [
+        sql.split("ORDER BY ")[1].split(" LIMIT ")[0].split(", ")
+        for sql, _ in queries if "ORDER BY " in sql
+    ]
+    assert orders == [expected_order, expected_order]
     if path == CHUNKS:
         assert default.json()["items"] == [{
             "id": 12, "page_id": None, "book_id": "bx1", "chunk_index": 1, "content": "教材正文",
@@ -219,11 +218,6 @@ async def test_card_legacy_filters_affect_rows_and_count(card_lists, path, param
     count, rows = queries
     for sql, binds in (count, rows):
         where = sql.partition(" WHERE ")[2].partition(" ORDER BY ")[0]
-        where = where.replace("tc.", "textbook_chunks.")
-        if path == CHUNKS and where.startswith("1=1"):
-            where = where.replace("AND book_id", "AND textbook_chunks.book_id").replace(
-                "AND chunk_content", "AND textbook_chunks.chunk_content",
-            )
         assert all(predicate in where for predicate in predicates)
         assert binds[:len(values)] == values
 

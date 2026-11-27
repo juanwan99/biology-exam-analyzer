@@ -150,15 +150,6 @@ function ExercisesTab({ token, getHeaders }) {
               搜索
             </button>
             <button
-              onClick={() => {
-                setExerciseFilters(initialFilters)
-                loadExercises(1, initialFilters)
-              }}
-              className="px-4 py-2 border rounded hover:bg-gray-100"
-            >
-              重置
-            </button>
-            <button
               onClick={() => setEditingExercise({ question_type: '单选题', content: '', answer: '', tags: [] })}
               className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
             >
