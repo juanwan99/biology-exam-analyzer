@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
+import SortSelect, { EXERCISE_SORT_OPTIONS } from '../../components/SortSelect'
+
+const initialFilters = { question_type: '', keyword: '', sort: '' }
 
 function ExercisesTab({ token, getHeaders }) {
   // 题库管理状态
@@ -7,7 +10,7 @@ function ExercisesTab({ token, getHeaders }) {
   const [exercisePage, setExercisePage] = useState(1)
   const [exerciseTotal, setExerciseTotal] = useState(0)
   const [exerciseTotalPages, setExerciseTotalPages] = useState(1)
-  const [exerciseFilters, setExerciseFilters] = useState({ question_type: '', keyword: '' })
+  const [exerciseFilters, setExerciseFilters] = useState(initialFilters)
   const [editingExercise, setEditingExercise] = useState(null)
   const [exerciseLoading, setExerciseLoading] = useState(false)
 
@@ -15,14 +18,14 @@ function ExercisesTab({ token, getHeaders }) {
   const [sources, setSources] = useState([])
   const [editingSource, setEditingSource] = useState(null)
 
-  const loadExercises = useCallback(async (page = 1) => {
+  const loadExercises = useCallback(async (page = 1, filters = exerciseFilters) => {
     setExerciseLoading(true)
     try {
       const params = {
         page,
         page_size: 20,
         ...Object.fromEntries(
-          Object.entries(exerciseFilters).filter(([_, v]) => v !== '')
+          Object.entries(filters).filter(([_, v]) => v !== '')
         )
       }
       const res = await axios.get('/api/exercises/list', { params })
@@ -158,8 +161,17 @@ function ExercisesTab({ token, getHeaders }) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* 题目列表 - 占2列 */}
           <div className="lg:col-span-2 bg-white shadow rounded-lg flex flex-col" style={{maxHeight: 'calc(100vh - 280px)'}}>
-            <div className="p-4 border-b flex-shrink-0">
+            <div className="p-4 border-b flex flex-wrap justify-between items-center gap-2 flex-shrink-0">
               <h3 className="font-medium">题目列表 (共 {exerciseTotal} 道)</h3>
+              <SortSelect
+                value={exerciseFilters.sort}
+                options={EXERCISE_SORT_OPTIONS}
+                onChange={sort => {
+                  const next = { ...exerciseFilters, sort }
+                  setExerciseFilters(next)
+                  loadExercises(1, next)
+                }}
+              />
             </div>
             {exerciseLoading ? (
               <div className="p-8 text-center text-gray-500">加载中...</div>

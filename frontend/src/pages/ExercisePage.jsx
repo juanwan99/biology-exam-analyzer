@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
+import SortSelect, { EXERCISE_SORT_OPTIONS } from '../components/SortSelect'
+
+const initialFilters = { question_type: '', year: '', tag: '', keyword: '', sort: '' }
 
 function ExercisePage() {
   // 状态管理
@@ -17,12 +20,7 @@ function ExercisePage() {
   const pageSize = 20
 
   // 筛选条件
-  const [filters, setFilters] = useState({
-    question_type: '',
-    year: '',
-    tag: '',
-    keyword: ''
-  })
+  const [filters, setFilters] = useState(initialFilters)
 
   // 加载统计信息
   const loadStatistics = useCallback(async () => {
@@ -45,14 +43,14 @@ function ExercisePage() {
   }, [])
 
   // 加载题目列表
-  const loadExercises = useCallback(async (page = 1) => {
+  const loadExercises = useCallback(async (page = 1, activeFilters = filters) => {
     try {
       setLoading(true)
       const params = {
         page,
         page_size: pageSize,
         ...Object.fromEntries(
-          Object.entries(filters).filter(([_, v]) => v !== '')
+          Object.entries(activeFilters).filter(([_, v]) => v !== '')
         )
       }
       const res = await axios.get('/api/exercises/list', { params })
@@ -84,13 +82,8 @@ function ExercisePage() {
   }
 
   const handleReset = () => {
-    setFilters({
-      question_type: '',
-      year: '',
-      tag: '',
-      keyword: ''
-    })
-    setTimeout(() => loadExercises(1), 0)
+    setFilters(initialFilters)
+    loadExercises(1, initialFilters)
   }
 
   // 渲染题目内容（处理特殊格式）
@@ -267,13 +260,22 @@ function ExercisePage() {
 
       {/* 题目列表 */}
       <div className="bg-white rounded-lg shadow">
-        <div className="p-4 border-b flex justify-between items-center">
+        <div className="p-4 border-b flex flex-wrap justify-between items-center gap-2">
           <h2 className="text-lg font-medium">
             题目列表
             <span className="text-gray-500 text-sm ml-2">
               (共 {totalCount} 道)
             </span>
           </h2>
+          <SortSelect
+            value={filters.sort}
+            options={EXERCISE_SORT_OPTIONS}
+            onChange={sort => {
+              const next = { ...filters, sort }
+              setFilters(next)
+              loadExercises(1, next)
+            }}
+          />
         </div>
 
         {loading ? (

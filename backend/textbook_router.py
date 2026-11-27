@@ -149,6 +149,7 @@ async def get_chapter_contents(
 
 @router.get("/contents/list")
 async def get_all_contents(
+    request: Request,
     page: int = 1,
     page_size: int = 50,
     book_id: str = None,
@@ -158,6 +159,7 @@ async def get_all_contents(
     """获取所有教材切片内容（带分页和筛选）"""
     service = TextbookService(db)
     result = await service.get_all_contents(
+        query_params=request.query_params,
         page=page,
         page_size=page_size,
         book_id=book_id,
