@@ -5,7 +5,8 @@ import ListTable from './ListTable'
 
 const columns = [
   { key: 'question_number', header: '题号', type: 'number', accessor: q => q.question_number, filterable: false },
-  { key: 'difficulty', header: '难度', type: 'number', accessor: q => q.difficulty },
+  { key: 'difficulty', header: '难度', type: 'number',
+    accessor: q => q.difficulty == null ? null : Number(q.difficulty.toFixed(1)) },
   { key: 'predicted_rate', header: '预估得分率（%）', type: 'number',
     accessor: q => q.predicted_rate == null ? null : Math.round(q.predicted_rate * 1000) / 10 },
   { key: 'predicted_score', header: '预估分数', type: 'number', accessor: q => q.predicted_score, filterable: false },
