@@ -1,5 +1,14 @@
 import { useState, useEffect } from "react"
 import axios from "axios"
+import ListTable from "../../components/ListTable"
+
+const columns = [
+  { key: "name", header: "Provider", type: "text", accessor: row => row.name },
+  ...[
+    ["call_count", "调用次数"], ["input_tokens", "输入 Token"],
+    ["output_tokens", "输出 Token"], ["unknown_count", "未知"],
+  ].map(([key, header]) => ({ key, header, type: "number", accessor: row => row[key] || 0, firstDir: "desc" })),
+]
 
 function TokenStatsPage() {
   const [stats, setStats] = useState(null)
@@ -20,28 +29,7 @@ function TokenStatsPage() {
   return (
     <div style={{padding: "20px", maxWidth: "800px", margin: "0 auto"}}>
       <h2 style={{color: "#1e40af", marginBottom: "20px"}}>Token 用量统计</h2>
-      <table style={{width: "100%", borderCollapse: "collapse"}}>
-        <thead>
-          <tr style={{background: "#f1f5f9"}}>
-            <th style={{padding: "10px", textAlign: "left", border: "1px solid #e2e8f0"}}>Provider</th>
-            <th style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>调用次数</th>
-            <th style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>输入 Token</th>
-            <th style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>输出 Token</th>
-            <th style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>未知</th>
-          </tr>
-        </thead>
-        <tbody>
-          {providers.map(p => (
-            <tr key={p.name}>
-              <td style={{padding: "10px", border: "1px solid #e2e8f0", fontWeight: "bold"}}>{p.name}</td>
-              <td style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>{p.call_count}</td>
-              <td style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>{(p.input_tokens || 0).toLocaleString()}</td>
-              <td style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>{(p.output_tokens || 0).toLocaleString()}</td>
-              <td style={{padding: "10px", textAlign: "right", border: "1px solid #e2e8f0"}}>{p.unknown_count || 0}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <ListTable columns={columns} rows={providers} rowKey="name" emptyText="暂无 Token 用量" />
       <p style={{color: "#64748b", fontSize: "12px", marginTop: "10px"}}>
         统计自本次服务启动，重启后清零
       </p>
