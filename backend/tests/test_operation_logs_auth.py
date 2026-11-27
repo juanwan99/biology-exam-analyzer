@@ -66,6 +66,6 @@ async def test_admin_can_read_logs_and_paginate(client):
 
 async def test_admin_can_read_empty_logs(client):
     headers = await login(client, "admin")
-    response = await client.get("/api/auth/logs", headers=headers, params={"operation": "delete"})
+    response = await client.get("/api/auth/logs", headers=headers, params={"f.operation": "delete"})
     assert response.status_code == 200
     assert (response.json()["total"], response.json()["logs"]) == (0, [])

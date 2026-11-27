@@ -3,7 +3,7 @@
 
 提供历史数据管理和分数预估的API端点
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -112,30 +112,19 @@ async def create_exam_history(
 
 @router.get("/history")
 async def list_exam_history(
-    grade: Optional[str] = None,
+    request: Request,
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    列出历史考试记录
-
-    支持按年级筛选
-    """
+    """列出历史考试记录，支持排序和筛选。"""
     service = PredictionService(db)
 
     try:
-        result = await service.list_exam_history(
-            grade=grade,
-            limit=limit,
-            offset=offset
-        )
-
-        return {
-            "success": True,
-            "data": result['items'],
-            "total": result['total']
-        }
+        result = await service.list_exam_history(request.query_params, limit=limit, offset=offset)
+        return {"success": True, "data": result["items"], "total": result["total"], "has_data": result["has_data"]}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"获取历史记录列表失败: {e}")
         raise HTTPException(status_code=500, detail="服务器内部错误")

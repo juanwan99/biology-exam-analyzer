@@ -4,7 +4,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import Optional, Dict
 from pydantic import BaseModel
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 import bcrypt
@@ -12,6 +12,7 @@ import secrets
 import string
 
 from database import get_db
+from list_query import ListColumn, apply_list_query
 from models import AdminUser, OperationLog
 from logger import get_logger
 import runtime_store
@@ -65,14 +66,6 @@ class UserUpdate(BaseModel):
 class ApiKeysUpdate(BaseModel):
     deepseek_api_key: Optional[str] = None
     qwen_api_key: Optional[str] = None
-
-
-class OperationLogQuery(BaseModel):
-    page: int = 1
-    page_size: int = 50
-    username: Optional[str] = None
-    operation: Optional[str] = None
-    target_type: Optional[str] = None
 
 
 # ============ 认证相关 ============
@@ -542,43 +535,38 @@ async def update_my_api_keys(
 
 # ============ 操作日志查询 ============
 
+LOG_COLUMNS = {
+    "created_at": ListColumn("date", OperationLog.created_at),
+    "username": ListColumn("text", OperationLog.username),
+    "operation": ListColumn("enum", OperationLog.operation, (
+        "login", "logout", "create", "update", "delete", "batch_delete",
+        "change_password", "reset_password", "update_api_keys",
+    )),
+    "target_type": ListColumn("enum", OperationLog.target_type,
+                              ("exercise", "source", "chapter", "content", "knowledge_point", "version", "user")),
+    "target_name": ListColumn("text", OperationLog.target_name),
+    "ip_address": ListColumn("text", OperationLog.ip_address),
+}
+
+
 @router.get("/logs")
 async def get_operation_logs(
+    request: Request,
     page: int = 1,
     page_size: int = 50,
-    username: str = None,
-    operation: str = None,
-    target_type: str = None,
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """获取操作日志"""
-    query = select(OperationLog)
-    count_query = select(func.count(OperationLog.id))
+    query, count_query = apply_list_query(
+        select(OperationLog).order_by(OperationLog.created_at.desc().nulls_last()),
+        select(func.count(OperationLog.id), select(OperationLog.id).exists()),
+        request.query_params, LOG_COLUMNS, OperationLog.id.desc(),
+    )
 
-    filters = []
-    if username:
-        filters.append(OperationLog.username == username)
-    if operation:
-        filters.append(OperationLog.operation == operation)
-    if target_type:
-        filters.append(OperationLog.target_type == target_type)
-
-    if filters:
-        from sqlalchemy import and_
-        query = query.where(and_(*filters))
-        count_query = count_query.where(and_(*filters))
-
-    # 获取总数
-    result = await db.execute(count_query)
-    total = result.scalar()
-
-    # 分页查询
-    offset = (page - 1) * page_size
-    query = query.order_by(desc(OperationLog.created_at)).offset(offset).limit(page_size)
-
-    result = await db.execute(query)
-    logs = result.scalars().all()
+    total, has_data = (await db.execute(count_query)).one()
+    page_query = query.offset((page - 1) * page_size).limit(page_size)
+    logs = (await db.execute(page_query)).scalars().all()
 
     return {
         "success": True,
@@ -595,6 +583,7 @@ async def get_operation_logs(
             "created_at": log.created_at.isoformat() if log.created_at else None
         } for log in logs],
         "total": total,
+        "has_data": has_data,
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size

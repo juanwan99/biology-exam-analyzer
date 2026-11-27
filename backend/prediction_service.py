@@ -8,15 +8,24 @@ from decimal import Decimal
 from datetime import datetime
 import math
 
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from list_query import ListColumn, apply_list_query
 from models import ExamHistory, QuestionPerformance, ScorePrediction, DifficultyMapping
 from difficulty_mapper import DifficultyMapper, MIN_SAMPLES
 from logger import get_logger
 
 logger = get_logger()
+
+HISTORY_COLUMNS = {
+    "name": ListColumn("text", ExamHistory.name),
+    "grade": ListColumn("enum", ExamHistory.grade, ("高一", "高二", "高三")),
+    "exam_date": ListColumn("date", ExamHistory.exam_date),
+    "average_score": ListColumn("number", ExamHistory.average_score),
+    "score_rate": ListColumn("number", ExamHistory.score_rate * 100),
+}
 
 
 def _number(value) -> Optional[float]:
@@ -150,23 +159,17 @@ class PredictionService:
 
     async def list_exam_history(
         self,
-        grade: Optional[str] = None,
+        params,
         limit: int = 50,
         offset: int = 0
     ) -> Dict:
         """列出历史记录"""
-        query = select(ExamHistory).order_by(desc(ExamHistory.created_at))
-
-        if grade:
-            grade = self._normalize_grade(grade)
-            query = query.where(ExamHistory.grade == grade)
-
-        # 获取总数
-        count_query = select(func.count(ExamHistory.id))
-        if grade:
-            count_query = count_query.where(ExamHistory.grade == grade)
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar()
+        query, count_query = apply_list_query(
+            select(ExamHistory).order_by(ExamHistory.created_at.desc().nulls_last()),
+            select(func.count(ExamHistory.id), select(ExamHistory.id).exists()),
+            params, HISTORY_COLUMNS, ExamHistory.id.desc(),
+        )
+        total, has_data = (await self.db.execute(count_query)).one()
 
         # 分页查询
         query = query.offset(offset).limit(limit)
@@ -175,6 +178,7 @@ class PredictionService:
 
         return {
             'total': total,
+            'has_data': has_data,
             'items': [self._exam_to_dict(e) for e in exams]
         }
 
@@ -545,8 +549,8 @@ class PredictionService:
             'grade': exam.grade,
             'student_count': exam.student_count,
             'total_score': float(exam.total_score),
-            'average_score': float(exam.average_score) if exam.average_score else None,
-            'score_rate': float(exam.score_rate) if exam.score_rate else None,
+            'average_score': float(exam.average_score) if exam.average_score is not None else None,
+            'score_rate': float(exam.score_rate) if exam.score_rate is not None else None,
             'difficulty_avg': float(exam.difficulty_avg) if exam.difficulty_avg else None,
             'source_file': exam.source_file,
             'created_at': exam.created_at.isoformat() if exam.created_at else None

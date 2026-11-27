@@ -1,18 +1,36 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ClipboardList, Upload, BarChart3, FileText } from 'lucide-react'
 import apiClient from '../api/axios'
+import ListTable from '../components/ListTable'
+import { encodeListQuery } from '../lib/listQuery'
+
+const pageSize = 50
+const columns = [
+  { key: 'name', header: '考试名称', type: 'text', accessor: row => row.name },
+  { key: 'grade', header: '年级', type: 'enum', accessor: row => row.grade,
+    options: ['高一', '高二', '高三'].map(value => ({ value, label: value })) },
+  { key: 'exam_date', header: '考试日期', type: 'date', accessor: row => row.exam_date },
+  { key: 'average_score', header: '平均分', type: 'number', accessor: row => row.average_score, firstDir: 'desc' },
+  { key: 'score_rate', header: '得分率', type: 'number',
+    accessor: row => row.score_rate == null ? null : row.score_rate * 100, firstDir: 'desc' },
+  { key: 'actions', header: '操作', sortable: false, filterable: false },
+]
 
 function HistoryDataPage() {
   // 状态管理
-  const [historyList, setHistoryList] = useState([])
+  const [listRequest, setListRequest] = useState({ query: { sort: null, filters: {} }, page: 1 })
+  const [listResult, setListResult] = useState(null)
+  const { query, page } = listRequest
+  const { data: historyList = [], total = 0, has_data: hasData } = listResult?.data ?? {}
+  const listLoading = listResult?.request !== listRequest
+  const listError = !listLoading && listResult.error
+  const totalPages = Math.ceil(total / pageSize)
+  const outOfRange = page > Math.max(totalPages, 1)
   const [selectedHistory, setSelectedHistory] = useState(null)
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
   const [activeTab, setActiveTab] = useState('list') // list, upload, stats
-
-  // 筛选
-  const [gradeFilter, setGradeFilter] = useState('')
 
   // 上传表单
   const [uploadFile, setUploadFile] = useState(null)
@@ -27,22 +45,19 @@ function HistoryDataPage() {
   const [questionScores, setQuestionScores] = useState([])
   const [uploadStep, setUploadStep] = useState(1) // 1:上传文件 2:填写分数 3:确认提交
 
-  // 加载历史数据列表
-  const loadHistoryList = useCallback(async () => {
-    try {
-      setLoading(true)
-      const params = gradeFilter ? { grade: gradeFilter } : {}
-      const res = await apiClient.get('/api/prediction/history', { params })
-      if (res.data.success) {
-        setHistoryList(res.data.data)
-      }
-    } catch (err) {
-      if (import.meta.env.DEV) console.error('加载历史数据失败:', err)
-      setMessage({ type: 'error', text: '加载历史数据失败' })
-    } finally {
-      setLoading(false)
-    }
-  }, [gradeFilter])
+  useEffect(() => {
+    const controller = new AbortController()
+    const params = encodeListQuery(listRequest.query)
+    params.set('offset', (listRequest.page - 1) * pageSize)
+    apiClient.get('/api/prediction/history', { params, signal: controller.signal })
+      .then(({ data }) => setListResult({ request: listRequest, data }))
+      .catch(err => {
+        if (controller.signal.aborted) return
+        if (import.meta.env.DEV) console.error('加载历史数据失败:', err)
+        setListResult({ request: listRequest, error: true })
+      })
+    return () => controller.abort()
+  }, [listRequest])
 
   // 加载统计数据
   const loadStats = useCallback(async () => {
@@ -58,9 +73,8 @@ function HistoryDataPage() {
 
   // 初始化加载
   useEffect(() => {
-    loadHistoryList()
     loadStats()
-  }, [loadHistoryList, loadStats])
+  }, [loadStats])
 
   // 查看历史详情
   const handleViewHistory = async (id) => {
@@ -88,7 +102,8 @@ function HistoryDataPage() {
       const res = await apiClient.delete(`/api/prediction/history/${id}`)
       if (res.data.success) {
         setMessage({ type: 'success', text: '删除成功' })
-        loadHistoryList()
+        setListRequest(current => ({ ...current, page: 1 }))
+        loadStats()
         setSelectedHistory(null)
       }
     } catch (err) {
@@ -193,7 +208,7 @@ function HistoryDataPage() {
           totalScore: '100',
         })
         // 刷新列表
-        loadHistoryList()
+        setListRequest(current => ({ ...current, page: 1 }))
         loadStats()
         setActiveTab('list')
       }
@@ -208,72 +223,39 @@ function HistoryDataPage() {
   // 渲染历史列表
   const renderHistoryList = () => (
     <div className="space-y-4">
-      {/* 筛选器 */}
-      <div className="flex items-center space-x-4">
-        <label className="text-sm font-medium text-gray-700">年级筛选:</label>
-        <select
-          value={gradeFilter}
-          onChange={(e) => setGradeFilter(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#c8f0d4]"
-        >
-          <option value="">全部</option>
-          <option value="高一">高一</option>
-          <option value="高二">高二</option>
-          <option value="高三">高三</option>
-        </select>
-      </div>
-
-      {/* 列表 */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">考试名称</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">年级</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">考试日期</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均分</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">得分率</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+      <div className={`bg-white rounded-xl shadow-sm border border-gray-100 ${listLoading || listError ? '[&_tbody]:hidden' : ''}`}
+        aria-busy={listLoading}>
+        <ListTable columns={columns} rows={historyList} rowKey="id" mode="server" query={query} hasData={hasData && !outOfRange}
+          onQueryChange={next => setListRequest({ query: next, page: 1 })}
+          emptyText={outOfRange ? '当前页已无记录' : '暂无历史数据，请先上传历史试卷'} renderRow={item => (
+            <tr className="hover:bg-gray-50">
+              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.name}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.grade}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.exam_date || '-'}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
+                {item.average_score?.toFixed(1) || '-'} / {item.total_score}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
+                {item.score_rate != null ? `${(item.score_rate * 100).toFixed(1)}%` : '-'}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm">
+                <button onClick={() => handleViewHistory(item.id)} className="text-[#1a2e1f] hover:text-[#0a120c] mr-3">查看</button>
+                <button onClick={() => handleDeleteHistory(item.id)} className="text-red-600 hover:text-red-800">删除</button>
+              </td>
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {historyList.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
-                  暂无历史数据，请先上传历史试卷
-                </td>
-              </tr>
-            ) : (
-              historyList.map((item) => (
-                <tr key={item.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.grade}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.exam_date || '-'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {item.average_score?.toFixed(1) || '-'} / {item.total_score}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {item.score_rate ? `${(item.score_rate * 100).toFixed(1)}%` : '-'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button
-                      onClick={() => handleViewHistory(item.id)}
-                      className="text-[#1a2e1f] hover:text-[#0a120c] mr-3"
-                    >
-                      查看
-                    </button>
-                    <button
-                      onClick={() => handleDeleteHistory(item.id)}
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      删除
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+          )} />
+        {(listLoading || listError) && <p role={listError ? 'alert' : 'status'} className="p-8 text-center text-gray-500">
+          {listError ? '加载历史数据失败' : '加载中...'}
+        </p>}
+        {!listLoading && !listError && (outOfRange || totalPages > 1) && (
+          <div className="p-3 border-t flex justify-center gap-2">
+            <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" disabled={page <= 1}
+              onClick={() => setListRequest({ query, page: outOfRange ? 1 : page - 1 })}>{outOfRange ? '返回第一页' : '上一页'}</button>
+            <span hidden={outOfRange} className="px-3 py-1 text-sm">{page} / {totalPages}</span>
+            <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" hidden={outOfRange} disabled={page >= totalPages}
+              onClick={() => setListRequest({ query, page: page + 1 })}>下一页</button>
+          </div>
+        )}
       </div>
 
       {/* 详情弹窗 */}
