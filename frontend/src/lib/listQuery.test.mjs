@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { createServer } from 'vite'
 import { compareValues, decodeListQuery, encodeListQuery, matchFilter, nextSort } from './listQuery.js'
 
 const columns = {
@@ -51,6 +55,32 @@ test('sorts Chinese by pinyin, compares numbers and timestamps, and puts blanks 
   for (const empty of [null, undefined, '']) {
     assert.ok(compareValues(0, empty, 'number') < 0)
     assert.ok(compareValues(empty, 0, 'number') > 0)
+  }
+})
+
+test('ListTable sorts grades in option order with blanks last in both directions', async (t) => {
+  const vite = await createServer({
+    root: fileURLToPath(new URL('../../', import.meta.url)),
+    server: { middlewareMode: true, hmr: false, watch: null },
+  })
+  t.after(() => vite.close())
+  const { default: ListTable } = await vite.ssrLoadModule('/src/components/ListTable.jsx')
+  const grades = ['高一', '高二', '高三']
+  const columns = [{ key: 'grade', header: '年级', type: 'enum', accessor: row => row.grade,
+    options: grades.map(value => ({ value, label: value })) }]
+  const rows = ['高三', null, '高一', '', '高二', undefined].map((grade, id) => ({ id, grade }))
+  for (const [dir, expected] of [['asc', grades], ['desc', [...grades].reverse()]]) {
+    await t.test(dir, () => {
+      const visible = []
+      renderToStaticMarkup(createElement(ListTable, { columns, rows, rowKey: 'id',
+        query: { sort: { key: 'grade', dir }, filters: {} },
+        renderRow: row => {
+          visible.push(row.grade)
+          return null
+        },
+      }))
+      assert.deepEqual(visible, [...expected, null, '', undefined])
+    })
   }
 })
 

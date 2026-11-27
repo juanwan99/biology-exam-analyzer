@@ -64,7 +64,11 @@ export default function ListTable({
       const x = a.getValue(id)
       const y = b.getValue(id)
       if (isEmptyValue(x) || isEmptyValue(y)) return (descending ? -1 : 1) * compareValues(x, y, column.type)
-      if (column.type === 'enum') return compareValues(enumLabel(column.options, x), enumLabel(column.options, y), 'text')
+      if (column.type === 'enum') {
+        const xIndex = column.options.findIndex(option => option.value === String(x))
+        const yIndex = column.options.findIndex(option => option.value === String(y))
+        return xIndex - yIndex
+      }
       return compareValues(x, y, column.type)
     },
     filterFn: (row, id, filter) => matchFilter(row.getValue(id), filter, column.type),

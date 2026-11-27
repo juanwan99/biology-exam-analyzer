@@ -63,10 +63,10 @@ def apply_list_query(stmt, count_stmt, params, columns, stable):
     if key in columns and direction in ("asc", "desc"):
         column = columns[key]
         expr = column.expr
-        if column.type in ("text", "enum"):
-            if isinstance(column.values, dict):
-                expr = case(column.values, value=expr, else_=expr)
+        if column.type == "text":
             expr = func.nullif(expr, "").collate("zh-Hans-CN-x-icu")
+        elif column.type == "enum":
+            expr = case({value: index for index, value in enumerate(column.values)}, value=expr)
         order = expr.asc() if direction == "asc" else expr.desc()
         stmt = stmt.order_by(None).order_by(order.nulls_last())
     return stmt.where(*predicates).order_by(stable), count_stmt.where(*predicates)

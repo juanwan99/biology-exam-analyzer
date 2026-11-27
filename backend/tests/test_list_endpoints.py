@@ -23,15 +23,17 @@ async def client(monkeypatch):
     for model in (AdminUser, OperationLog, ExamHistory):
         model.__table__.create(engine)
     older, newer = datetime(2026, 11, 26), datetime(2026, 11, 27, 23)
+    operations = {1: "login", 2: "logout", 3: "create"}
+    grades = {2: "高三", 4: ""}
     with Session(engine) as session, session.begin():
         session.add_all(
             OperationLog(id=i, username="admin-a" if i % 2 else "admin-b",
-                         operation="update_api_keys", target_type="user",
+                         operation=operations.get(i, "update_api_keys"), target_type="user",
                          target_name="A%_" if i % 2 else "ABC", created_at=newer if i % 2 else older)
             for i in range(1, 1201)
         )
         session.add_all(
-            ExamHistory(id=i, name=f"考试{i}", grade="高一" if i % 2 else "高二", total_score=100,
+            ExamHistory(id=i, name=f"考试{i}", grade=grades.get(i, "高一" if i % 2 else "高二"), total_score=100,
                         average_score=0 if i % 2 else 50, score_rate=0 if i % 2 else 0.5,
                         exam_date=newer, created_at=newer if i % 2 else older)
             for i in range(1, 121)
@@ -71,7 +73,8 @@ async def test_logs_full_count_stable_pages_and_concurrent_admins(client):
         return response.json()
 
     first, second, other = await asyncio.gather(page("admin-a", 1), page("admin-a", 2), page("admin-b", 1))
-    assert first["total"] == second["total"] == other["total"] == 600
+    assert first["total"] == second["total"] == 598
+    assert other["total"] == 599
     assert first["total_pages"] == 12
     assert ids(first, "logs") + ids(second, "logs") == list(range(1199, 999, -2))
     assert ids(other, "logs") == list(range(1200, 1100, -2))
@@ -86,6 +89,17 @@ async def test_history_filters_before_pagination_and_preserves_zero(client):
     assert first["total"] == second["total"] == 60
     assert ids(first, "data") + ids(second, "data") == list(range(119, 0, -2))
     assert first["data"][0]["average_score"] == first["data"][0]["score_rate"] == 0
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+@pytest.mark.parametrize("path,field,items,params,expected,blanks", [
+    (HISTORY, "grade", "data", {"limit": 120}, ["高一"] * 60 + ["高二"] * 58 + ["高三"], [""]),
+    (LOGS, "operation", "logs", {"f.operation": "login,logout,create"}, ["login", "logout", "create"], []),
+])
+async def test_enums_follow_declaration_order(client, direction, path, field, items, params, expected, blanks):
+    response = await client.get(path, headers=headers(), params={**params, "sort": f"{field}:{direction}"})
+    assert response.status_code == 200
+    assert [row[field] for row in response.json()[items]] == (expected if direction == "asc" else expected[::-1]) + blanks
 
 
 @pytest.mark.parametrize("path,key,total", [(LOGS, "logs", 1200), (HISTORY, "data", 120)])
