@@ -136,10 +136,15 @@ function AnalyzerPage() {
     pollingRef.current = false
   }
 
+  const changeFile = (nextFile) => {
+    if (file) setFullMark('')
+    setFile(nextFile)
+  }
+
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
     if (selectedFile) {
-      setFile(selectedFile)
+      changeFile(selectedFile)
       setError(null)
       setResult(null)
     }
@@ -152,7 +157,7 @@ function AnalyzerPage() {
     setDragOver(false)
     const droppedFile = e.dataTransfer.files[0]
     if (droppedFile && droppedFile.name.endsWith('.docx')) {
-      setFile(droppedFile)
+      changeFile(droppedFile)
       setError(null)
       setResult(null)
     } else {
@@ -439,7 +444,7 @@ function AnalyzerPage() {
                     <p className="text-sm" style={{ color: 'var(--color-muted)', marginTop: '2px' }}>{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setFile(null) }}
+                <button onClick={(e) => { e.stopPropagation(); changeFile(null) }}
                   className="transition-colors" style={{ color: 'var(--color-muted)', padding: '6px' }}
                   onMouseEnter={e => { e.currentTarget.style.color = '#dc3545' }}
                   onMouseLeave={e => { e.currentTarget.style.color = 'var(--color-muted)' }}>

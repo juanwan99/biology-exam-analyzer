@@ -122,9 +122,10 @@ def test_cli_apportions_full_mark_after_rescaling_sections(monkeypatch, tmp_path
     word = tmp_path / "example.docx"
     output = tmp_path / "scores.json"
     questions = [
-        {"id": 1, "content": "1.（2分）题干", "question_type": "single_choice"},
-        {"id": 2, "content": "2.（12分）简答", "question_type": "short_answer"},
-        {"id": 3, "content": "3.（86分）简答", "question_type": "short_answer"},
+        {"id": 1, "content": "1. 题干", "_section_header": "一、选择题：每小题6分，只有一项符合题意"},
+        {"id": 2, "content": "2.（2分）题干", "_section_header": "二、多选题"},
+        {"id": 3, "content": "3.（12分）简答", "_section_header": "三、非选择题"},
+        {"id": 4, "content": "4.（80分）简答", "_section_header": "四、非选择题"},
     ]
 
     async def split_paper(path):
@@ -132,16 +133,21 @@ def test_cli_apportions_full_mark_after_rescaling_sections(monkeypatch, tmp_path
         return questions, [b"word"]
 
     async def analyze_question(question, image_bytes, mode, *, subject):
-        assert paper_score(question) == (None, None)
         assert "total_score" not in question
-        question.update(total_score=2 if question["id"] == 1 else 8, score_source="model", score_status="valid")
+        qid = question["id"]
+        score, source = paper_score(question)
+        assert (score, source) == {1: (6, "section"), 2: (2, "paper")}.get(qid, (None, None))
+        if qid <= 2:
+            assert question["_section_header"] == questions[qid - 1]["_section_header"]
+        question.update(question_type=infer_question_type(question), total_score=score or 8,
+                        score_source=source or "model", score_status="valid")
         return question
 
     async def rescale_section_scores(analyzed, image_bytes, mode):
         assert (image_bytes, mode) == ([b"word"], "deep")
-        assert [q["total_score"] for q in analyzed] == [2, 8, 8]
+        assert [q["total_score"] for q in analyzed] == [6, 2, 8, 8]
         # 模拟分析后有一道可按分节小计缩放的题。
-        analyzed[1]["_section_header"] = "二、共1题，共12分"
+        analyzed[2]["_section_header"] = "二、共1题，共12分"
         return scale_section_scores(analyzed)
 
     monkeypatch.setattr(evaluation, "split_paper", split_paper)
@@ -155,9 +161,9 @@ def test_cli_apportions_full_mark_after_rescaling_sections(monkeypatch, tmp_path
     evaluation.main()
 
     rows = json.loads(output.read_text(encoding="utf-8"))
-    assert [row["total_score"] for row in rows] == [2, 12, 86] * 2
-    assert [row["score_source"] for row in rows] == ["model", "section_scaled", "full_mark_scaled"] * 2
-    assert [row["difference"] for row in rows] == [0] * 6
+    assert [row["total_score"] for row in rows] == [6, 2, 12, 80] * 2
+    assert [row["score_source"] for row in rows] == ["section", "paper", "section_scaled", "full_mark_scaled"] * 2
+    assert [row["difference"] for row in rows] == [0] * 8
 
 
 @pytest.mark.parametrize("returns_failure", [False, True])

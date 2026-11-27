@@ -168,7 +168,11 @@ if full_mark is not None:
     adjusted = mark_result.get("adjusted")
     check(mark_result.get("full_mark") == full_mark and adjusted is not None and "fixed_total" in mark_result,
           f"填写满分 {full_mark:g} 分的结果 {mark_result}")
-    if adjusted:
+    # 卡面指定的冒烟场景用 100 分的无小计样卷核对实际分配。
+    expect_adjustment = mode == "estimate" and full_mark == 100
+    if expect_adjustment:
+        check(adjusted is not None and adjusted > 0, "无小计样卷至少调整一道题")
+    if expect_adjustment or adjusted:
         check(total == full_mark, f"按满分分配后总分 {total:g}（应 {full_mark:g}）")
 elif "full_mark_result" in result:
     check(False, "空着试卷满分时结果出现 full_mark_result")

@@ -120,3 +120,19 @@ def test_full_mark_changes_source_only_for_changed_scores():
 
     assert score_rules.apportion_full_mark(questions, 6)["adjusted"] == 1
     assert questions == [_scored_question(2), _scored_question(4, "full_mark_scaled")]
+
+
+def test_mark_section_mismatch_includes_full_mark_scaled_questions():
+    questions = [
+        {**_scored_question(12, SOURCE_PAPER), "id": 1, "_section_header": BIG},
+        *[{**_scored_question(12), "id": i, "_section_header": BIG} for i in range(2, 6)],
+    ]
+
+    assert score_rules.apportion_full_mark(questions, 100)["adjusted"] == 4
+    assert mark_section_mismatch(questions) == [{
+        "section": BIG,
+        "expected_total": 60.0,
+        "actual_total": 100.0,
+        "inferred_question_ids": [2, 3, 4, 5],
+    }]
+    assert [q["score_status"] for q in questions] == ["valid"] + ["inferred"] * 4

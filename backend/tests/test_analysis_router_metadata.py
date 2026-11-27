@@ -436,3 +436,38 @@ async def test_analyze_auto_rejects_nonpositive_full_mark(upload_client, full_ma
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "full_mark"]
+
+
+@pytest.mark.parametrize(("full_mark", "question_total", "prediction_total"), [
+    (20, 20, 20),
+    (None, 14, 100),
+    (8, 14, 100),
+])
+async def test_analyze_auto_predicts_from_successfully_apportioned_small_full_mark(
+    upload_client, monkeypatch, full_mark, question_total, prediction_total,
+):
+    def split_quiz(path, *, subject):
+        return {"questions": [
+            {"id": i, "content": f"{i}.（1分）题干", "question_type": "single_choice"}
+            for i in range(1, 13)
+        ] + [
+            {"id": i, "content": f"{i}. 简答", "question_type": "short_answer"}
+            for i in range(13, 15)
+        ]}
+
+    analyze = analysis_router.analyze_question_full
+
+    async def analyze_quiz(question, image_bytes, mode):
+        result = await analyze(question, image_bytes, mode)
+        if question["question_type"] == "short_answer":
+            result["total_score"] = 1
+        return result
+
+    monkeypatch.setattr(analysis_router, "split_word_with_visual", split_quiz)
+    monkeypatch.setattr(analysis_router, "analyze_question_full", analyze_quiz)
+
+    response = await _submit_upload(upload_client, "teacher", full_mark)
+    await asyncio.gather(*analysis_router._bg_tasks)
+    result = await _upload_result(upload_client, response)
+    assert sum(_scores(result)) == question_total
+    assert result["score_prediction"]["total_score"] == prediction_total

@@ -478,7 +478,8 @@ async def _run_analysis_pipeline(
                 from prediction_service import _question_score
                 raw_total = sum(_question_score(q) for q in questions)
                 min_reasonable = len(questions) * 2
-                total_score = 100 if raw_total < min_reasonable else raw_total
+                used_full_mark = full_mark_result is not None and full_mark_result["adjusted"] > 0
+                total_score = 100 if not used_full_mark and raw_total < min_reasonable else raw_total
                 score_prediction = await prediction_service.predict_exam_score(
                     questions=questions, total_score=total_score,
                     grade="高三", exam_name=filename, save_prediction=True,

@@ -172,7 +172,7 @@ def apportion_full_mark(questions: List[Dict[str, Any]], full_mark: float) -> Di
 
 
 def mark_section_mismatch(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """分节写了「共 N 分」而本节题分合计不符时，把本节 LLM 推断分值的题标 score_status=inferred。
+    """分节写了「共 N 分」而本节题分合计不符时，把本节推断或按满分分配的题标 score_status=inferred。
 
     只改 score_status（展示 / 对账用），不动分值本身，不影响已完成的难度评估。返回告警列表。
     """
@@ -191,7 +191,8 @@ def mark_section_mismatch(questions: List[Dict[str, Any]]) -> List[Dict[str, Any
         actual = sum(float(q.get("total_score") or 0) for q in qs)
         if abs(actual - total) < 1e-6:
             continue
-        guessed = [q for q in qs if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)]
+        guessed = [q for q in qs
+                   if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG, SOURCE_FULL_MARK_SCALED)]
         for q in guessed:
             if q.get("score_status") == "valid":
                 q["score_status"] = "inferred"

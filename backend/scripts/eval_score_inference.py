@@ -17,6 +17,7 @@ from analysis_scheduling import gather_longest_first
 from score_rules import (
     CHOICE_TYPES, _HEAD_SCORE, _PER_QUESTION, _SECTION_TOTAL, apportion_full_mark, mark_section_mismatch, paper_score,
 )
+from utils import infer_question_type
 from visual_word_splitter import split_word_with_visual
 
 
@@ -56,7 +57,10 @@ async def split_paper(path: Path) -> tuple[list[dict], list[bytes]]:
 async def evaluate_paper(path: Path, runs: int, full_mark: float | None = None) -> list[list[dict]]:
     questions, image_bytes = await split_paper(path)
     expected_scores = [paper_score(q)[0] for q in questions]
-    remaining = sum(strip_scores(q) for q in questions)
+    remaining = sum(
+        strip_scores(q) for q in questions
+        if full_mark is None or infer_question_type(q) not in CHOICE_TYPES
+    )
     print(f"{path.name} 残留分值字样 {remaining} 处", flush=True)
 
     service = deps.get_analysis_service()
