@@ -19,6 +19,13 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors
     && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
+# 预先初始化 LibreOffice 共享缓存，避免多个转换进程并发首启时崩溃（#63）
+RUN warmup_dir="$(mktemp -d)" \
+    && printf '%s\n' '{\rtf1\ansi LibreOffice warmup}' > "$warmup_dir/warmup.rtf" \
+    && soffice --headless --convert-to pdf --outdir "$warmup_dir" "$warmup_dir/warmup.rtf" \
+    && rm "$warmup_dir/warmup.pdf" \
+    && rm -rf "$warmup_dir" /root/.config/libreoffice
+
 # 设置中文locale环境变量
 ENV LANG=zh_CN.UTF-8 \
     LANGUAGE=zh_CN:zh \
