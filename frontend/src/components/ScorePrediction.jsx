@@ -7,7 +7,7 @@ const columns = [
   { key: 'question_number', header: '题号', type: 'number', accessor: q => q.question_number, filterable: false },
   { key: 'difficulty', header: '难度', type: 'number', accessor: q => q.difficulty },
   { key: 'predicted_rate', header: '预估得分率（%）', type: 'number',
-    accessor: q => q.predicted_rate == null ? null : q.predicted_rate * 100 },
+    accessor: q => q.predicted_rate == null ? null : Math.round(q.predicted_rate * 1000) / 10 },
   { key: 'predicted_score', header: '预估分数', type: 'number', accessor: q => q.predicted_score, filterable: false },
   { key: 'confidence_interval', header: '置信区间', sortable: false, filterable: false },
 ]
@@ -160,7 +160,7 @@ function ScorePrediction({ prediction }) {
       {/* 各题预估详情 */}
       {showDetails && per_question_predictions && (
         <div className="mt-4 text-sm">
-          <ListTable columns={columns} rows={per_question_predictions} rowKey="question_id" emptyText="暂无各题预估"
+          <ListTable columns={columns} rows={per_question_predictions} rowKey="question_number" emptyText="暂无各题预估"
             renderRow={q => (
               <tr className="hover:bg-[#e8f8ee]">
                 <td className="px-3 py-2 font-medium">{q.question_number}</td>
