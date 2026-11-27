@@ -50,7 +50,7 @@ logger = get_logger()
 # 持有后台分析任务引用，防 asyncio 在任务完成前将其 GC 回收（CPython 仅弱引用 task）
 _bg_tasks: set = set()
 import task_manager
-from score_rules import apportion_full_mark, mark_section_mismatch
+from score_rules import mark_section_mismatch
 from analysis_scheduling import gather_longest_first
 
 router = APIRouter(tags=["analysis"])
@@ -426,7 +426,9 @@ async def _run_analysis_pipeline(
             await get_analysis_service().rescale_section_scores(questions, image_bytes, mode)
         except Exception:
             logger.exception("[分值] 分节小计缩放失败，保留 LLM 原分值")
-        full_mark_result = apportion_full_mark(questions, full_mark) if full_mark is not None else None
+        full_mark_result = None
+        if full_mark is not None:
+            full_mark_result = await get_analysis_service().apply_full_mark(questions, full_mark, image_bytes, mode)
         score_warnings = mark_section_mismatch(questions)
         for w in score_warnings:
             logger.warning(f"[分值] 分节合计不符: {w}")

@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -9,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 import analysis_router
 from score_rules import SOURCE_MODEL, paper_score
+from services.analysis_service import AnalysisService
 from tests.fakes.fake_llm_client import FakeLlmClient
 
 
@@ -276,7 +278,25 @@ async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path
 
 
 @pytest.fixture
-async def upload_client(monkeypatch, tmp_path):
+def upload_rescores(monkeypatch):
+    rescores = []
+
+    async def evaluate_with_refinement(question, *, mode, analysis_result):
+        score = question["total_score"]
+        rescores.append((question["id"], score))
+        return {"final_difficulty": 5.0, "score_distribution_by_difficulty": {"中等": score}}
+
+    service = AnalysisService(
+        analyzer=None, difficulty_engine=SimpleNamespace(evaluate_with_refinement=evaluate_with_refinement),
+        competency_analyzer=None, knowledge_mapper=None, doc_processor=None,
+        word_splitter=None, pdf_splitter=None,
+    )
+    monkeypatch.setattr(analysis_router, "get_analysis_service", lambda: service)
+    return rescores
+
+
+@pytest.fixture
+async def upload_client(monkeypatch, tmp_path, upload_rescores):
     import database
     import prediction_service
     from auth_router import active_tokens
@@ -312,8 +332,10 @@ async def upload_client(monkeypatch, tmp_path):
         if score is None:
             response = await llm.llm_call([{"role": "user", "content": question["content"]}])
             score, source = json.loads(response)["total_score"], SOURCE_MODEL
+        result = _question(question["id"])
+        result["difficulty"]["score_distribution_by_difficulty"] = {"中等": score}
         return {
-            **_question(question["id"]), **question,
+            **result, **question,
             "total_score": score, "score_source": source, "score_status": "valid",
         }
 
@@ -380,6 +402,27 @@ async def test_analyze_auto_without_full_mark_preserves_existing_result(upload_c
     assert [q["score_source"] for q in result["questions"]] == ["model", "paper", "model", "model"]
     assert result["score_warnings"] == []
     assert result["score_prediction"]["total_score"] == 30
+
+
+@pytest.mark.parametrize(("full_mark", "scores", "expected_rescores"), [
+    (100, [2, 10, 39, 49], [(3, 39), (4, 49)]),
+    (31, [2, 10, 8, 11], [(4, 11)]),
+    (None, [2, 10, 8, 10], []),
+])
+async def test_analyze_auto_rescores_only_questions_changed_by_full_mark(
+    upload_client, upload_rescores, full_mark, scores, expected_rescores,
+):
+    response = await _submit_upload(upload_client, "expert", full_mark)
+    await asyncio.gather(*analysis_router._bg_tasks)
+    result = await _upload_result(upload_client, response)
+
+    assert _scores(result) == scores
+    distribution = result["exam_statistics"]["difficulty_distribution_by_score"]
+    assert (sum(bucket["total_score"] for bucket in distribution.values()), sorted(upload_rescores)) == (
+        sum(scores), expected_rescores,
+    )
+    if full_mark is None:
+        assert "full_mark_result" not in result
 
 
 async def test_analyze_auto_concurrent_uploads_keep_full_mark_per_task(upload_client, monkeypatch):
