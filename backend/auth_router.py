@@ -549,7 +549,7 @@ async def get_operation_logs(
     username: str = None,
     operation: str = None,
     target_type: str = None,
-    user: dict = Depends(require_auth),
+    admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """获取操作日志"""

@@ -78,6 +78,7 @@ function AdminPage() {
     setAuthenticated(false)
     setToken('')
     setUser(null)
+    setActiveTab('exercises')
     localStorage.removeItem('authToken')
     localStorage.removeItem('authUser')
   }
@@ -152,8 +153,10 @@ function AdminPage() {
     { key: 'exercises', label: '题库管理', icon: BookOpen },
     { key: 'textbook', label: '教材管理', icon: FileText },
     { key: 'prompts', label: 'Prompt管理', icon: Terminal },
-    { key: 'logs', label: '操作日志', icon: ScrollText },
-    ...(user?.role === 'admin' ? [{ key: 'users', label: '用户管理', icon: Users }] : [])
+    ...(user?.role === 'admin' ? [
+      { key: 'logs', label: '操作日志', icon: ScrollText },
+      { key: 'users', label: '用户管理', icon: Users },
+    ] : [])
   ]
 
   return (
