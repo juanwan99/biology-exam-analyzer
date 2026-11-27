@@ -47,7 +47,7 @@ cd /home/ops/projects/biology-exam-analyzer
 git pull --ff-only origin main
 docker compose -p biology restart backend                # 只改了后端 .py / prompt
 docker compose -p biology up -d --build backend          # 改了 requirements.txt 或 backend/Dockerfile
-docker compose -p biology up -d --build frontend         # 改了 frontend/
+docker compose -p biology up -d --build --no-deps frontend # 改了 frontend/；--no-deps：不连带重建后端
 ```
 
 - `up -d backend`（含 `--build`、改了 compose env）后后端容器 IP 会变，前端 nginx 还连着旧 IP，登录、上传全 502：必须接着 `docker compose -p biology restart frontend`。
