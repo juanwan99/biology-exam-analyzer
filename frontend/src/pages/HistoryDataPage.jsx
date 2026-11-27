@@ -103,6 +103,7 @@ function HistoryDataPage() {
       if (res.data.success) {
         setMessage({ type: 'success', text: '删除成功' })
         setListRequest(current => ({ ...current, page: 1 }))
+        loadStats()
         setSelectedHistory(null)
       }
     } catch (err) {
