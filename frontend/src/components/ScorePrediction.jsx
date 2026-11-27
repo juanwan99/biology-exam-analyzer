@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { Crosshair, AlertTriangle } from 'lucide-react'
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
+import ListTable from './ListTable'
+
+const columns = [
+  { key: 'question_number', header: '题号', type: 'number', accessor: q => q.question_number, filterable: false },
+  { key: 'difficulty', header: '难度', type: 'number', accessor: q => q.difficulty },
+  { key: 'predicted_rate', header: '预估得分率（%）', type: 'number',
+    accessor: q => q.predicted_rate == null ? null : q.predicted_rate * 100 },
+  { key: 'predicted_score', header: '预估分数', type: 'number', accessor: q => q.predicted_score, filterable: false },
+  { key: 'confidence_interval', header: '置信区间', sortable: false, filterable: false },
+]
 
 /**
  * 分数预估展示组件
@@ -149,39 +159,27 @@ function ScorePrediction({ prediction }) {
 
       {/* 各题预估详情 */}
       {showDetails && per_question_predictions && (
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full divide-y divide-[#e2e8e4] text-sm">
-            <thead className="bg-[#f9fafb]">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[#5a6b5e]">题号</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[#5a6b5e]">难度</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[#5a6b5e]">预估得分率</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[#5a6b5e]">预估分数</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[#5a6b5e]">置信区间</th>
+        <div className="mt-4 text-sm">
+          <ListTable columns={columns} rows={per_question_predictions} rowKey="question_id" emptyText="暂无各题预估"
+            renderRow={q => (
+              <tr className="hover:bg-[#e8f8ee]">
+                <td className="px-3 py-2 font-medium">{q.question_number}</td>
+                <td className="px-3 py-2">
+                  <span className={`px-2 py-0.5 rounded text-xs ${
+                    q.difficulty <= 3.5 ? 'bg-[#e8f8ee] text-[#2d5a3d]' :
+                    q.difficulty <= 6.5 ? 'bg-[#fdf6e3] text-[#92400e]' :
+                    'bg-[#fef0f0] text-[#991b1b]'
+                  }`}>
+                    {q.difficulty?.toFixed(1)}
+                  </span>
+                </td>
+                <td className="px-3 py-2">{((q.predicted_rate || 0) * 100).toFixed(1)}%</td>
+                <td className="px-3 py-2">{q.predicted_score?.toFixed(2)} / {q.question_score}</td>
+                <td className="px-3 py-2 text-[#5a6b5e]">
+                  {q.confidence_interval?.[0]?.toFixed(2)} - {q.confidence_interval?.[1]?.toFixed(2)}
+                </td>
               </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-[#e2e8e4]">
-              {per_question_predictions.map((q) => (
-                <tr key={q.question_id} className="hover:bg-[#e8f8ee]">
-                  <td className="px-3 py-2 font-medium">{q.question_number}</td>
-                  <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-xs ${
-                      q.difficulty <= 3.5 ? 'bg-[#e8f8ee] text-[#2d5a3d]' :
-                      q.difficulty <= 6.5 ? 'bg-[#fdf6e3] text-[#92400e]' :
-                      'bg-[#fef0f0] text-[#991b1b]'
-                    }`}>
-                      {q.difficulty?.toFixed(1)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{((q.predicted_rate || 0) * 100).toFixed(1)}%</td>
-                  <td className="px-3 py-2">{q.predicted_score?.toFixed(2)} / {q.question_score}</td>
-                  <td className="px-3 py-2 text-[#5a6b5e]">
-                    {q.confidence_interval?.[0]?.toFixed(2)} - {q.confidence_interval?.[1]?.toFixed(2)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            )} />
         </div>
       )}
 
