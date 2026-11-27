@@ -554,7 +554,7 @@ async def get_operation_logs(
     request: Request,
     page: int = 1,
     page_size: int = 50,
-    user: dict = Depends(require_auth),
+    admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """获取操作日志"""

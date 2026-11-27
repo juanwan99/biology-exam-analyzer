@@ -325,6 +325,7 @@ function ResultDisplay({ data }) {
   }, [selectedQuestion])
 
   if (!data || !data.questions) return null
+  const fullMarkResult = data.full_mark_result
 
   const flaggedQuestions = data.questions.filter((q) =>
     (q.quality_flags && q.quality_flags.length) || q.analysis_failed
@@ -441,6 +442,13 @@ function ResultDisplay({ data }) {
         )}
 
         {/* 整卷分析 */}
+        {fullMarkResult && (
+          <p className="text-sm mb-4" style={{ color: 'var(--color-secondary)' }}>
+            {fullMarkResult.adjusted > 0
+              ? `已按试卷满分 ${fullMarkResult.full_mark} 分分配大题分值：调整了 ${fullMarkResult.adjusted} 道题（卷面标了分值的题没动）。`
+              : `填写的满分 ${fullMarkResult.full_mark} 分没用上：卷面已标分值和选择题已有 ${fullMarkResult.fixed_total} 分，大题分值未调整。`}
+          </p>
+        )}
         {data.exam_statistics && (
           <ExamStatisticsEnhanced
             data={data.exam_statistics}

@@ -15,7 +15,7 @@ from analysis_options import want_competency_supplement
 from visual_word_splitter import split_word_with_visual
 from analysis_calibration import canonicalize_knowledge_point, is_non_textbook_skill_point
 from metadata_contracts import AnalyzedQuestionEnvelope, LLMCallRecord
-from score_rules import (SOURCE_MODEL, SOURCE_SECTION_AVG, exceeds_section_total, paper_score,
+from score_rules import (SOURCE_MODEL, SOURCE_SECTION_AVG, apportion_full_mark, exceeds_section_total, paper_score,
                          scale_section_scores, section_average_score)
 from subject_config import get_competency_dims, normalize_subject
 from question_groups import with_group_material
@@ -380,6 +380,20 @@ class AnalysisService:
         for c in changes:
             logger.warning(f"[分值] 题目{c['id']} 按分节小计缩放 {c['old']:g} → {c['new']:g}（{c['section']}）")
 
+        await self._rescore_questions([q for q in questions if q.get("id") in changed_ids], image_bytes, mode)
+        return changes
+
+    async def apply_full_mark(self, questions: List[Dict], full_mark: float,
+                              image_bytes: List[bytes], mode: str) -> Dict:
+        """按试卷满分分配大题分值，再重算本次改分题目的难度。"""
+        previous_scores = [q.get("total_score") for q in questions]
+        result = apportion_full_mark(questions, full_mark)
+        if result["adjusted"]:
+            changed_questions = [q for q, score in zip(questions, previous_scores) if q.get("total_score") != score]
+            await self._rescore_questions(changed_questions, image_bytes, mode)
+        return result
+
+    async def _rescore_questions(self, questions: List[Dict], image_bytes: List[bytes], mode: str) -> None:
         async def _rescore(question: Dict) -> None:
             analysis = question.get("analysis") or {}
             try:
@@ -394,9 +408,7 @@ class AnalysisService:
                 logger.exception(f"[分值] 题目{question.get('id')} 缩放后重算难度失败，保留原难度")
 
         await asyncio.gather(*(_rescore(q) for q in questions
-                               if q.get("id") in changed_ids and q.get("analysis")
-                               and not q.get("analysis_failed")))
-        return changes
+                               if q.get("analysis") and not q.get("analysis_failed")))
 
     # ── 批量并发分析 ──────────────────────────────────────────
 

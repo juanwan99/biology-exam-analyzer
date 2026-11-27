@@ -232,7 +232,7 @@ function HistoryDataPage() {
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.grade}</td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.exam_date || '-'}</td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
-                {item.average_score?.toFixed(2) || '-'} / {item.total_score}
+                {item.average_score?.toFixed(1) || '-'} / {item.total_score}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
                 {item.score_rate != null ? `${(item.score_rate * 100).toFixed(1)}%` : '-'}

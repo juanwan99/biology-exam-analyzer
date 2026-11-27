@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
+from tempfile import NamedTemporaryFile
 import asyncio
 import os
 import json
@@ -207,6 +208,7 @@ async def analyze_auto(
     report_mode: str = Form("full"),
     subject: str = Form("biology"),
     authorization: Optional[str] = Header(None),
+    full_mark: Optional[float] = Form(None, gt=0),
 ):
     """
     新接口：使用规则拆分 + 自动完整分析（不显示校准页面）
@@ -281,7 +283,8 @@ async def analyze_auto(
             raise HTTPException(400, detail="仅支持 .docx 和 .pdf 格式")
 
         # 2. 保存文件
-        file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        with NamedTemporaryFile(dir=UPLOAD_DIR, suffix=f".{file_ext}", delete=False) as upload:
+            file_path = Path(upload.name)
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             if len(content) > MAX_UPLOAD_SIZE:
@@ -364,7 +367,7 @@ async def analyze_auto(
             task_id, _bg_questions, _bg_image_bytes, _bg_mode,
             _bg_competency_analyzer,
             _bg_generate_report, _bg_report_mode, _bg_filename,
-            _bg_start_time,
+            _bg_start_time, full_mark=full_mark,
         ))
         _bg_tasks.add(_bg_task)
         _bg_task.add_done_callback(_bg_tasks.discard)
@@ -391,7 +394,7 @@ async def _run_analysis_pipeline(
     task_id, questions, image_bytes, mode,
     competency_analyzer,
     generate_report, report_mode, filename,
-    start_time,
+    start_time, full_mark: Optional[float] = None,
 ):
     """后台分析管线 — analyze_auto 返回后异步执行。"""
     try:
@@ -425,6 +428,9 @@ async def _run_analysis_pipeline(
             await get_analysis_service().rescale_section_scores(questions, image_bytes, mode)
         except Exception:
             logger.exception("[分值] 分节小计缩放失败，保留 LLM 原分值")
+        full_mark_result = None
+        if full_mark is not None:
+            full_mark_result = await get_analysis_service().apply_full_mark(questions, full_mark, image_bytes, mode)
         score_warnings = mark_section_mismatch(questions)
         for w in score_warnings:
             logger.warning(f"[分值] 分节合计不符: {w}")
@@ -476,7 +482,10 @@ async def _run_analysis_pipeline(
                 from prediction_service import _question_score
                 raw_total = sum(_question_score(q) for q in questions)
                 min_reasonable = len(questions) * 2
-                total_score = 100 if raw_total < min_reasonable else raw_total
+                used_full_mark = full_mark_result is not None and (
+                    full_mark_result["adjusted"] > 0 or abs(raw_total - full_mark) < 1e-6
+                )
+                total_score = 100 if not used_full_mark and raw_total < min_reasonable else raw_total
                 score_prediction = await prediction_service.predict_exam_score(
                     questions=questions, total_score=total_score,
                     grade="高三", exam_name=filename, save_prediction=True,
@@ -508,6 +517,8 @@ async def _run_analysis_pipeline(
         }
         if score_prediction:
             result["score_prediction"] = score_prediction
+        if full_mark_result is not None:
+            result["full_mark_result"] = full_mark_result
 
         task_manager.complete(task_id, result)
 
