@@ -122,9 +122,38 @@ def test_full_mark_changes_source_only_for_changed_scores():
     assert questions == [_scored_question(2), _scored_question(4, "full_mark_scaled")]
 
 
+@pytest.mark.parametrize("scores", [[12] * 5, [10, 12, 12, 12, 12]])
+def test_full_mark_preserves_sections_already_matching_paper_subtotal(scores):
+    section = [{**_scored_question(score), "id": i, "_section_header": BIG}
+               for i, score in enumerate(scores, 1)]
+    other = _scored_question(8)
+    questions = section + [other]
+    score_rules.scale_section_scores(questions)
+    before = deepcopy(section)
+
+    assert score_rules.apportion_full_mark(questions, 70) == {
+        "full_mark": 70, "adjusted": 1, "fixed_total": 60,
+    }
+    assert section == before
+    assert other == _scored_question(10, "full_mark_scaled")
+    assert mark_section_mismatch(questions) == []
+
+
+def test_full_mark_preserves_questions_with_failed_difficulty():
+    failed = {**_scored_question(8), "difficulty": {"analysis_failed": True, "failure_reason": "missing_media"}}
+    before = deepcopy(failed)
+    other = _scored_question(8)
+
+    assert score_rules.apportion_full_mark([failed, other], 20) == {
+        "full_mark": 20, "adjusted": 1, "fixed_total": 8,
+    }
+    assert failed == before
+    assert other == _scored_question(12, "full_mark_scaled")
+
+
 def test_mark_section_mismatch_includes_full_mark_scaled_questions():
     questions = [
-        {**_scored_question(12, SOURCE_PAPER), "id": 1, "_section_header": BIG},
+        {**_scored_question(11, SOURCE_PAPER), "id": 1, "_section_header": BIG},
         *[{**_scored_question(12), "id": i, "_section_header": BIG} for i in range(2, 6)],
     ]
 

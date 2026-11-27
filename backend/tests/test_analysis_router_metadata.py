@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 from datetime import datetime
+from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -372,10 +374,10 @@ async def upload_client(monkeypatch, tmp_path, upload_rescores):
         yield client
 
 
-async def _submit_upload(client, token, full_mark=None, filename="exam.docx"):
+async def _submit_upload(client, token, full_mark=None, content=b"docx"):
     return await client.post(
         "/api/analyze_auto",
-        files={"file": (filename, b"docx")},
+        files={"file": ("exam.docx", content)},
         data={} if full_mark is None else {"full_mark": str(full_mark)},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -427,8 +429,26 @@ async def test_analyze_auto_rescores_only_questions_changed_by_full_mark(
 
 async def test_analyze_auto_concurrent_uploads_keep_full_mark_per_task(upload_client, monkeypatch):
     analyze = analysis_router.analyze_question_full
+    split_word = analysis_router.split_word_with_visual
+    splitting = Barrier(2, timeout=5)
+    seen_paths = []
     both_started = asyncio.Event()
     started = 0
+
+    class SameSecond(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 11, 27, 7, 0, 0)
+
+    def split_together(path, *, subject):
+        upload = Path(path)
+        seen_paths.append(upload)
+        splitting.wait()
+        content = upload.read_bytes().decode()
+        splitting.wait()
+        result = split_word(path, subject=subject)
+        result["questions"][0]["content"] = content
+        return result
 
     async def analyze_together(question, image_bytes, mode):
         nonlocal started
@@ -440,9 +460,13 @@ async def test_analyze_auto_concurrent_uploads_keep_full_mark_per_task(upload_cl
         return await analyze(question, image_bytes, mode)
 
     monkeypatch.setattr(analysis_router, "analyze_question_full", analyze_together)
+    monkeypatch.setattr(analysis_router, "split_word_with_visual", split_together)
+    monkeypatch.setattr(analysis_router, "datetime", SameSecond)
+    expert_content = "1.（2分）专家的卷"
+    teacher_content = "1.（2分）老师的卷"
     with_mark, without_mark = await asyncio.gather(
-        _submit_upload(upload_client, "expert", 100),
-        _submit_upload(upload_client, "teacher", filename="other-exam.docx"),
+        _submit_upload(upload_client, "expert", 100, content=expert_content.encode()),
+        _submit_upload(upload_client, "teacher", content=teacher_content.encode()),
     )
     await asyncio.gather(*analysis_router._bg_tasks)
 
@@ -454,6 +478,11 @@ async def test_analyze_auto_concurrent_uploads_keep_full_mark_per_task(upload_cl
     without_result = await _upload_result(upload_client, without_mark)
     assert "full_mark_result" not in without_result
     assert _scores(without_result) == [2, 10, 8, 10]
+    assert (with_result["questions"][0]["content"], without_result["questions"][0]["content"]) == (
+        expert_content, teacher_content,
+    )
+    assert len(set(seen_paths)) == 2
+    assert not any(path.exists() for path in seen_paths)
 
 
 async def test_analyze_auto_same_paper_reuploaded_with_changed_full_mark(upload_client):
@@ -481,13 +510,14 @@ async def test_analyze_auto_rejects_nonpositive_full_mark(upload_client, full_ma
     assert response.json()["detail"][0]["loc"] == ["body", "full_mark"]
 
 
-@pytest.mark.parametrize(("full_mark", "question_total", "prediction_total"), [
-    (20, 20, 20),
-    (None, 14, 100),
-    (8, 14, 100),
+@pytest.mark.parametrize(("full_mark", "unmarked_score", "question_total", "prediction_total"), [
+    (20, 1, 20, 20),
+    (20, 4, 20, 20),
+    (None, 1, 14, 100),
+    (8, 1, 14, 100),
 ])
-async def test_analyze_auto_predicts_from_successfully_apportioned_small_full_mark(
-    upload_client, monkeypatch, full_mark, question_total, prediction_total,
+async def test_analyze_auto_predicts_from_small_full_mark_matching_question_total(
+    upload_client, monkeypatch, full_mark, unmarked_score, question_total, prediction_total,
 ):
     def split_quiz(path, *, subject):
         return {"questions": [
@@ -503,7 +533,7 @@ async def test_analyze_auto_predicts_from_successfully_apportioned_small_full_ma
     async def analyze_quiz(question, image_bytes, mode):
         result = await analyze(question, image_bytes, mode)
         if question["question_type"] == "short_answer":
-            result["total_score"] = 1
+            result["total_score"] = unmarked_score
         return result
 
     monkeypatch.setattr(analysis_router, "split_word_with_visual", split_quiz)
@@ -513,4 +543,6 @@ async def test_analyze_auto_predicts_from_successfully_apportioned_small_full_ma
     await asyncio.gather(*analysis_router._bg_tasks)
     result = await _upload_result(upload_client, response)
     assert sum(_scores(result)) == question_total
+    if full_mark == question_total:
+        assert result["full_mark_result"]["adjusted"] == (2 if unmarked_score == 1 else 0)
     assert result["score_prediction"]["total_score"] == prediction_total

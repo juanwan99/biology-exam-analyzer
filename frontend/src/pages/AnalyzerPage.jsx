@@ -137,7 +137,10 @@ function AnalyzerPage() {
   }
 
   const changeFile = (nextFile) => {
-    if (file) setFullMark('')
+    if (file && (!nextFile || file.name !== nextFile.name ||
+        file.size !== nextFile.size || file.lastModified !== nextFile.lastModified)) {
+      setFullMark('')
+    }
     setFile(nextFile)
   }
 

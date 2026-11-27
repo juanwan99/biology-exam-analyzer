@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
+from tempfile import NamedTemporaryFile
 import asyncio
 import os
 import json
@@ -282,7 +283,8 @@ async def analyze_auto(
             raise HTTPException(400, detail="仅支持 .docx 和 .pdf 格式")
 
         # 2. 保存文件
-        file_path = UPLOAD_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        with NamedTemporaryFile(dir=UPLOAD_DIR, suffix=f".{file_ext}", delete=False) as upload:
+            file_path = Path(upload.name)
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             if len(content) > MAX_UPLOAD_SIZE:
@@ -480,7 +482,9 @@ async def _run_analysis_pipeline(
                 from prediction_service import _question_score
                 raw_total = sum(_question_score(q) for q in questions)
                 min_reasonable = len(questions) * 2
-                used_full_mark = full_mark_result is not None and full_mark_result["adjusted"] > 0
+                used_full_mark = full_mark_result is not None and (
+                    full_mark_result["adjusted"] > 0 or abs(raw_total - full_mark) < 1e-6
+                )
                 total_score = 100 if not used_full_mark and raw_total < min_reasonable else raw_total
                 score_prediction = await prediction_service.predict_exam_score(
                     questions=questions, total_score=total_score,
