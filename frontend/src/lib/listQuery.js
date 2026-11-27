@@ -59,9 +59,8 @@ export function decodeListQuery(params, columns) {
   for (const [param, value] of new URLSearchParams(params)) {
     if (param === 'sort') {
       const [, key, dir] = /^(.+):(asc|desc)$/.exec(value) ?? []
-      if (!key) {
-        dropped.push({ param, value, reason: 'invalid_sort' })
-      } else if (!Object.hasOwn(columns, key) || !types.includes(columns[key].type) || columns[key].sortable === false) {
+      if (!key) dropped.push({ param, value, reason: 'invalid_sort' })
+      else if (!Object.hasOwn(columns, key) || !types.includes(columns[key].type) || columns[key].sortable === false) {
         dropped.push({ param, value, reason: 'unknown_column' })
       } else sort = { key, dir }
     } else if (param.startsWith('f.')) {

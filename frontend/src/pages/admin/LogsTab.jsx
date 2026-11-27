@@ -25,7 +25,7 @@ function LogsTab({ getHeaders }) {
   const [request, setRequest] = useState({ query: { sort: null, filters: {} }, page: 1 })
   const [result, setResult] = useState(null)
   const { query, page: logsPage } = request
-  const { logs = [], total: logsTotal = 0, total_pages: logsTotalPages = 0 } = result?.data ?? {}
+  const { logs = [], total: logsTotal = 0, total_pages: logsTotalPages = 0, has_data: hasData } = result?.data ?? {}
   const logsLoading = result?.request !== request
   const loadError = !logsLoading && result.error
 
@@ -49,7 +49,7 @@ function LogsTab({ getHeaders }) {
       <div className="p-4 border-b flex-shrink-0">
         <h3 className="font-medium">操作日志 (共 {logsTotal} 条)</h3>
       </div>
-      <ListTable columns={columns} rows={logs} rowKey="id" mode="server" query={query}
+      <ListTable columns={columns} rows={logs} rowKey="id" mode="server" query={query} hasData={hasData}
         onQueryChange={next => setRequest({ query: next, page: 1 })} emptyText="暂无操作日志"
         renderRow={log => (
           <tr className="hover:bg-gray-50">

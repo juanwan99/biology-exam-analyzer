@@ -166,11 +166,10 @@ class PredictionService:
         """列出历史记录"""
         query, count_query = apply_list_query(
             select(ExamHistory).order_by(ExamHistory.created_at.desc().nulls_last()),
-            select(func.count(ExamHistory.id)),
+            select(func.count(ExamHistory.id), select(ExamHistory.id).exists()),
             params, HISTORY_COLUMNS, ExamHistory.id.desc(),
         )
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar()
+        total, has_data = (await self.db.execute(count_query)).one()
 
         # 分页查询
         query = query.offset(offset).limit(limit)
@@ -179,6 +178,7 @@ class PredictionService:
 
         return {
             'total': total,
+            'has_data': has_data,
             'items': [self._exam_to_dict(e) for e in exams]
         }
 

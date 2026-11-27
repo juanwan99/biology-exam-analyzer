@@ -14,7 +14,7 @@ def compile_query(params):
 
     columns = {
         "name": ListColumn("text", sample.c.name),
-        "grade": ListColumn("enum", sample.c.grade, ("高一", "A,B")),
+        "grade": ListColumn("enum", sample.c.grade, {"高一": "一年级", "A,B": "带逗号"}),
         "logged": ListColumn("date", sample.c.logged),
         "score": ListColumn("number", sample.c.score),
     }
@@ -27,7 +27,7 @@ def compile_query(params):
 
 def test_filters_are_bound_and_identical_for_count():
     rows, count = compile_query({
-        "sort": "name:asc", "f.name": r"a%_\b", "f.grade": "高一,A%2CB",
+        "sort": "grade:asc", "f.name": r"a%_\b", "f.grade": "高一,A%2CB",
         "f.logged": "..2026-11-27", "f.score": "-1.5e-2..", "f.unknown": "bad",
     })
     assert "ILIKE" in str(rows) and "ESCAPE" in str(rows)
@@ -39,6 +39,8 @@ def test_filters_are_bound_and_identical_for_count():
     assert ["高一", "A,B"] in values
     assert datetime(2026, 11, 27, 23, 59, 59, 999999) in values
     assert Decimal("-0.015") in values
+    assert "CASE sample.grade WHEN" in str(rows)
+    assert "一年级" in rows.params.values()
 
 
 def test_unknown_sort_preserves_default_and_tie_breaker():

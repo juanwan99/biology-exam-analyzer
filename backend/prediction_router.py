@@ -122,7 +122,7 @@ async def list_exam_history(
 
     try:
         result = await service.list_exam_history(request.query_params, limit=limit, offset=offset)
-        return {"success": True, "data": result["items"], "total": result["total"]}
+        return {"success": True, "data": result["items"], "total": result["total"], "has_data": result["has_data"]}
     except HTTPException:
         raise
     except Exception as e:

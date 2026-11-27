@@ -21,10 +21,11 @@ function HistoryDataPage() {
   const [listRequest, setListRequest] = useState({ query: { sort: null, filters: {} }, page: 1 })
   const [listResult, setListResult] = useState(null)
   const { query, page } = listRequest
-  const { data: historyList = [], total = 0 } = listResult?.data ?? {}
+  const { data: historyList = [], total = 0, has_data: hasData } = listResult?.data ?? {}
   const listLoading = listResult?.request !== listRequest
   const listError = !listLoading && listResult.error
   const totalPages = Math.ceil(total / pageSize)
+  const outOfRange = page > Math.max(totalPages, 1)
   const [selectedHistory, setSelectedHistory] = useState(null)
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -224,15 +225,15 @@ function HistoryDataPage() {
     <div className="space-y-4">
       <div className={`bg-white rounded-xl shadow-sm border border-gray-100 ${listLoading || listError ? '[&_tbody]:hidden' : ''}`}
         aria-busy={listLoading}>
-        <ListTable columns={columns} rows={historyList} rowKey="id" mode="server" query={query}
+        <ListTable columns={columns} rows={historyList} rowKey="id" mode="server" query={query} hasData={hasData && !outOfRange}
           onQueryChange={next => setListRequest({ query: next, page: 1 })}
-          emptyText="暂无历史数据，请先上传历史试卷" renderRow={item => (
+          emptyText={outOfRange ? '当前页已无记录' : '暂无历史数据，请先上传历史试卷'} renderRow={item => (
             <tr className="hover:bg-gray-50">
               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.name}</td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.grade}</td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.exam_date || '-'}</td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
-                {item.average_score?.toFixed(1) || '-'} / {item.total_score}
+                {item.average_score?.toFixed(2) || '-'} / {item.total_score}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">
                 {item.score_rate != null ? `${(item.score_rate * 100).toFixed(1)}%` : '-'}
@@ -244,12 +245,12 @@ function HistoryDataPage() {
             </tr>
           )} />
         {listLoading && <p role="status" className="p-8 text-center text-gray-500">加载中...</p>}
-        {!listLoading && !listError && totalPages > 1 && (
+        {!listLoading && !listError && (outOfRange || totalPages > 1) && (
           <div className="p-3 border-t flex justify-center gap-2">
             <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" disabled={page <= 1}
-              onClick={() => setListRequest({ query, page: page - 1 })}>上一页</button>
-            <span className="px-3 py-1 text-sm">{page} / {totalPages}</span>
-            <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" disabled={page >= totalPages}
+              onClick={() => setListRequest({ query, page: outOfRange ? 1 : page - 1 })}>{outOfRange ? '返回第一页' : '上一页'}</button>
+            <span hidden={outOfRange} className="px-3 py-1 text-sm">{page} / {totalPages}</span>
+            <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" hidden={outOfRange} disabled={page >= totalPages}
               onClick={() => setListRequest({ query, page: page + 1 })}>下一页</button>
           </div>
         )}

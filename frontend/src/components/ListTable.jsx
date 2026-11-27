@@ -4,7 +4,6 @@ import { compareValues, isEmptyValue, matchFilter, nextSort } from '../lib/listQ
 
 const inputClass = 'rounded border border-gray-300 px-2 py-1 text-sm min-w-0'
 const buttonClass = 'rounded border px-3 py-1 text-sm hover:bg-gray-100'
-const cellClass = 'px-3 py-2 text-xs text-gray-500'
 const enumLabel = (options, value) => options.find(option => option.value === String(value))?.label ?? value
 
 function filterLabel(column, value) {
@@ -48,7 +47,7 @@ function FilterControl({ column, value, onChange }) {
  * Enum options use { value, label } with string values. renderRow(row) returns a tr.
  */
 export default function ListTable({
-  columns, rows, rowKey, mode = 'client', query, onQueryChange, emptyText = '暂无记录', renderRow,
+  columns, rows, rowKey, mode = 'client', query, onQueryChange, hasData = rows.length > 0, emptyText = '暂无记录', renderRow,
 }) {
   const server = mode === 'server'
   const [localQuery, setLocalQuery] = useState({ sort: null, filters: {} })
@@ -65,9 +64,8 @@ export default function ListTable({
       const x = a.getValue(id)
       const y = b.getValue(id)
       if (isEmptyValue(x) || isEmptyValue(y)) return (descending ? -1 : 1) * compareValues(x, y, column.type)
-      return column.type === 'enum'
-        ? compareValues(enumLabel(column.options, x), enumLabel(column.options, y), 'text')
-        : compareValues(x, y, column.type)
+      if (column.type === 'enum') return compareValues(enumLabel(column.options, x), enumLabel(column.options, y), 'text')
+      return compareValues(x, y, column.type)
     },
     filterFn: (row, id, filter) => matchFilter(row.getValue(id), filter, column.type),
   })), [columns, descending])
@@ -95,13 +93,12 @@ export default function ListTable({
   const clear = <button type="button" className={buttonClass} onClick={() => changeQuery({ sort, filters: {} })}>清除筛选</button>
   const filterColumns = columns.filter(column => column.filterable !== false)
   const visible = table.getRowModel().rows
-  const filteredEmpty = columnFilters.length > 0 && (server || rows.length > 0)
+  const filteredEmpty = columnFilters.length > 0 && hasData
 
   return <>
     {filterColumns.length > 0 && (
-      <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-2" onKeyDown={event => {
-        if (event.key === 'Escape') setOpen(false)
-      }}>
+      <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-2"
+        onKeyDown={event => event.key === 'Escape' && setOpen(false)}>
         <button type="button" className={buttonClass} aria-expanded={open} aria-controls={popoverId}
           onClick={() => setOpen(!open)}>筛选</button>
         <div id={popoverId} hidden={!open}
@@ -141,9 +138,8 @@ export default function ListTable({
           {visible.map(row => renderRow ? <Fragment key={row.id}>{renderRow(row.original)}</Fragment> : (
             <tr key={row.id} className="hover:bg-gray-50">{columns.map(({ key, type, options }) => {
               const value = row.getValue(key)
-              const label = type === 'enum' ? enumLabel(options, value) : value
-              return <td key={key} className={cellClass + (type === 'number' ? ' text-right' : '')}>
-                {typeof label === 'number' ? label.toLocaleString() : label}
+              return <td key={key} className={`px-3 py-2 text-xs text-gray-500 ${type === 'number' ? 'text-right' : ''}`}>
+                {type === 'enum' ? enumLabel(options, value) : value}
               </td>
             })}</tr>
           ))}

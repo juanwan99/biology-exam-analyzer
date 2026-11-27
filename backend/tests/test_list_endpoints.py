@@ -93,6 +93,9 @@ async def test_default_descending(client, path, key, total):
     default = (await client.get(path, headers=headers())).json()
     assert default["total"] == total and len(default[key]) == 50
     assert all(row["created_at"].startswith("2026-11-27") for row in default[key])
+    field = "username" if path == LOGS else "name"
+    filtered = (await client.get(path, headers=headers(), params={f"f.{field}": "无匹配"})).json()
+    assert filtered["has_data"] is True and filtered["total"] == 0
 
 
 @pytest.mark.parametrize("path,key,value", [

@@ -538,13 +538,14 @@ async def update_my_api_keys(
 LOG_COLUMNS = {
     "created_at": ListColumn("date", OperationLog.created_at),
     "username": ListColumn("text", OperationLog.username),
-    "operation": ListColumn("enum", OperationLog.operation, (
-        "login", "logout", "create", "update", "delete", "batch_delete",
-        "change_password", "reset_password", "update_api_keys",
-    )),
-    "target_type": ListColumn("enum", OperationLog.target_type, (
-        "exercise", "source", "chapter", "content", "knowledge_point", "version", "user",
-    )),
+    "operation": ListColumn("enum", OperationLog.operation, {
+        "login": "登录", "logout": "登出", "create": "创建", "update": "更新", "delete": "删除",
+        "batch_delete": "批量删除", "change_password": "修改密码", "reset_password": "重置密码", "update_api_keys": "更新 API Key",
+    }),
+    "target_type": ListColumn("enum", OperationLog.target_type, {
+        "exercise": "题目", "source": "来源", "chapter": "章节", "content": "内容",
+        "knowledge_point": "知识点", "version": "版本", "user": "用户",
+    }),
     "target_name": ListColumn("text", OperationLog.target_name),
     "ip_address": ListColumn("text", OperationLog.ip_address),
 }
@@ -561,20 +562,13 @@ async def get_operation_logs(
     """获取操作日志"""
     query, count_query = apply_list_query(
         select(OperationLog).order_by(OperationLog.created_at.desc().nulls_last()),
-        select(func.count(OperationLog.id)),
+        select(func.count(OperationLog.id), select(OperationLog.id).exists()),
         request.query_params, LOG_COLUMNS, OperationLog.id.desc(),
     )
 
-    # 获取总数
-    result = await db.execute(count_query)
-    total = result.scalar()
-
-    # 分页查询
-    offset = (page - 1) * page_size
-    query = query.offset(offset).limit(page_size)
-
-    result = await db.execute(query)
-    logs = result.scalars().all()
+    total, has_data = (await db.execute(count_query)).one()
+    page_query = query.offset((page - 1) * page_size).limit(page_size)
+    logs = (await db.execute(page_query)).scalars().all()
 
     return {
         "success": True,
@@ -591,6 +585,7 @@ async def get_operation_logs(
             "created_at": log.created_at.isoformat() if log.created_at else None
         } for log in logs],
         "total": total,
+        "has_data": has_data,
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size

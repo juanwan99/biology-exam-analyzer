@@ -23,6 +23,7 @@ function UsersTab({ token, getHeaders, user }) {
       setUsers(res.data.users || [])
     } catch (err) {
       if (import.meta.env.DEV) console.error('加载用户列表失败:', err)
+      setUsers(null)
     }
   }
 
@@ -59,7 +60,8 @@ function UsersTab({ token, getHeaders, user }) {
       <div className="p-4 border-b flex-shrink-0">
         <h3 className="font-medium">用户管理</h3>
       </div>
-      <ListTable columns={columns} rows={users} rowKey="id" emptyText="暂无用户"
+      <ListTable columns={columns} rows={users ?? []} rowKey="id"
+        emptyText={users ? '暂无用户' : <span role="alert">加载用户列表失败</span>}
         renderRow={u => (
           <tr className="hover:bg-gray-50">
             <td className="px-3 py-2 text-right text-xs text-gray-500">{u.id}</td>

@@ -6,7 +6,7 @@ import re
 from urllib.parse import unquote
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.sql import ColumnElement
 
 
@@ -14,7 +14,7 @@ from sqlalchemy.sql import ColumnElement
 class ListColumn:
     type: str
     expr: ColumnElement
-    values: tuple[str, ...] | None = None
+    values: tuple[str, ...] | dict[str, str] | None = None
 
 
 def _predicate(column, value):
@@ -64,6 +64,8 @@ def apply_list_query(stmt, count_stmt, params, columns, stable):
         column = columns[key]
         expr = column.expr
         if column.type in ("text", "enum"):
+            if isinstance(column.values, dict):
+                expr = case(column.values, value=expr, else_=expr)
             expr = func.nullif(expr, "").collate("zh-Hans-CN-x-icu")
         order = expr.asc() if direction == "asc" else expr.desc()
         stmt = stmt.order_by(None).order_by(order.nulls_last())
