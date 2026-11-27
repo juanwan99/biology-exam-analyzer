@@ -91,7 +91,12 @@ export default function ListTable({
   return <>
     {filterColumns.length > 0 && (
       <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-2"
-        onKeyDown={event => event.key === 'Escape' && setOpen(false)}>
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setOpen(false)
+          }
+        }}>
         <button type="button" className={buttonClass} aria-expanded={open} aria-controls={popoverId}
           onClick={() => setOpen(!open)}>筛选</button>
         <div id={popoverId} hidden={!open}
