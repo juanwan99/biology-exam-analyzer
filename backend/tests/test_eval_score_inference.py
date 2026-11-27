@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from score_rules import paper_score
+from score_rules import paper_score, scale_section_scores
 from scripts import eval_score_inference as evaluation
 from utils import infer_question_type
 
@@ -116,6 +116,48 @@ def test_cli_measures_both_formats_and_summarizes_attempts(monkeypatch, tmp_path
         "score_source": "model", "score_status": "valid",
     }
     assert rows[2]["paper_score"] is None and rows[2]["difference"] is None
+
+
+def test_cli_apportions_full_mark_after_rescaling_sections(monkeypatch, tmp_path):
+    word = tmp_path / "example.docx"
+    output = tmp_path / "scores.json"
+    questions = [
+        {"id": 1, "content": "1.（2分）题干", "question_type": "single_choice"},
+        {"id": 2, "content": "2.（12分）简答", "question_type": "short_answer"},
+        {"id": 3, "content": "3.（86分）简答", "question_type": "short_answer"},
+    ]
+
+    async def split_paper(path):
+        assert path == word
+        return questions, [b"word"]
+
+    async def analyze_question(question, image_bytes, mode, *, subject):
+        assert paper_score(question) == (None, None)
+        assert "total_score" not in question
+        question.update(total_score=2 if question["id"] == 1 else 8, score_source="model", score_status="valid")
+        return question
+
+    async def rescale_section_scores(analyzed, image_bytes, mode):
+        assert (image_bytes, mode) == ([b"word"], "deep")
+        assert [q["total_score"] for q in analyzed] == [2, 8, 8]
+        # 模拟分析后有一道可按分节小计缩放的题。
+        analyzed[1]["_section_header"] = "二、共1题，共12分"
+        return scale_section_scores(analyzed)
+
+    monkeypatch.setattr(evaluation, "split_paper", split_paper)
+    monkeypatch.setattr(evaluation.deps, "get_analysis_service", lambda: SimpleNamespace(
+        analyze_question=analyze_question, rescale_section_scores=rescale_section_scores,
+    ))
+    monkeypatch.setattr(sys, "argv", [
+        "eval_score_inference.py", str(word), "--full-mark", "100", "--runs", "2", "--json", str(output),
+    ])
+
+    evaluation.main()
+
+    rows = json.loads(output.read_text(encoding="utf-8"))
+    assert [row["total_score"] for row in rows] == [2, 12, 86] * 2
+    assert [row["score_source"] for row in rows] == ["model", "section_scaled", "full_mark_scaled"] * 2
+    assert [row["difference"] for row in rows] == [0] * 6
 
 
 @pytest.mark.parametrize("returns_failure", [False, True])

@@ -8,6 +8,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from logger import get_logger
+
+logger = get_logger()
+
 _NUM = r"(\d+(?:\.\d+)?)"
 # 题干开头（第一个小问之前）的整题分值：「17.（12分）」「17．(本题满分12分)」
 _HEAD_SCORE = re.compile(r"[（(]\s*(?:本小?题)?\s*(?:满分)?\s*(?:共)?\s*" + _NUM + r"\s*分\s*[）)]")
@@ -21,6 +25,8 @@ SOURCE_SECTION = "section"        # 分节「每小题 N 分」
 SOURCE_SECTION_AVG = "section_average"  # 分节「共 K 小题，共 N 分」均分（LLM 无有效分值时兜底）
 SOURCE_MODEL = "model"            # LLM 推断
 SOURCE_SECTION_SCALED = "section_scaled"  # LLM 推断后按分节小计等比缩放
+SOURCE_FULL_MARK_SCALED = "full_mark_scaled"  # 按老师填写的试卷满分等比缩放
+CHOICE_TYPES = {"single_choice", "multiple_choice"}
 
 # 猜的分合计与小计差太多（多半是拆题 / 分节识别错）就不缩放，只标 inferred
 _SCALE_MIN, _SCALE_MAX = 0.5, 2.0
@@ -128,6 +134,41 @@ def scale_section_scores(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]
             q["score_source"] = SOURCE_SECTION_SCALED
             changes.append({"id": q.get("id"), "old": old, "new": new, "section": header[:40]})
     return changes
+
+
+def apportion_full_mark(questions: List[Dict[str, Any]], full_mark: float) -> Dict[str, Any]:
+    """用试卷满分扣除固定分，再按原分值比例分配可调整的大题。"""
+    guessed = []
+    current = []
+    fixed_total = 0
+    for q in questions:
+        score = float(q.get("total_score") or 0)
+        if (q.get("question_type") not in CHOICE_TYPES
+                and q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)
+                and q.get("score_status") == "valid"
+                and not (q.get("analysis_failed") or q.get("error"))):
+            guessed.append(q)
+            current.append(score)
+        else:
+            fixed_total += score
+
+    result = {"full_mark": full_mark, "adjusted": 0, "fixed_total": fixed_total}
+    target = full_mark - fixed_total
+    if not guessed or target <= 0:
+        return result
+    scaled = apportion(current, target)
+    if scaled is None:
+        return result
+
+    for q, old, new in zip(guessed, current, scaled):
+        if old == new:
+            continue
+        q["total_score"] = int(new) if float(new).is_integer() else new
+        q["score_source"] = SOURCE_FULL_MARK_SCALED
+        result["adjusted"] += 1
+
+    logger.info("[分值] 试卷满分 %g，固定分 %g，调整 %s 道题", full_mark, fixed_total, result["adjusted"])
+    return result
 
 
 def mark_section_mismatch(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -50,7 +50,7 @@ logger = get_logger()
 # 持有后台分析任务引用，防 asyncio 在任务完成前将其 GC 回收（CPython 仅弱引用 task）
 _bg_tasks: set = set()
 import task_manager
-from score_rules import mark_section_mismatch
+from score_rules import apportion_full_mark, mark_section_mismatch
 from analysis_scheduling import gather_longest_first
 
 router = APIRouter(tags=["analysis"])
@@ -207,6 +207,7 @@ async def analyze_auto(
     report_mode: str = Form("full"),
     subject: str = Form("biology"),
     authorization: Optional[str] = Header(None),
+    full_mark: Optional[float] = Form(None, gt=0),
 ):
     """
     新接口：使用规则拆分 + 自动完整分析（不显示校准页面）
@@ -364,7 +365,7 @@ async def analyze_auto(
             task_id, _bg_questions, _bg_image_bytes, _bg_mode,
             _bg_competency_analyzer,
             _bg_generate_report, _bg_report_mode, _bg_filename,
-            _bg_start_time,
+            _bg_start_time, full_mark=full_mark,
         ))
         _bg_tasks.add(_bg_task)
         _bg_task.add_done_callback(_bg_tasks.discard)
@@ -391,7 +392,7 @@ async def _run_analysis_pipeline(
     task_id, questions, image_bytes, mode,
     competency_analyzer,
     generate_report, report_mode, filename,
-    start_time,
+    start_time, full_mark: Optional[float] = None,
 ):
     """后台分析管线 — analyze_auto 返回后异步执行。"""
     try:
@@ -425,6 +426,7 @@ async def _run_analysis_pipeline(
             await get_analysis_service().rescale_section_scores(questions, image_bytes, mode)
         except Exception:
             logger.exception("[分值] 分节小计缩放失败，保留 LLM 原分值")
+        full_mark_result = apportion_full_mark(questions, full_mark) if full_mark is not None else None
         score_warnings = mark_section_mismatch(questions)
         for w in score_warnings:
             logger.warning(f"[分值] 分节合计不符: {w}")
@@ -508,6 +510,8 @@ async def _run_analysis_pipeline(
         }
         if score_prediction:
             result["score_prediction"] = score_prediction
+        if full_mark_result is not None:
+            result["full_mark_result"] = full_mark_result
 
         task_manager.complete(task_id, result)
 

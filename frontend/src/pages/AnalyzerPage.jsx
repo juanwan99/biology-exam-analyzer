@@ -14,9 +14,11 @@ function AnalyzerPage() {
   const [mode, setMode] = useState('deep')
   const [generateReport, setGenerateReport] = useState(false)
   const [subject, setSubject] = useState('biology')
+  const [fullMark, setFullMark] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [progress, setProgress] = useState(null)
   const fileInputRef = useRef(null)
+  const fullMarkInputRef = useRef(null)
   const pollingRef = useRef(false)
   const SUBJECTS = [
     { key: 'chinese', name: '语文' }, { key: 'math', name: '数学' }, { key: 'english', name: '英语' },
@@ -215,6 +217,7 @@ function AnalyzerPage() {
   const handleUpload = async () => {
     if (!file) { setError('请先选择文件'); return }
     if (!token) { setError('请先登录'); return }
+    if (!fullMarkInputRef.current.reportValidity()) return
 
     setLoading(true)
     setError(null)
@@ -227,6 +230,7 @@ function AnalyzerPage() {
       formData.append('mode', mode)
       formData.append('generate_report', generateReport)
       formData.append('subject', subject)
+      if (fullMark !== '') formData.append('full_mark', fullMark)
 
       const response = await axios.post('/api/analyze_auto', formData, {
         headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
@@ -469,6 +473,23 @@ function AnalyzerPage() {
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '28px' }}>
+            <div style={{ padding: '18px 20px', border: '2px solid var(--color-border-light)', borderRadius: '16px', background: 'var(--color-bg)' }}>
+              <label htmlFor="full-mark" className="block font-semibold" style={{ color: 'var(--color-primary)', marginBottom: '12px' }}>试卷满分（选填）</label>
+              <div className="flex items-center gap-2" style={{ color: 'var(--color-primary)' }}>
+                <input
+                  ref={fullMarkInputRef} id="full-mark" type="number" min="1" step="0.5"
+                  value={fullMark} onChange={e => setFullMark(e.target.value)}
+                  aria-describedby="full-mark-help" className="input-modern" style={{ width: '120px' }}
+                />
+                <span>分</span>
+              </div>
+              <p id="full-mark-help" className="text-sm mt-2" style={{ color: 'var(--color-muted)' }}>
+                卷面没写大题分值时填上，大题分值会按满分重新分配；卷面都写了分值就不用填。
+              </p>
             </div>
           </div>
 

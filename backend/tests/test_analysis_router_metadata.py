@@ -1,11 +1,15 @@
+import asyncio
 import io
 import json
 from datetime import datetime
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
+from httpx import ASGITransport, AsyncClient
 
 import analysis_router
+from score_rules import SOURCE_MODEL, paper_score
+from tests.fakes.fake_llm_client import FakeLlmClient
 
 
 def _call(purpose):
@@ -65,7 +69,7 @@ class FakeDocProcessor:
 
 
 class FakeCompetencyAnalyzer:
-    def aggregate_exam_competencies(self, competency_list):
+    def aggregate_exam_competencies(self, competency_list, subject=None):
         return {}
 
 
@@ -269,3 +273,166 @@ async def test_confirm_split_route_returns_html_report_url(monkeypatch, tmp_path
     assert "sig=" in result["report_url"] and "exp=" in result["report_url"]
     assert result["html_report_url"].split("?")[0] == "/api/reports/session-1.html"
     assert "sig=" in result["html_report_url"] and "exp=" in result["html_report_url"]
+
+
+@pytest.fixture
+async def upload_client(monkeypatch, tmp_path):
+    import database
+    import prediction_service
+    from auth_router import active_tokens
+
+    active_tokens["expert"] = {"id": 1, "username": "reviewer"}
+
+    async def verify_token(token):
+        assert token == "teacher"
+        return {"id": 2, "email": "teacher@example.com"}
+
+    async def get_balance(user_id):
+        assert user_id == 2
+        return 1000
+
+    async def consume(user_id, cost, reason):
+        assert user_id == 2
+
+    def split_word(path, *, subject):
+        return {"questions": [
+            {"id": 1, "content": "1. 题干", "question_type": "single_choice"},
+            {"id": 2, "content": "2.（10分）题干", "question_type": "short_answer"},
+            {"id": 3, "content": "3. 第一题简答", "question_type": "short_answer"},
+            {"id": 4, "content": "4. 第二题简答", "question_type": "short_answer"},
+        ]}
+
+    llm = FakeLlmClient({
+        FakeLlmClient.hash_content(content): json.dumps({"total_score": score})
+        for content, score in [("1. 题干", 2), ("3. 第一题简答", 8), ("4. 第二题简答", 10)]
+    })
+
+    async def analyze_question_full(question, image_bytes, mode):
+        score, source = paper_score(question)
+        if score is None:
+            response = await llm.llm_call([{"role": "user", "content": question["content"]}])
+            score, source = json.loads(response)["total_score"], SOURCE_MODEL
+        return {
+            **_question(question["id"]), **question,
+            "total_score": score, "score_source": source, "score_status": "valid",
+        }
+
+    class FakeSession:
+        async def close(self):
+            pass
+
+    class FakePredictionService:
+        def __init__(self, db):
+            pass
+
+        async def predict_exam_score(self, *, total_score, **kwargs):
+            return {"total_score": total_score}
+
+    async def get_db_session():
+        return FakeSession()
+
+    monkeypatch.setattr(analysis_router, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(analysis_router, "split_word_with_visual", split_word)
+    monkeypatch.setattr(analysis_router, "get_doc_processor", FakeDocProcessor)
+    monkeypatch.setattr(analysis_router, "get_word_splitter", FakeWordSplitter)
+    monkeypatch.setattr(analysis_router, "get_pdf_splitter", lambda: None)
+    monkeypatch.setattr(analysis_router, "get_competency_analyzer", FakeCompetencyAnalyzer)
+    monkeypatch.setattr(analysis_router, "analyze_question_full", analyze_question_full)
+    monkeypatch.setattr(analysis_router.credits_service, "verify_token", verify_token)
+    monkeypatch.setattr(analysis_router.credits_service, "get_balance", get_balance)
+    monkeypatch.setattr(analysis_router.credits_service, "consume", consume)
+    monkeypatch.setattr(database, "get_db_session", get_db_session)
+    monkeypatch.setattr(prediction_service, "PredictionService", FakePredictionService)
+
+    app = FastAPI()
+    app.include_router(analysis_router.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+
+async def _submit_upload(client, token, full_mark=None, filename="exam.docx"):
+    return await client.post(
+        "/api/analyze_auto",
+        files={"file": (filename, b"docx")},
+        data={} if full_mark is None else {"full_mark": str(full_mark)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+async def _upload_result(client, response):
+    assert response.status_code == 200, response.text
+    task_id = response.json()["task_id"]
+    status = (await client.get(f"/api/analysis/status/{task_id}")).json()
+    assert status["status"] == "completed", status
+    return status["result"]
+
+
+def _scores(result):
+    return [q["total_score"] for q in result["questions"]]
+
+
+async def test_analyze_auto_without_full_mark_preserves_existing_result(upload_client):
+    response = await _submit_upload(upload_client, "expert")
+    await asyncio.gather(*analysis_router._bg_tasks)
+    result = await _upload_result(upload_client, response)
+    assert "full_mark_result" not in result
+    assert _scores(result) == [2, 10, 8, 10]
+    assert [q["score_source"] for q in result["questions"]] == ["model", "paper", "model", "model"]
+    assert result["score_warnings"] == []
+    assert result["score_prediction"]["total_score"] == 30
+
+
+async def test_analyze_auto_concurrent_uploads_keep_full_mark_per_task(upload_client, monkeypatch):
+    analyze = analysis_router.analyze_question_full
+    both_started = asyncio.Event()
+    started = 0
+
+    async def analyze_together(question, image_bytes, mode):
+        nonlocal started
+        if question["id"] == 1:
+            started += 1
+            if started == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=5)
+        return await analyze(question, image_bytes, mode)
+
+    monkeypatch.setattr(analysis_router, "analyze_question_full", analyze_together)
+    with_mark, without_mark = await asyncio.gather(
+        _submit_upload(upload_client, "expert", 100),
+        _submit_upload(upload_client, "teacher", filename="other-exam.docx"),
+    )
+    await asyncio.gather(*analysis_router._bg_tasks)
+
+    assert started == 2
+    with_result = await _upload_result(upload_client, with_mark)
+    assert with_result.get("full_mark_result") == {"full_mark": 100, "adjusted": 2, "fixed_total": 12}
+    assert _scores(with_result) == [2, 10, 39, 49]
+    assert with_result["score_prediction"]["total_score"] == 100
+    without_result = await _upload_result(upload_client, without_mark)
+    assert "full_mark_result" not in without_result
+    assert _scores(without_result) == [2, 10, 8, 10]
+
+
+async def test_analyze_auto_same_paper_reuploaded_with_changed_full_mark(upload_client):
+    first = await _submit_upload(upload_client, "teacher", 100)
+    await asyncio.gather(*analysis_router._bg_tasks)
+    first_result = await _upload_result(upload_client, first)
+    second = await _submit_upload(upload_client, "teacher", 80)
+    await asyncio.gather(*analysis_router._bg_tasks)
+    second_result = await _upload_result(upload_client, second)
+
+    assert first.json()["task_id"] != second.json()["task_id"]
+    assert first_result.get("full_mark_result") == {"full_mark": 100, "adjusted": 2, "fixed_total": 12}
+    assert second_result.get("full_mark_result") == {"full_mark": 80, "adjusted": 2, "fixed_total": 12}
+    assert _scores(first_result) == [2, 10, 39, 49]
+    assert _scores(second_result) == [2, 10, 30, 38]
+    assert await _upload_result(upload_client, first) == first_result
+
+
+@pytest.mark.parametrize("full_mark", [0, -1])
+async def test_analyze_auto_rejects_nonpositive_full_mark(upload_client, full_mark):
+    response = await _submit_upload(upload_client, "expert", full_mark)
+    await asyncio.gather(*analysis_router._bg_tasks)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "full_mark"]
