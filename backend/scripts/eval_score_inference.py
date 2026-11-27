@@ -14,12 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import deps
 from analysis_options import set_analysis_options
 from analysis_scheduling import gather_longest_first
-from score_rules import _HEAD_SCORE, _PER_QUESTION, _SECTION_TOTAL, paper_score
+from score_rules import (
+    CHOICE_TYPES, _HEAD_SCORE, _PER_QUESTION, _SECTION_TOTAL, apportion_full_mark, mark_section_mismatch, paper_score,
+)
+from utils import infer_question_type
 from visual_word_splitter import split_word_with_visual
 
 
 _SCORE_TEXT = re.compile(r"\d+(?:\.\d+)?\s*分")
-_CHOICE_TYPES = {"single_choice", "multiple_choice"}
 
 
 def strip_scores(question: dict) -> int:
@@ -52,10 +54,13 @@ async def split_paper(path: Path) -> tuple[list[dict], list[bytes]]:
     return result["questions"], image_bytes
 
 
-async def evaluate_paper(path: Path, runs: int) -> list[list[dict]]:
+async def evaluate_paper(path: Path, runs: int, full_mark: float | None = None) -> list[list[dict]]:
     questions, image_bytes = await split_paper(path)
     expected_scores = [paper_score(q)[0] for q in questions]
-    remaining = sum(strip_scores(q) for q in questions)
+    remaining = sum(
+        strip_scores(q) for q in questions
+        if full_mark is None or infer_question_type(q) not in CHOICE_TYPES
+    )
     print(f"{path.name} 残留分值字样 {remaining} 处", flush=True)
 
     service = deps.get_analysis_service()
@@ -73,6 +78,10 @@ async def evaluate_paper(path: Path, runs: int) -> list[list[dict]]:
     for run in range(1, runs + 1):
         # 分析服务会就地写回 total_score。每次从同一份去分后的拆题结果开始。
         analyzed = await gather_longest_first(deepcopy(questions), analyze_one)
+        if full_mark is not None:
+            await service.rescale_section_scores(analyzed, image_bytes, "deep")
+            apportion_full_mark(analyzed, full_mark)
+            mark_section_mismatch(analyzed)
         rows = []
         for result, expected in zip(analyzed, expected_scores):
             question_type = result["question_type"]
@@ -117,7 +126,7 @@ def summarize(papers: list[list[list[dict]]]) -> tuple[dict, float | None]:
         for attempts in zip(*paper_runs):
             if attempts[0]["paper_score"] is None:
                 continue
-            category = "选择题" if attempts[0]["question_type"] in _CHOICE_TYPES else "非选择题"
+            category = "选择题" if attempts[0]["question_type"] in CHOICE_TYPES else "非选择题"
             differences[category].extend(row["difference"] for row in attempts)
             if len(attempts) > 1:
                 scores = [row["total_score"] for row in attempts]
@@ -130,9 +139,9 @@ def summarize(papers: list[list[list[dict]]]) -> tuple[dict, float | None]:
     return metrics, max(spreads, default=None)
 
 
-async def evaluate(paths: list[Path], runs: int, json_path: Path | None) -> None:
+async def evaluate(paths: list[Path], runs: int, json_path: Path | None, full_mark: float | None = None) -> None:
     set_analysis_options()
-    papers = [await evaluate_paper(path, runs) for path in paths]
+    papers = [await evaluate_paper(path, runs, full_mark) for path in paths]
     metrics, max_spread = summarize(papers)
     for category, (mae, bias) in metrics.items():
         mae_text = f"{mae:.1f}" if mae is not None else "—"
@@ -155,8 +164,9 @@ def main() -> None:
     parser.add_argument("papers", nargs="+", type=Path, help="试卷路径（.docx / .pdf）")
     parser.add_argument("--runs", type=int, default=2, help="每份卷的分析次数（默认 2）")
     parser.add_argument("--json", type=Path, help="逐题结果的 JSON 输出路径")
+    parser.add_argument("--full-mark", type=float, help="用于分配大题分值的试卷满分")
     args = parser.parse_args()
-    asyncio.run(evaluate(args.papers, args.runs, args.json))
+    asyncio.run(evaluate(args.papers, args.runs, args.json, args.full_mark))
 
 
 if __name__ == "__main__":

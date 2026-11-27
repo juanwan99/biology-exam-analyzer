@@ -7,6 +7,7 @@
 #   bash ops/check-live.sh --no-analyze       # 只查容器/健康/登录，不跑分析
 #   bash ops/check-live.sh --paper 真卷.docx  # 跑别的卷：只核拆题与字段，不核分值（除非给 --expected）
 #   bash ops/check-live.sh --paper 化学卷.docx --subject chemistry  # 别的卷按该学科上传（默认 biology）
+#   bash ops/check-live.sh --full-mark 100    # 核对标分样卷和无小计样卷填写满分后的结果
 #   bash ops/check-live.sh --keep-record      # 不删本次 score_prediction 记录（调试用）
 #
 # 账号与入口不进仓：优先读环境变量 BEA_BASE / BEA_USER / BEA_PASS，
@@ -20,6 +21,7 @@ EXPECTED="$HERE/fixtures/sample-paper.expected.json"
 ANALYZE=1
 KEEP_RECORD=0
 SUBJECT=biology
+FULL_MARK=""
 TIMEOUT_MIN="${BEA_TIMEOUT_MIN:-15}"
 
 while [ $# -gt 0 ]; do
@@ -29,6 +31,7 @@ while [ $# -gt 0 ]; do
     --paper) PAPER="$2"; EXPECTED=""; shift ;;
     --expected) EXPECTED="$2"; shift ;;
     --subject) SUBJECT="$2"; shift ;;
+    --full-mark) FULL_MARK="$2"; shift ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
   shift
@@ -94,8 +97,8 @@ fi
 # 5. 上传样卷跑全流程（与前端默认一致：deep、不生成报告）
 #    默认四份同时跑：标了分值的生物样卷逐题核分值；同一卷去掉题号后与小问后分值（只留分节说明）核推断偏差（#29）；
 #    分节小计也删掉（卷面不剩分值）的只打印纯推断偏差、不判分值（#33）；化学样卷按 chemistry 上传逐题核（#34）
-check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer|estimate  $4 上传学科
-  python3 - "$1" "$2" "$3" "$4" "$HERE/../backend" <<'PY'
+check_result() {  # $1 结果文件  $2 expected（可空）  $3 strict|infer|estimate  $4 上传学科  $5 满分（可空）
+  python3 - "$1" "$2" "$3" "$4" "$HERE/../backend" "$5" <<'PY'
 import json, sys
 
 sys.path.insert(0, sys.argv[5])
@@ -107,6 +110,7 @@ result = json.load(open(sys.argv[1]))["result"]
 expected = json.load(open(sys.argv[2])) if sys.argv[2] else None
 mode = sys.argv[3]
 subject = sys.argv[4]
+full_mark = float(sys.argv[6]) if sys.argv[6] else None
 dims = get_competency_dims(subject)
 infer = mode in ("infer", "estimate")   # 卷面分值藏掉的样卷：分值不逐题判；infer 按偏差门槛判，estimate 只打印
 fails = 0
@@ -159,8 +163,23 @@ for q in qs:
 
 sp = result.get("score_prediction") or {}
 total = sum(float(q.get("total_score") or 0) for q in qs)
+if full_mark is not None:
+    mark_result = result.get("full_mark_result", {})
+    adjusted = mark_result.get("adjusted")
+    check(mark_result.get("full_mark") == full_mark and adjusted is not None and "fixed_total" in mark_result,
+          f"填写满分 {full_mark:g} 分的结果 {mark_result}")
+    # 卡面指定的冒烟场景用 100 分的无小计样卷核对实际分配。
+    expect_adjustment = mode == "estimate" and full_mark == 100
+    if expect_adjustment:
+        check(adjusted is not None and adjusted > 0, "无小计样卷至少调整一道题")
+    if expect_adjustment or adjusted:
+        check(total == full_mark, f"按满分分配后总分 {total:g}（应 {full_mark:g}）")
+elif "full_mark_result" in result:
+    check(False, "空着试卷满分时结果出现 full_mark_result")
+
 if expected and mode == "estimate":
-    print(f"INFO  纯推断偏差（只打印）总分 {total:g}（卷面 {expected['total_score']}，差 {total - expected['total_score']:+g}）· "
+    label = "满分分配后偏差" if full_mark is not None and adjusted else "纯推断偏差（只打印）"
+    print(f"INFO  {label}总分 {total:g}（卷面 {expected['total_score']}，差 {total - expected['total_score']:+g}）· "
           + " ".join(f"{i}:{s:g}/{e:g}" for i, s, e in deviations))
 elif expected and infer:
     # 门槛：分节写了小计，总分必须对上；每题偏差 ≤ INFER_TOL_Q 分
@@ -188,19 +207,21 @@ PY
 }
 
 if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
-  RUNS=("$PAPER|$EXPECTED|strict|$SUBJECT")
+  RUNS=("$PAPER|$EXPECTED|strict|$SUBJECT|$FULL_MARK")
   [ "$PAPER" = "$HERE/fixtures/sample-paper.docx" ] && RUNS+=("$HERE/fixtures/sample-paper-unscored.docx|$EXPECTED|infer|biology"
-                                                         "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate|biology"
+                                                         "$HERE/fixtures/sample-paper-nosection.docx|$EXPECTED|estimate|biology|$FULL_MARK"
                                                          "$HERE/fixtures/sample-paper-chemistry.docx|$HERE/fixtures/sample-paper-chemistry.expected.json|strict|chemistry")
   # 几份同时上传（不是一份接一份）：同时上传的两份 Word 曾撞 LibreOffice profile → 500（#48）
   SUBMITS=()
   for run in "${RUNS[@]}"; do
-    paper="${run%%|*}"
-    subject="${run##*|}"
+    IFS='|' read -r paper expected mode subject full_mark <<<"$run"
+    form_args=()
+    [ -z "$full_mark" ] || form_args=(-F "full_mark=$full_mark")
     out="$(mktemp)"
     SUBMITS+=("$out")
     "${CURL[@]}" -m 180 -H "Authorization: Bearer $TOKEN" \
       -F "file=@$paper" -F mode=deep -F generate_report=false -F "subject=$subject" \
+      "${form_args[@]}" \
       "$BASE/api/analyze_auto" >"$out" 2>&1 &
   done
   wait
@@ -217,7 +238,7 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
   for i in "${!RUNS[@]}"; do
     TASK="${TASKS[$i]}"
     [ -n "$TASK" ] || continue
-    IFS='|' read -r paper expected mode subject <<<"${RUNS[$i]}"
+    IFS='|' read -r paper expected mode subject full_mark <<<"${RUNS[$i]}"
     echo "-- $(basename "$paper")（$mode · $subject）"
     RESULT="$(mktemp)"
     status=""
@@ -231,7 +252,7 @@ if [ "$ANALYZE" = 1 ] && [ -n "$TOKEN" ]; then
     if [[ "$status" != completed* ]]; then
       fail "分析未完成（${TIMEOUT_MIN} 分钟内）: $status $(head -c 300 "$RESULT")"
     else
-      check_result "$RESULT" "$expected" "$mode" "$subject" || FAILS=$((FAILS + 1))
+      check_result "$RESULT" "$expected" "$mode" "$subject" "$full_mark" || FAILS=$((FAILS + 1))
       # 本次分析在现网 score_prediction 留的那条记录：删掉并核实（分析流程只写这一张表）
       PRED_ID="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["result"].get("score_prediction") or {}).get("prediction_id") or "")' "$RESULT" 2>/dev/null)"
       PSQL="docker exec biology_postgres psql -U biology -d biology_edu -Atc"

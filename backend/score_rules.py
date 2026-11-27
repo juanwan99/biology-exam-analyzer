@@ -6,7 +6,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+from logger import get_logger
+
+logger = get_logger()
 
 _NUM = r"(\d+(?:\.\d+)?)"
 # 题干开头（第一个小问之前）的整题分值：「17.（12分）」「17．(本题满分12分)」
@@ -21,6 +25,8 @@ SOURCE_SECTION = "section"        # 分节「每小题 N 分」
 SOURCE_SECTION_AVG = "section_average"  # 分节「共 K 小题，共 N 分」均分（LLM 无有效分值时兜底）
 SOURCE_MODEL = "model"            # LLM 推断
 SOURCE_SECTION_SCALED = "section_scaled"  # LLM 推断后按分节小计等比缩放
+SOURCE_FULL_MARK_SCALED = "full_mark_scaled"  # 按老师填写的试卷满分等比缩放
+CHOICE_TYPES = {"single_choice", "multiple_choice"}
 
 # 猜的分合计与小计差太多（多半是拆题 / 分节识别错）就不缩放，只标 inferred
 _SCALE_MIN, _SCALE_MAX = 0.5, 2.0
@@ -89,6 +95,19 @@ def apportion(values: List[float], target: float) -> Optional[List[float]]:
     return scaled
 
 
+def _sections_with_totals(questions: List[Dict[str, Any]]) -> Iterator[Tuple[str, List[Dict[str, Any]], float]]:
+    sections: Dict[str, List[Dict[str, Any]]] = {}
+    for q in questions:
+        header = q.get("_section_header")
+        if header:
+            sections.setdefault(header, []).append(q)
+    for header, qs in sections.items():
+        count, total = section_count_total(header)
+        if not total or (count and count != len(qs)):
+            continue
+        yield header, qs, total
+
+
 def scale_section_scores(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """分节写了「共 N 分」而题分合计对不上时，把本节 LLM 猜的分等比缩放到合计 = N。
 
@@ -96,16 +115,8 @@ def scale_section_scores(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]
     拆题数与分节题数不符、或缩放比例超出 0.5–2 倍时不缩放（交给 mark_section_mismatch 标 inferred）。
     就地改 total_score / score_source，返回改动列表 [{id, old, new, section}]。
     """
-    sections: Dict[str, List[Dict[str, Any]]] = {}
-    for q in questions:
-        header = q.get("_section_header")
-        if header:
-            sections.setdefault(header, []).append(q)
     changes = []
-    for header, qs in sections.items():
-        count, total = section_count_total(header)
-        if not total or (count and count != len(qs)):
-            continue
+    for header, qs, total in _sections_with_totals(questions):
         guessed = [q for q in qs if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)
                    and q.get("score_status") == "valid"]
         if not guessed:
@@ -130,27 +141,59 @@ def scale_section_scores(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return changes
 
 
+def apportion_full_mark(questions: List[Dict[str, Any]], full_mark: float) -> Dict[str, Any]:
+    """用试卷满分扣除固定分，再按原分值比例分配可调整的大题。"""
+    aligned_sections = {
+        header for header, qs, total in _sections_with_totals(questions)
+        if abs(sum(float(q.get("total_score") or 0) for q in qs) - total) < 1e-6
+    }
+    guessed = []
+    current = []
+    fixed_total = 0
+    for q in questions:
+        score = float(q.get("total_score") or 0)
+        if (q.get("question_type") not in CHOICE_TYPES
+                and q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)
+                and q.get("score_status") == "valid"
+                and q.get("_section_header") not in aligned_sections
+                and not (q.get("analysis_failed") or q.get("error")
+                         or (q.get("difficulty") or {}).get("analysis_failed"))):
+            guessed.append(q)
+            current.append(score)
+        else:
+            fixed_total += score
+
+    result = {"full_mark": full_mark, "adjusted": 0, "fixed_total": fixed_total}
+    target = full_mark - fixed_total
+    if not guessed or target <= 0:
+        return result
+    scaled = apportion(current, target)
+    if scaled is None:
+        return result
+
+    for q, old, new in zip(guessed, current, scaled):
+        if old == new:
+            continue
+        q["total_score"] = int(new) if float(new).is_integer() else new
+        q["score_source"] = SOURCE_FULL_MARK_SCALED
+        result["adjusted"] += 1
+
+    logger.info("[分值] 试卷满分 %g，固定分 %g，调整 %s 道题", full_mark, fixed_total, result["adjusted"])
+    return result
+
+
 def mark_section_mismatch(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """分节写了「共 N 分」而本节题分合计不符时，把本节 LLM 推断分值的题标 score_status=inferred。
+    """分节写了「共 N 分」而本节题分合计不符时，把本节推断或按满分分配的题标 score_status=inferred。
 
     只改 score_status（展示 / 对账用），不动分值本身，不影响已完成的难度评估。返回告警列表。
     """
-    sections: Dict[str, List[Dict[str, Any]]] = {}
-    for q in questions:
-        header = q.get("_section_header")
-        if header:
-            sections.setdefault(header, []).append(q)
     warnings = []
-    for header, qs in sections.items():
-        count, total = section_count_total(header)
-        if not total:
-            continue
-        if count and count != len(qs):
-            continue  # 拆题数与分节题数不符，合计没有意义
+    for header, qs, total in _sections_with_totals(questions):
         actual = sum(float(q.get("total_score") or 0) for q in qs)
         if abs(actual - total) < 1e-6:
             continue
-        guessed = [q for q in qs if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG)]
+        guessed = [q for q in qs
+                   if q.get("score_source") in (SOURCE_MODEL, SOURCE_SECTION_AVG, SOURCE_FULL_MARK_SCALED)]
         for q in guessed:
             if q.get("score_status") == "valid":
                 q["score_status"] = "inferred"
