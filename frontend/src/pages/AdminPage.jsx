@@ -33,6 +33,7 @@ function AdminPage() {
         const { token: newToken, user: userData } = response.data
         setToken(newToken)
         setUser(userData)
+        if (userData.role !== 'admin' && activeTab === 'logs') setActiveTab('exercises')
         setAuthenticated(true)
         localStorage.setItem('authToken', newToken)
         localStorage.setItem('authUser', JSON.stringify(userData))
