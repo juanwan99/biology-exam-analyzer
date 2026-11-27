@@ -1,20 +1,27 @@
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import TextClause
 
 import auth_router
+import exercise_router
 import prediction_router
+import textbook_router
 from database import get_db
 from models import AdminUser, ExamHistory, OperationLog
 
 LOGS = "/api/auth/logs"
 HISTORY = "/api/prediction/history"
+EXERCISES = "/api/exercises/list"
+CHUNKS = "/api/textbook/contents/list"
 
 
 @pytest.fixture
@@ -117,3 +124,113 @@ async def test_ordering_and_empty_filter(client, path, items, field, total, unma
 ])
 async def test_list_status(client, path, params, user, status):
     assert (await client.get(path, params=params, headers=headers(user))).status_code == status
+
+
+@pytest.fixture
+async def card_lists():
+    app = FastAPI()
+    app.include_router(exercise_router.router)
+    app.include_router(textbook_router.router)
+    queries = []
+    chunk = (12, None, "bx1", 1, "教材正文", None, None, datetime(2026, 11, 27), None)
+
+    async def db():
+        async def execute(stmt, params=None):
+            # The original chunk query sends its binds separately from the SQL.
+            if isinstance(stmt, TextClause) and params:
+                stmt = stmt.bindparams(**{key: params[key] for key in stmt.compile().params})
+            compiled = stmt.compile(dialect=postgresql.dialect())
+            queries.append((" ".join(str(compiled).split()), list(compiled.params.values())))
+            empty = "%无匹配%" in compiled.params.values()
+            result = Mock()
+            result.scalar.return_value = 0 if empty else 42
+            result.fetchall.return_value = [] if empty else [chunk]
+            result.scalars.return_value.unique.return_value.all.return_value = []
+            return result
+
+        yield SimpleNamespace(execute=execute)
+
+    app.dependency_overrides[get_db] = db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        yield http, queries
+
+
+@pytest.mark.parametrize("path,sort,expression,bindings,stable", [
+    (EXERCISES, "year:desc", "AS INTEGER) DESC", ["year"], "exercise_bank.id DESC"),
+    (EXERCISES, "year:asc", "AS INTEGER) ASC", ["year"], "exercise_bank.id DESC"),
+    (EXERCISES, "question_type:asc", "CASE exercise_bank.question_type", ["单选题", 0, "多选题", 1, "填空题", 2, "简答题", 3], "exercise_bank.id DESC"),
+    (EXERCISES, "exam_source:asc", 'COLLATE "zh-Hans-CN-x-icu" ASC', ["exam_source", ""], "exercise_bank.id DESC"),
+    (EXERCISES, "created_at:desc", "exercise_bank.created_at DESC", [], "exercise_bank.id DESC"),
+    (CHUNKS, "page_num:asc", "textbook_chunks.page_num ASC", [], "textbook_chunks.id ASC"),
+    (CHUNKS, "page_num:desc", "textbook_chunks.page_num DESC", [], "textbook_chunks.id ASC"),
+    (CHUNKS, "created_at:desc", "textbook_chunks.created_at DESC", [], "textbook_chunks.id ASC"),
+])
+async def test_card_ordering_applies_to_each_page(card_lists, path, sort, expression, bindings, stable):
+    http, queries = card_lists
+    for page, offset in [(1, 0), (2, 20)]:
+        response = await http.get(path, params={"sort": sort, "page": page, "page_size": 20})
+        assert response.status_code == 200
+        body = response.json()
+        assert (body["total"], body["page"], body["page_size"], body["total_pages"]) == (42, page, 20, 3)
+        count, rows = queries[-2:]
+        assert "ORDER BY" not in count[0] and count[1] == []
+        order = rows[0].partition("ORDER BY ")[2].partition(" LIMIT ")[0]
+        assert expression in order
+        assert order.endswith(f"NULLS LAST, {stable}")
+        assert rows[1] == bindings + [20, offset]
+
+
+@pytest.mark.parametrize("path,table", [(EXERCISES, "exercise_bank"), (CHUNKS, "textbook_chunks")])
+async def test_card_default_unknown_sort_and_roles(card_lists, path, table):
+    http, queries = card_lists
+    default, unknown = await asyncio.gather(http.get(path), http.get(
+        path, params={"sort": "unknown:asc"}, headers=headers("editor"),
+    ))
+    assert default.status_code == unknown.status_code == 200
+    assert default.json() == unknown.json()
+    orders = [sql.split("ORDER BY ")[1].split(" LIMIT ")[0] for sql, _ in queries if "ORDER BY " in sql]
+    assert orders[0] == orders[1]
+    # The primary ID is unique. Appending the same ID as a tie-breaker leaves main's order intact.
+    assert orders[0].replace("tc.id", f"{table}.id").split(", ") in (
+        [f"{table}.id DESC"], [f"{table}.id DESC", f"{table}.id ASC"],
+    )
+    if path == CHUNKS:
+        assert default.json()["items"] == [{
+            "id": 12, "page_id": None, "book_id": "bx1", "chunk_index": 1, "content": "教材正文",
+            "page_num": None, "chapter_info": None, "created_at": "2026-11-27T00:00:00", "book_name": None,
+        }]
+
+
+@pytest.mark.parametrize("path,params,predicates,values,empty_pages", [
+    (EXERCISES, {"question_type": "单选题", "year": 2024, "source_type": "高考", "difficulty_min": 0,
+                 "difficulty_max": 0.6, "tag": "细胞", "keyword": "无匹配"},
+     ["exercise_bank.question_type =", "competency_scores->>'year' = '2024'", "exercise_sources.source_type =",
+      "exercise_bank.difficulty_level >=", "exercise_bank.difficulty_level <=", "ANY (exercise_bank.tags)",
+      "exercise_bank.content ILIKE"], ["单选题", 0, 0.6, "细胞", "%无匹配%", "高考"], 0),
+    (CHUNKS, {"book_id": "bx1", "keyword": "无匹配"}, ["textbook_chunks.book_id =", "textbook_chunks.chunk_content ILIKE"],
+     ["bx1", "%无匹配%"], 1),
+])
+async def test_card_legacy_filters_affect_rows_and_count(card_lists, path, params, predicates, values, empty_pages):
+    http, queries = card_lists
+    assert (await http.get(path, params={**params, "sort": "created_at:desc"})).json() == {
+        **({"success": True} if path == CHUNKS else {}),
+        "items": [], "total": 0, "page": 1, "page_size": 50 if path == CHUNKS else 20, "total_pages": empty_pages,
+    }
+    count, rows = queries
+    for sql, binds in (count, rows):
+        where = sql.partition(" WHERE ")[2].partition(" ORDER BY ")[0]
+        where = where.replace("tc.", "textbook_chunks.")
+        if path == CHUNKS and where.startswith("1=1"):
+            where = where.replace("AND book_id", "AND textbook_chunks.book_id").replace(
+                "AND chunk_content", "AND textbook_chunks.chunk_content",
+            )
+        assert all(predicate in where for predicate in predicates)
+        assert binds[:len(values)] == values
+
+
+async def test_invalid_card_year_filter_is_422(card_lists):
+    http, queries = card_lists
+    response = await http.get(EXERCISES, params={"f.year": "abc"})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "筛选值无效（year）"}
+    assert queries == []

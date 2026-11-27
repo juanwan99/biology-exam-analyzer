@@ -4,11 +4,12 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, and_, text, delete
+from sqlalchemy import Integer, cast, select, func, and_, text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from database import get_db
+from list_query import ListColumn, apply_list_query
 from models import ExerciseBank, ExerciseSource
 from logger import get_logger
 from auth_router import require_auth, log_operation
@@ -96,8 +97,17 @@ class SourceUpdate(BaseModel):
 
 # ============ API Endpoints ============
 
+EXERCISE_COLUMNS = {
+    "year": ListColumn("number", cast(ExerciseBank.competency_scores["year"].as_string(), Integer)),
+    "question_type": ListColumn("enum", ExerciseBank.question_type, ("单选题", "多选题", "填空题", "简答题")),
+    "exam_source": ListColumn("text", ExerciseBank.competency_scores["exam_source"].as_string()),
+    "created_at": ListColumn("date", ExerciseBank.created_at),
+}
+
+
 @router.get("/list", response_model=ExerciseListResponse)
 async def list_exercises(
+    request: Request,
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     question_type: Optional[str] = Query(None, description="题型筛选"),
@@ -122,94 +132,93 @@ async def list_exercises(
     """
     logger.info(f"[题库] 查询列表: page={page}, page_size={page_size}")
 
-    try:
-        # 构建基础查询
-        query = select(ExerciseBank).options(joinedload(ExerciseBank.source))
-        count_query = select(func.count(ExerciseBank.id))
+    # 构建基础查询
+    query = select(ExerciseBank).options(joinedload(ExerciseBank.source))
+    count_query = select(func.count(ExerciseBank.id))
 
-        # 应用筛选条件
-        filters = []
+    # 应用筛选条件
+    filters = []
 
-        if question_type:
-            filters.append(ExerciseBank.question_type == question_type)
+    if question_type:
+        filters.append(ExerciseBank.question_type == question_type)
 
-        if year:
-            # 使用 PostgreSQL 的 JSON 操作符 ->>
-            filters.append(text(f"competency_scores->>'year' = '{year}'"))
+    if year:
+        # 使用 PostgreSQL 的 JSON 操作符 ->>
+        filters.append(text(f"competency_scores->>'year' = '{year}'"))
 
-        if difficulty_min is not None:
-            filters.append(ExerciseBank.difficulty_level >= difficulty_min)
+    if difficulty_min is not None:
+        filters.append(ExerciseBank.difficulty_level >= difficulty_min)
 
-        if difficulty_max is not None:
-            filters.append(ExerciseBank.difficulty_level <= difficulty_max)
+    if difficulty_max is not None:
+        filters.append(ExerciseBank.difficulty_level <= difficulty_max)
 
-        if tag:
-            filters.append(ExerciseBank.tags.any(tag))
+    if tag:
+        filters.append(ExerciseBank.tags.any(tag))
 
-        if keyword:
-            filters.append(ExerciseBank.content.ilike(f"%{keyword}%"))
+    if keyword:
+        filters.append(ExerciseBank.content.ilike(f"%{keyword}%"))
 
-        if source_type:
-            # 需要 join 来源表
-            query = query.join(ExerciseSource)
-            count_query = count_query.join(ExerciseSource)
-            filters.append(ExerciseSource.source_type == source_type)
+    if source_type:
+        # 需要 join 来源表
+        query = query.join(ExerciseSource)
+        count_query = count_query.join(ExerciseSource)
+        filters.append(ExerciseSource.source_type == source_type)
 
-        # 应用所有筛选条件
-        if filters:
-            query = query.filter(and_(*filters))
-            count_query = count_query.filter(and_(*filters))
+    # 应用所有筛选条件
+    if filters:
+        query = query.filter(and_(*filters))
+        count_query = count_query.filter(and_(*filters))
 
-        # 获取总数
-        result = await db.execute(count_query)
-        total = result.scalar()
+    query, count_query = apply_list_query(
+        query, count_query, request.query_params, EXERCISE_COLUMNS, ExerciseBank.id.desc(),
+    )
 
-        # 分页
-        offset = (page - 1) * page_size
-        query = query.order_by(ExerciseBank.id.desc()).offset(offset).limit(page_size)
+    # 获取总数
+    result = await db.execute(count_query)
+    total = result.scalar()
 
-        result = await db.execute(query)
-        exercises = result.scalars().unique().all()
+    # 分页
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
 
-        # 格式化响应
-        items = []
-        for ex in exercises:
-            # 从 competency_scores 中提取额外信息
-            extra = ex.competency_scores or {}
-            items.append({
-                "id": ex.id,
-                "question_type": ex.question_type,
-                "content": ex.content,
-                "options": ex.options,
-                "answer": ex.answer,
-                "explanation": ex.explanation,
-                "difficulty_level": float(ex.difficulty_level) if ex.difficulty_level else None,
-                "tags": ex.tags or [],
-                "year": extra.get("year"),
-                "exam_source": extra.get("exam_source"),
-                "question_number": extra.get("question_number"),
-                "images": extra.get("images", []),
-                "table_html": extra.get("table_html"),
-                "source_name": ex.source.name if ex.source else None,
-                "source_type": ex.source.source_type if ex.source else None,
-                "created_at": ex.created_at.isoformat() if ex.created_at else None
-            })
+    result = await db.execute(query)
+    exercises = result.scalars().unique().all()
 
-        total_pages = (total + page_size - 1) // page_size
+    # 格式化响应
+    items = []
+    for ex in exercises:
+        # 从 competency_scores 中提取额外信息
+        extra = ex.competency_scores or {}
+        items.append({
+            "id": ex.id,
+            "question_type": ex.question_type,
+            "content": ex.content,
+            "options": ex.options,
+            "answer": ex.answer,
+            "explanation": ex.explanation,
+            "difficulty_level": float(ex.difficulty_level) if ex.difficulty_level else None,
+            "tags": ex.tags or [],
+            "year": extra.get("year"),
+            "exam_source": extra.get("exam_source"),
+            "question_number": extra.get("question_number"),
+            "images": extra.get("images", []),
+            "table_html": extra.get("table_html"),
+            "source_name": ex.source.name if ex.source else None,
+            "source_type": ex.source.source_type if ex.source else None,
+            "created_at": ex.created_at.isoformat() if ex.created_at else None
+        })
 
-        logger.info(f"[题库] 返回 {len(items)} 道题，共 {total} 道")
+    total_pages = (total + page_size - 1) // page_size
 
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages
-        }
+    logger.info(f"[题库] 返回 {len(items)} 道题，共 {total} 道")
 
-    except Exception as e:
-        logger.error(f"[题库] 查询失败: {str(e)}")
-        raise HTTPException(500, detail="服务器内部错误")
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
 
 
 @router.get("/detail/{exercise_id}")

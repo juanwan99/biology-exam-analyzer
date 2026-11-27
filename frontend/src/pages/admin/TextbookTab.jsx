@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
+import SortSelect from '../../components/SortSelect'
+
+const CHUNK_SORT_OPTIONS = [
+  { value: 'page_num:asc', label: '页码 前→后' },
+  { value: 'page_num:desc', label: '页码 后→前' },
+  { value: 'created_at:desc', label: '最近入库' },
+]
+const initialFilters = { book_id: '', keyword: '', sort: 'page_num:asc' }
 
 function TextbookTab({ token, getHeaders }) {
   // 教材管理状态
@@ -14,7 +22,7 @@ function TextbookTab({ token, getHeaders }) {
   const [chunkPage, setChunkPage] = useState(1)
   const [chunkTotal, setChunkTotal] = useState(0)
   const [chunkTotalPages, setChunkTotalPages] = useState(1)
-  const [chunkFilters, setChunkFilters] = useState({ book_id: '', keyword: '' })
+  const [chunkFilters, setChunkFilters] = useState(initialFilters)
   const [books, setBooks] = useState([])
 
   const loadChapters = async () => {
@@ -228,7 +236,7 @@ function TextbookTab({ token, getHeaders }) {
                 </button>
                 <button
                   onClick={() => {
-                    setChunkFilters({ book_id: '', keyword: '' })
+                    setChunkFilters(initialFilters)
                     setTextbookChunks([])
                     setChunkTotal(0)
                   }}
@@ -241,8 +249,17 @@ function TextbookTab({ token, getHeaders }) {
 
             {/* 切片列表 */}
             <div className="bg-white shadow rounded-lg flex flex-col" style={{maxHeight: 'calc(100vh - 380px)'}}>
-              <div className="p-4 border-b flex justify-between items-center flex-shrink-0">
+              <div className="p-4 border-b flex flex-wrap justify-between items-center gap-2 flex-shrink-0">
                 <h3 className="font-medium">教材切片 (共 {chunkTotal} 条)</h3>
+                <SortSelect
+                  value={chunkFilters.sort}
+                  options={CHUNK_SORT_OPTIONS}
+                  onChange={sort => {
+                    const next = { ...chunkFilters, sort }
+                    setChunkFilters(next)
+                    loadTextbookChunks(1, next)
+                  }}
+                />
               </div>
               {textbookLoading ? (
                 <div className="p-8 text-center text-gray-500">加载中...</div>

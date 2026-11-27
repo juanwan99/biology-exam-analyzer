@@ -2,14 +2,20 @@
 教材资料服务
 处理教材上传、解析、存储和检索
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Mapping, Optional
 from sqlalchemy import select, and_, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import TextbookVersion, TextbookChapter, TextbookContent, KnowledgePoint
+from list_query import ListColumn, apply_list_query
+from models import TextbookVersion, TextbookChapter, TextbookContent, TextbookChunk, TextbookPage, KnowledgePoint
 from logger import get_logger
 
 logger = get_logger()
+
+CHUNK_COLUMNS = {
+    "page_num": ListColumn("number", TextbookChunk.page_num),
+    "created_at": ListColumn("date", TextbookChunk.created_at),
+}
 
 
 class TextbookService:
@@ -275,47 +281,37 @@ class TextbookService:
 
     async def get_all_contents(
         self,
+        query_params: Mapping[str, str],
         page: int = 1,
         page_size: int = 50,
         book_id: str = None,
         keyword: str = None,
     ) -> Dict:
         """获取所有教材切片内容（带分页和筛选）- 使用textbook_chunks表"""
-        from sqlalchemy import text
+        query = select(
+            TextbookChunk.id, TextbookChunk.page_id, TextbookChunk.book_id,
+            TextbookChunk.chunk_index, TextbookChunk.chunk_content, TextbookChunk.page_num,
+            TextbookChunk.chapter_info, TextbookChunk.created_at, TextbookPage.book_name,
+        ).outerjoin(TextbookPage, TextbookChunk.page_id == TextbookPage.id).order_by(TextbookChunk.id.desc())
+        count_query = select(func.count()).select_from(TextbookChunk)
 
-        # 使用原生SQL查询textbook_chunks表
-        count_sql = "SELECT COUNT(*) FROM textbook_chunks WHERE 1=1"
-        query_sql = """
-            SELECT
-                tc.id, tc.page_id, tc.book_id, tc.chunk_index, tc.chunk_content,
-                tc.page_num, tc.chapter_info, tc.created_at,
-                tp.book_name
-            FROM textbook_chunks tc
-            LEFT JOIN textbook_pages tp ON tc.page_id = tp.id
-            WHERE 1=1
-        """
-
-        params = {}
+        filters = []
         if book_id:
-            count_sql += " AND book_id = :book_id"
-            query_sql += " AND tc.book_id = :book_id"
-            params["book_id"] = book_id
+            filters.append(TextbookChunk.book_id == book_id)
         if keyword:
-            count_sql += " AND chunk_content ILIKE :keyword"
-            query_sql += " AND tc.chunk_content ILIKE :keyword"
-            params["keyword"] = f"%{keyword}%"
+            filters.append(TextbookChunk.chunk_content.ilike(f"%{keyword}%"))
+
+        query, count_query = apply_list_query(
+            query.where(*filters), count_query.where(*filters), query_params, CHUNK_COLUMNS, TextbookChunk.id.asc(),
+        )
 
         # 获取总数
-        total_result = await self.db.execute(text(count_sql), params)
+        total_result = await self.db.execute(count_query)
         total = total_result.scalar()
 
         # 分页查询
         offset = (page - 1) * page_size
-        query_sql += " ORDER BY tc.id DESC LIMIT :limit OFFSET :offset"
-        params["limit"] = page_size
-        params["offset"] = offset
-
-        result = await self.db.execute(text(query_sql), params)
+        result = await self.db.execute(query.limit(page_size).offset(offset))
         rows = result.fetchall()
 
         items = [{
