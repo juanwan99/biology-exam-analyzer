@@ -24,10 +24,11 @@ const columns = [
 function LogsTab({ getHeaders }) {
   const [request, setRequest] = useState({ query: { sort: null, filters: {} }, page: 1 })
   const [result, setResult] = useState(null)
-  const { query, page: logsPage } = request
-  const { logs = [], total: logsTotal = 0, total_pages: logsTotalPages = 0, has_data: hasData } = result?.data ?? {}
+  const { query } = request
+  const { logs = [], total: logsTotal = 0, page: logsPage, total_pages: logsTotalPages = 0, has_data: hasData } = result?.data ?? {}
   const logsLoading = result?.request !== request
   const loadError = !logsLoading && result.error
+  const showResults = !logsLoading && Boolean(result.data)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -38,13 +39,13 @@ function LogsTab({ getHeaders }) {
       .catch(err => {
         if (axios.isCancel(err)) return
         if (import.meta.env.DEV) console.error('加载操作日志失败:', err)
-        setResult({ request, error: true })
+        setResult(last => ({ request, error: true, data: last?.request.query === query ? last.data : undefined }))
       })
     return () => controller.abort()
   }, [request, getHeaders])
 
   return (
-    <div className={`bg-white shadow rounded-lg flex flex-col ${logsLoading || loadError ? '[&_tbody]:hidden' : ''}`}
+    <div className={`bg-white shadow rounded-lg flex flex-col ${showResults ? '' : '[&_tbody]:hidden'}`}
       style={{ maxHeight: 'calc(100vh - 200px)' }} aria-busy={logsLoading}>
       <div className="p-4 border-b flex-shrink-0">
         <h3 className="font-medium">操作日志 (共 {logsTotal} 条)</h3>
@@ -75,7 +76,7 @@ function LogsTab({ getHeaders }) {
       {(logsLoading || loadError) && <p role={loadError ? 'alert' : 'status'} className="p-8 text-center text-gray-500">
         {loadError ? '加载操作日志失败' : '加载中...'}
       </p>}
-      {!logsLoading && !loadError && logsTotalPages > 1 && (
+      {showResults && logsTotalPages > 1 && (
         <div className="p-3 border-t flex justify-center gap-2 flex-shrink-0">
           <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" disabled={logsPage <= 1}
             onClick={() => setRequest({ query, page: logsPage - 1 })}>上一页</button>

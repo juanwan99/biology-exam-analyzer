@@ -538,14 +538,12 @@ async def update_my_api_keys(
 LOG_COLUMNS = {
     "created_at": ListColumn("date", OperationLog.created_at),
     "username": ListColumn("text", OperationLog.username),
-    "operation": ListColumn("enum", OperationLog.operation, {
-        "login": "登录", "logout": "登出", "create": "创建", "update": "更新", "delete": "删除",
-        "batch_delete": "批量删除", "change_password": "修改密码", "reset_password": "重置密码", "update_api_keys": "更新 API Key",
-    }),
-    "target_type": ListColumn("enum", OperationLog.target_type, {
-        "exercise": "题目", "source": "来源", "chapter": "章节", "content": "内容",
-        "knowledge_point": "知识点", "version": "版本", "user": "用户",
-    }),
+    "operation": ListColumn("enum", OperationLog.operation, (
+        "login", "logout", "create", "update", "delete", "batch_delete",
+        "change_password", "reset_password", "update_api_keys",
+    )),
+    "target_type": ListColumn("enum", OperationLog.target_type,
+                              ("exercise", "source", "chapter", "content", "knowledge_point", "version", "user")),
     "target_name": ListColumn("text", OperationLog.target_name),
     "ip_address": ListColumn("text", OperationLog.ip_address),
 }

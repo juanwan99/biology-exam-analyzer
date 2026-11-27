@@ -1,6 +1,6 @@
 import { Fragment, useId, useMemo, useState } from 'react'
 import { getCoreRowModel, getFilteredRowModel, getSortedRowModel, useReactTable } from '@tanstack/react-table'
-import { compareValues, isEmptyValue, matchFilter, nextSort } from '../lib/listQuery'
+import { compareSortValues, matchFilter, nextSort } from '../lib/listQuery'
 
 const inputClass = 'rounded border border-gray-300 px-2 py-1 text-sm min-w-0'
 const buttonClass = 'rounded border px-3 py-1 text-sm hover:bg-gray-100'
@@ -59,18 +59,7 @@ export default function ListTable({
     id: column.key,
     accessorFn: column.accessor,
     sortUndefined: false,
-    // TanStack reverses this result for descending. Blanks belong at the end in both directions.
-    sortingFn: (a, b, id) => {
-      const x = a.getValue(id)
-      const y = b.getValue(id)
-      if (isEmptyValue(x) || isEmptyValue(y)) return (descending ? -1 : 1) * compareValues(x, y, column.type)
-      if (column.type === 'enum') {
-        const xIndex = column.options.findIndex(option => option.value === String(x))
-        const yIndex = column.options.findIndex(option => option.value === String(y))
-        return xIndex - yIndex
-      }
-      return compareValues(x, y, column.type)
-    },
+    sortingFn: (a, b, id) => compareSortValues(a.getValue(id), b.getValue(id), column, descending),
     filterFn: (row, id, filter) => matchFilter(row.getValue(id), filter, column.type),
   })), [columns, descending])
   const sorting = useMemo(() => sort ? [{ id: sort.key, desc: descending }] : [], [sort, descending])
@@ -112,7 +101,7 @@ export default function ListTable({
             <FilterControl column={column} value={filters[column.key]} onChange={value => changeFilter(column.key, value)} />
           </fieldset>)}
         </div>
-        {filterColumns.filter(column => Object.hasOwn(filters, column.key)).map(column => (
+        {filterColumns.filter(column => Object.prototype.hasOwnProperty.call(filters, column.key)).map(column => (
           <button key={column.key} type="button" className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-700"
             aria-label={`移除${column.header}筛选`} onClick={() => changeFilter(column.key, undefined)}>
             {column.header}：{filterLabel(column, filters[column.key])} ×

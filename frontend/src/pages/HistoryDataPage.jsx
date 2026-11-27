@@ -55,7 +55,6 @@ function HistoryDataPage() {
         if (controller.signal.aborted) return
         if (import.meta.env.DEV) console.error('加载历史数据失败:', err)
         setListResult({ request: listRequest, error: true })
-        setMessage({ type: 'error', text: '加载历史数据失败' })
       })
     return () => controller.abort()
   }, [listRequest])
@@ -244,7 +243,9 @@ function HistoryDataPage() {
               </td>
             </tr>
           )} />
-        {listLoading && <p role="status" className="p-8 text-center text-gray-500">加载中...</p>}
+        {(listLoading || listError) && <p role={listError ? 'alert' : 'status'} className="p-8 text-center text-gray-500">
+          {listError ? '加载历史数据失败' : '加载中...'}
+        </p>}
         {!listLoading && !listError && (outOfRange || totalPages > 1) && (
           <div className="p-3 border-t flex justify-center gap-2">
             <button className="px-3 py-1 border rounded text-sm disabled:opacity-50" disabled={page <= 1}

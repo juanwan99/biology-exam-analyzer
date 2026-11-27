@@ -2,7 +2,7 @@ const collator = new Intl.Collator('zh-Hans-CN', { numeric: true })
 const types = ['text', 'enum', 'date', 'number']
 const numberSyntax = /^[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i
 
-export const isEmptyValue = (value) => value == null || value === ''
+const isEmptyValue = (value) => value == null || value === ''
 
 /**
  * Query state is { sort: { key, dir } | null, filters: { [key]: string | string[] | { start, end } } }.
@@ -57,22 +57,20 @@ export function decodeListQuery(params, columns) {
   const filters = new Map()
   const dropped = []
   for (const [param, value] of new URLSearchParams(params)) {
-    if (param === 'sort') {
-      const [, key, dir] = /^(.+):(asc|desc)$/.exec(value) ?? []
-      if (!key) dropped.push({ param, value, reason: 'invalid_sort' })
-      else if (!Object.hasOwn(columns, key) || !types.includes(columns[key].type) || columns[key].sortable === false) {
-        dropped.push({ param, value, reason: 'unknown_column' })
-      } else sort = { key, dir }
-    } else if (param.startsWith('f.')) {
-      const key = param.slice(2)
-      if (!Object.hasOwn(columns, key) || !types.includes(columns[key].type) || columns[key].filterable === false) {
-        dropped.push({ param, value, reason: 'unknown_column' })
-      } else {
-        const filter = parseFilter(value, columns[key].type)
-        if (filter === undefined) dropped.push({ param, value, reason: 'invalid_filter' })
-        else if (filter === null) filters.delete(key)
-        else filters.set(key, filter)
-      }
+    const isSort = param === 'sort'
+    if (!isSort && !param.startsWith('f.')) continue
+    const match = isSort ? /^(.+):(asc|desc)$/.exec(value) : null
+    const key = isSort ? match?.[1] : param.slice(2)
+    const column = Object.prototype.hasOwnProperty.call(columns, key) ? columns[key] : undefined
+    if (isSort && !match) dropped.push({ param, value, reason: 'invalid_sort' })
+    else if (!types.includes(column?.type) || column[isSort ? 'sortable' : 'filterable'] === false) {
+      dropped.push({ param, value, reason: 'unknown_column' })
+    } else if (isSort) sort = { key, dir: match[2] }
+    else {
+      const filter = parseFilter(value, column.type)
+      if (filter === undefined) dropped.push({ param, value, reason: 'invalid_filter' })
+      else if (filter === null) filters.delete(key)
+      else filters.set(key, filter)
     }
   }
   return { sort, filters: Object.fromEntries(filters), dropped }
@@ -84,13 +82,20 @@ export function nextSort(cur, key, firstDir = 'asc') {
   return { key, dir: firstDir === 'asc' ? 'desc' : 'asc' }
 }
 
-// Ascending comparator. Keep the empty-value order when reversing for descending.
 export function compareValues(a, b, type) {
   if (isEmptyValue(a)) return isEmptyValue(b) ? 0 : 1
   if (isEmptyValue(b)) return -1
   if (type === 'number') return Number(a) - Number(b)
   if (type === 'date') return a < b ? -1 : a > b ? 1 : 0
   return collator.compare(String(a), String(b))
+}
+
+// TanStack reverses the comparison for descending. Reverse the empty comparisons in advance.
+export function compareSortValues(a, b, { type, options }, descending) {
+  if (isEmptyValue(a) || isEmptyValue(b)) return (descending ? -1 : 1) * compareValues(a, b, type)
+  if (type !== 'enum') return compareValues(a, b, type)
+  const indexOf = value => options.findIndex(option => option.value === String(value))
+  return indexOf(a) - indexOf(b)
 }
 
 export function matchFilter(value, filter, type) {

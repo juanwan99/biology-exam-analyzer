@@ -15,7 +15,7 @@ const columns = [
 ]
 
 function UsersTab({ token, getHeaders, user }) {
-  const [users, setUsers] = useState([])
+  const [users, setUsers] = useState()
 
   const loadUsers = async () => {
     try {
@@ -61,7 +61,8 @@ function UsersTab({ token, getHeaders, user }) {
         <h3 className="font-medium">用户管理</h3>
       </div>
       <ListTable columns={columns} rows={users ?? []} rowKey="id"
-        emptyText={users ? '暂无用户' : <span role="alert">加载用户列表失败</span>}
+        emptyText={users === undefined ? <span role="status">加载中...</span> :
+          users === null ? <span role="alert">加载用户列表失败</span> : '暂无用户'}
         renderRow={u => (
           <tr className="hover:bg-gray-50">
             <td className="px-3 py-2 text-right text-xs text-gray-500">{u.id}</td>
