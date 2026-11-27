@@ -33,7 +33,6 @@ function AdminPage() {
         const { token: newToken, user: userData } = response.data
         setToken(newToken)
         setUser(userData)
-        if (userData.role !== 'admin' && activeTab === 'logs') setActiveTab('exercises')
         setAuthenticated(true)
         localStorage.setItem('authToken', newToken)
         localStorage.setItem('authUser', JSON.stringify(userData))
@@ -79,6 +78,7 @@ function AdminPage() {
     setAuthenticated(false)
     setToken('')
     setUser(null)
+    setActiveTab('exercises')
     localStorage.removeItem('authToken')
     localStorage.removeItem('authUser')
   }
